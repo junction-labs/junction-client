@@ -1,0 +1,14 @@
+[project]
+name = "junction"
+version = "0.1.0"
+dependencies = ["requests>2.0", "urllib3>2.0"]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-httpbin"]
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B", "I"]

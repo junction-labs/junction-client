@@ -1,0 +1,31 @@
+[package]
+name = "junction-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arc-swap = { workspace = true }
+bytes = { workspace = true }
+crossbeam-skiplist = { workspace = true }
+enum-map = { workspace = true }
+futures = { workspace = true }
+h2 = { workspace = true }
+http = { workspace = true }
+once_cell = { workspace = true }
+petgraph = { workspace = true }
+prost = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time", "macros"] }
+tokio-stream = { workspace = true }
+tonic = { workspace = true }
+tonic-reflection = { workspace = true }
+tracing = { workspace = true }
+xds-api = { workspace = true, features = ["descriptor"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tracing-subscriber = { workspace = true }

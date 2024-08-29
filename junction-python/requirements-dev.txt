@@ -1,0 +1,10 @@
+# tools for development
+#
+# tools shouldn't be pinned by default. leave a comment with a reason for
+# pinning something.
+
+maturin
+pip
+
+# pinned so upgrades don't interrupt development with formatting changes
+ruff==0.6.3
