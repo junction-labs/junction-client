@@ -54,7 +54,7 @@ fn python_build(sh: &Shell, venv: &str) -> anyhow::Result<()> {
 
     cmd!(
         sh,
-        "{venv}/bin/maturin develop -m junction-python/Cargo.toml --extras=test"
+        "{venv}/bin/maturin develop -m junction-python/Cargo.toml --extras=test --features extension-module"
     )
     .run()?;
 

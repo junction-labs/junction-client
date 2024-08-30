@@ -681,6 +681,7 @@ dependencies = [
  "junction-core",
  "once_cell",
  "pyo3",
+ "pyo3-build-config",
  "serde",
  "serde_json",
  "tokio",
