@@ -683,9 +683,11 @@ dependencies = [
  "once_cell",
  "pyo3",
  "pyo3-build-config",
+ "pythonize",
  "serde",
  "serde_json",
  "tokio",
+ "xds-api",
 ]
 
 [[package]]
@@ -837,6 +839,16 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-targets",
+]
+
+[[package]]
+name = "pbjson"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7e6349fa080353f4a597daffd05cb81572a9c031a6d4fff7e504947496fcc68"
+dependencies = [
+ "base64",
+ "serde",
 ]
 
 [[package]]
@@ -1005,6 +1017,16 @@ dependencies = [
  "pyo3-build-config",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "pythonize"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d0664248812c38cc55a4ed07f88e4df516ce82604b93b1ffdc041aa77a6cb3c"
+dependencies = [
+ "pyo3",
+ "serde",
 ]
 
 [[package]]
@@ -1660,7 +1682,9 @@ source = "git+ssh://git@github.com/junction-labs/xds-api.git#a222ce06bcb42848c3c
 dependencies = [
  "enum-map",
  "once_cell",
+ "pbjson",
  "prost",
+ "serde",
  "tonic",
 ]
 

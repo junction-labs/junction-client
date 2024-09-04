@@ -2,9 +2,10 @@ import typing
 
 import pytest
 import pytest_httpbin
-from junction.urllib3 import PoolManager as JunctionPoolManger
 from urllib3 import BaseHTTPResponse
 from urllib3 import PoolManager as Urllib3PoolManager
+
+from junction.urllib3 import PoolManager as JunctionPoolManger
 
 POOL_CLASSES = [Urllib3PoolManager, JunctionPoolManger]
 

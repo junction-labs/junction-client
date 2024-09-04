@@ -6,10 +6,10 @@ use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     pyclass, pyfunction, pymethods, pymodule,
     types::{
-        PyAnyMethods, PyDict, PyList, PyMapping, PyMappingMethods, PyModule, PySequenceMethods,
-        PyString, PyStringMethods, PyTypeMethods,
+        PyAnyMethods, PyDict, PyMapping, PyMappingMethods, PyModule, PySequenceMethods,
+        PyStringMethods,
     },
-    wrap_pyfunction, Bound, PyAny, PyResult,
+    wrap_pyfunction, Bound, PyObject, PyResult, Python,
 };
 
 #[pymodule]
@@ -149,12 +149,12 @@ impl JunctionClient {
     fn new_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let routes = match kwargs {
             Some(route_dict) => {
-                let default_routes = route_dict.get_item("default_routes")?.to_value()?;
-                serde_json::from_value(default_routes)
-                    .map_err(|e| PyValueError::new_err(format!("invalid routes: {e}")))?
+                let default_routes = route_dict.get_item("default_routes")?;
+                pythonize::depythonize_bound(default_routes)?
             }
             None => Vec::new(),
         };
+        dbg!(&routes);
 
         match DEFAULT_CLIENT.as_ref() {
             Ok(client) => {
@@ -195,6 +195,17 @@ impl JunctionClient {
 
         Ok(endpoints)
     }
+
+    fn dump_xds(&self, py: Python<'_>) -> PyResult<Vec<(String, PyObject)>> {
+        let mut values = vec![];
+
+        for (name, any) in self.core.dump() {
+            let value = pythonize::pythonize(py, &any)?;
+            values.push((name, value));
+        }
+
+        Ok(values)
+    }
 }
 
 fn headers_from_py(header_dict: &Bound<PyMapping>) -> PyResult<http::HeaderMap> {
@@ -220,81 +231,4 @@ fn headers_from_py(header_dict: &Bound<PyMapping>) -> PyResult<http::HeaderMap> 
     }
 
     Ok(headers)
-}
-
-// TODO: should this get replaced with pythonize?
-trait ToValue {
-    fn to_value(&self) -> PyResult<serde_json::Value>;
-}
-
-impl<'a> ToValue for Bound<'a, PyAny> {
-    fn to_value(&self) -> PyResult<serde_json::Value> {
-        macro_rules! return_downcast {
-            ($pytype:ty) => {
-                if let Ok(v) = self.downcast::<$pytype>() {
-                    return <Bound<$pytype> as ToValue>::to_value(v);
-                }
-            };
-        }
-        macro_rules! return_extract {
-            ($pytype:ty) => {
-                if let Ok(v) = self.extract::<$pytype>() {
-                    return Ok(serde_json::to_value(v).unwrap());
-                }
-            };
-        }
-
-        if self.is_none() {
-            return Ok(serde_json::Value::Null);
-        }
-
-        return_downcast!(PyString);
-        return_extract!(bool);
-        return_extract!(u64);
-        return_extract!(i64);
-        return_extract!(f64);
-
-        return_downcast!(PyDict);
-        return_downcast!(PyList);
-
-        let type_name = self.get_type().qualname()?;
-        Err(PyValueError::new_err(format!(
-            "can't convert object of type {type_name} to json value",
-        )))
-    }
-}
-
-impl<'a> ToValue for Bound<'a, PyDict> {
-    fn to_value(&self) -> PyResult<serde_json::Value> {
-        let mut m = serde_json::Map::new();
-
-        for (k, v) in self.into_iter() {
-            let serde_json::Value::String(k) = k.to_value()? else {
-                return Err(PyValueError::new_err("json keys must be strings"));
-            };
-            let v = v.to_value()?;
-            m.insert(k, v);
-        }
-
-        Ok(serde_json::Value::Object(m))
-    }
-}
-
-impl<'a> ToValue for Bound<'a, PyString> {
-    fn to_value(&self) -> PyResult<serde_json::Value> {
-        let s = self.str()?.to_string();
-        Ok(serde_json::Value::String(s))
-    }
-}
-
-impl<'a> ToValue for Bound<'a, PyList> {
-    fn to_value(&self) -> PyResult<serde_json::Value> {
-        let mut values = Vec::with_capacity(self.len()?);
-
-        for val in self.iter()? {
-            values.push(val?.to_value()?);
-        }
-
-        Ok(serde_json::Value::Array(values))
-    }
 }

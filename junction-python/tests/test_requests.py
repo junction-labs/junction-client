@@ -2,9 +2,10 @@ import typing
 
 import pytest
 import pytest_httpbin
-from junction.requests import Session as JunctionSession
 from requests import Response
 from requests import Session as RequestsSession
+
+from junction.requests import Session as JunctionSession
 
 SESSION_CLASSES = [RequestsSession, JunctionSession]
 
