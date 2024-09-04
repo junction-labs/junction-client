@@ -4,17 +4,18 @@ use http::Uri;
 use once_cell::sync::Lazy;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
-    pyclass, pymethods, pymodule,
+    pyclass, pyfunction, pymethods, pymodule,
     types::{
         PyAnyMethods, PyDict, PyList, PyMapping, PyMappingMethods, PyModule, PySequenceMethods,
         PyString, PyStringMethods, PyTypeMethods,
     },
-    Bound, PyAny, PyResult,
+    wrap_pyfunction, Bound, PyAny, PyResult,
 };
 
 #[pymodule]
 fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<JunctionClient>()?;
+    m.add_function(wrap_pyfunction!(run_csds, m)?)?;
 
     Ok(())
 }
@@ -129,6 +130,17 @@ static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
         PyRuntimeError::new_err(error_message)
     })
 });
+
+#[pyfunction]
+fn run_csds(port: u16) -> PyResult<()> {
+    match DEFAULT_CLIENT.as_ref() {
+        Ok(client) => {
+            RUNTIME.spawn(client.config_server(port));
+            Ok(())
+        }
+        Err(e) => Err(PyRuntimeError::new_err(e)),
+    }
+}
 
 #[pymethods]
 impl JunctionClient {
