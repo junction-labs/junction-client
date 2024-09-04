@@ -34,7 +34,7 @@ impl Route {
         url: &crate::Url,
         headers: &http::HeaderMap,
     ) -> Option<&RouteRule> {
-        if !self.domains.iter().any(|d| d == url.hostname()) {
+        if !self.domains.iter().any(|d| d == "*" || d == url.hostname()) {
             return None;
         }
 
