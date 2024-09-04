@@ -11,7 +11,6 @@ async fn main() {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    // TODO: make default routes sane with ezbake cluster names
     let default_routes = vec![Route {
         domains: vec!["nginx.default.svc.cluster.local".to_string()],
         rules: vec![
@@ -25,6 +24,7 @@ async fn main() {
                         value: StringMatcher::Any,
                     }],
                 }],
+                hash_policies: vec![],
                 target: RouteTarget::Cluster("default/nginx-staging/cluster".to_string()),
             },
             RouteRule {
@@ -34,6 +34,7 @@ async fn main() {
                     path: StringMatcher::Any,
                     headers: vec![],
                 }],
+                hash_policies: vec![],
                 target: RouteTarget::Cluster("default/nginx/cluster".to_string()),
             },
         ],
@@ -79,7 +80,7 @@ async fn main() {
         let prod = prod_endpoints.first().unwrap();
         let staging = staging_endpoints.first().unwrap();
 
-        println!("prod={:>10} staging={:>15}", prod.address, staging.address);
+        println!("prod={:<20} staging={:<20}", prod.address, staging.address);
 
         tokio::time::sleep(Duration::from_millis(1500)).await;
     }

@@ -60,9 +60,15 @@ impl Route {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct RouteRule {
     pub timeout: Option<Duration>,
+
     pub retry_policy: Option<crate::RetryPolicy>,
+
     #[serde(default)]
     pub matches: Vec<RouteMatcher>,
+
+    #[serde(default)]
+    pub hash_policies: Vec<HashPolicy>,
+
     pub target: RouteTarget,
 }
 
@@ -89,6 +95,12 @@ impl RouteRule {
             return None;
         };
 
+        let hash_policies = action
+            .hash_policy
+            .iter()
+            .filter_map(HashPolicy::from_xds)
+            .collect();
+
         let target = RouteTarget::from_xds(action.cluster_specifier.as_ref()?)?;
         let timeout = action
             .timeout
@@ -101,8 +113,45 @@ impl RouteRule {
             timeout,
             retry_policy: None,
             matches: vec![matcher],
+            hash_policies,
             target,
         })
+    }
+}
+
+// TODO: figure out how we want to support the filter_state/connection_properties
+// style of hashing based on source ip or grpc channel.
+//
+// TODO: add support for query parameter based hashing, which involves parsing
+// query parameters, which http::uri just doesn't do. switch the whole crate to
+// url::Url or something.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct HashPolicy {
+    #[serde(default)]
+    pub terminal: bool,
+
+    #[serde(flatten)]
+    pub target: HashTarget,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HashTarget {
+    Header(String),
+    Query(String),
+}
+
+impl HashPolicy {
+    fn from_xds(hash_policy: &xds_route::route_action::HashPolicy) -> Option<Self> {
+        use xds_route::route_action::hash_policy::PolicySpecifier;
+
+        match hash_policy.policy_specifier.as_ref() {
+            Some(PolicySpecifier::Header(h)) => Some(HashPolicy {
+                terminal: hash_policy.terminal,
+                target: HashTarget::Header(h.header_name.clone()),
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -145,12 +194,20 @@ impl RouteTarget {
 // FIXME: method, query
 // FIXME: do we want to support runtime_fraction?
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct RouteMatcher {
-    #[serde(default = "StringMatcher::any")]
     pub path: StringMatcher,
 
-    #[serde(default)]
     pub headers: Vec<HeaderMatcher>,
+}
+
+impl Default for RouteMatcher {
+    fn default() -> Self {
+        Self {
+            path: StringMatcher::Any,
+            headers: Vec::new(),
+        }
+    }
 }
 
 impl RouteMatcher {
@@ -298,6 +355,7 @@ mod json_test {
                     timeout: None,
                     retry_policy: None,
                     matches: vec![],
+                    hash_policies: vec![],
                     target: RouteTarget::Cluster("foo.bar".to_string()),
                 }],
             },
@@ -327,6 +385,7 @@ mod json_test {
                         path: StringMatcher::Any,
                         headers: vec![],
                     }],
+                    hash_policies: vec![],
                     target: RouteTarget::Cluster("foo.bar".to_string()),
                 }],
             },
@@ -363,6 +422,7 @@ mod json_test {
                             value: StringMatcher::Any,
                         }],
                     }],
+                    hash_policies: vec![],
                     target: RouteTarget::Cluster("foo.bar".to_string()),
                 }],
             },
@@ -389,6 +449,7 @@ mod json_test {
                     timeout: None,
                     retry_policy: None,
                     matches: vec![],
+                    hash_policies: vec![],
                     target: RouteTarget::WeightedClusters(vec![
                         WeightedCluster {
                             name: "foo.bar".to_string(),
@@ -414,6 +475,63 @@ mod json_test {
                 }
             ]
         }));
+    }
+
+    #[test]
+    fn route_with_hash_policy() {
+        assert_deserialize(
+            json!({
+                "domains": ["foo.bar"],
+                "rules": [
+                    {
+                        "target": "foo.bar",
+                        "hash_policies": [
+                            {"header": "x-foo"},
+                        ]
+                    },
+                ],
+            }),
+            Route {
+                domains: vec!["foo.bar".to_string()],
+                rules: vec![RouteRule {
+                    timeout: None,
+                    retry_policy: None,
+                    matches: vec![],
+                    hash_policies: vec![HashPolicy {
+                        terminal: false,
+                        target: HashTarget::Header("x-foo".to_string()),
+                    }],
+                    target: RouteTarget::Cluster("foo.bar".to_string()),
+                }],
+            },
+        );
+
+        assert_deserialize(
+            json!({
+                "domains": ["foo.bar"],
+                "rules": [
+                    {
+                        "target": "foo.bar",
+                        "hash_policies": [
+                            {"query": "param"},
+                        ]
+                    },
+                ],
+            }),
+            Route {
+                domains: vec!["foo.bar".to_string()],
+                rules: vec![RouteRule {
+                    timeout: None,
+                    retry_policy: None,
+                    matches: vec![],
+                    hash_policies: vec![HashPolicy {
+                        terminal: false,
+                        target: HashTarget::Query("param".to_string()),
+                    }],
+                    target: RouteTarget::Cluster("foo.bar".to_string()),
+                }],
+            },
+        );
     }
 
     fn assert_deserialize<T: DeserializeOwned + PartialEq + std::fmt::Debug>(

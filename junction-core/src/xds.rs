@@ -26,7 +26,7 @@
 //- Support the Envoy LRS protocol for sending load back to the control plane.
 //  https://www.envoyproxy.io/docs/envoy/latest/start/sandboxes/load-reporting-service.html
 
-use std::{error::Error as _, fmt::Debug, io::ErrorKind, sync::Arc, time::Duration};
+use std::{fmt::Debug, io::ErrorKind, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use cache::{Cache, CacheReader};
@@ -36,6 +36,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Endpoint;
 
+use tracing::debug;
 use xds_api::pb::{
     envoy::{
         config::core::v3 as xds_core,
@@ -222,7 +223,7 @@ impl AdsTask {
                 // that's never going to work and a temporary (but long) outage,
                 // so we'll just patiently keep trying.
                 Err(ConnectionError::Connect(e)) => {
-                    eprintln!("ADS connection failed: err={:?}: {:?}", e, e.source());
+                    debug!(err = %e, "failed to connect to ADS server");
                     tokio::time::sleep(Duration::from_secs(2)).await;
                 }
                 // The stream closed with a Tonic error. This is usually either
@@ -236,7 +237,7 @@ impl AdsTask {
                         .map_or(false, |e| e.kind() == ErrorKind::BrokenPipe);
 
                     if !is_broken_pipe {
-                        eprintln!("ADS connection closed: err={status}");
+                        debug!(err = %status, "ADS connection closed unexpectedly");
                     }
 
                     tokio::time::sleep(if is_broken_pipe {

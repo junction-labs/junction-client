@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::xds::{self, AdsClient};
-use crate::{RequestContext, Route, RouteTarget};
+use crate::{Route, RouteTarget};
 
 /// A service discovery client that looks up URL information based on URLs,
 /// headers, and methods.
@@ -222,11 +222,11 @@ impl Client {
             (Some(lb), Some(endpoints)) => (lb, endpoints),
         };
 
-        let ctx = RequestContext;
-        let endpoint = match lb.load_balance(&ctx, &endpoints) {
-            Some(e) => e,
-            None => return Err((url, crate::Error::NoReachableEndpoints)),
-        };
+        let endpoint =
+            match lb.load_balance(&url, headers, &matching_route.hash_policies, &endpoints) {
+                Some(e) => e,
+                None => return Err((url, crate::Error::NoReachableEndpoints)),
+            };
 
         let timeout = matching_route.timeout.unwrap_or(Self::DEFAULT_TIMEOUT);
         let retry = matching_route.retry_policy.clone();

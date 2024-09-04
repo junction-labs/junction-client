@@ -25,6 +25,7 @@ tonic = { workspace = true }
 tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 xds-api = { workspace = true, features = ["descriptor"] }
+xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread"] }

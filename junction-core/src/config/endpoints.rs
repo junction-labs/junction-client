@@ -23,7 +23,7 @@ pub struct Endpoint {
 ///
 /// Depending on the type of endpoint, addresses may need to be further resolved by
 /// a client implementation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub enum EndpointAddress {
     /// A resolved IP address and port. This address can be used for a request
     /// without any further resolution.

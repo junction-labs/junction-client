@@ -19,8 +19,6 @@ pub use config::{
     route::{HeaderMatcher, Route, RouteMatcher, RouteRule, RouteTarget, StringMatcher},
 };
 
-pub(crate) use config::load_balancer::RequestContext;
-
 // only the client needs to be exported.
 mod client;
 mod xds;

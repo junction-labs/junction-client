@@ -1275,8 +1275,6 @@ mod test {
             vec!["cluster1.example.local"],
         );
 
-        dbg!(&cache.refs);
-
         // add both clusters
         assert_insert(cache.insert(ResourceVec::Cluster(vec![
             xds_test::cluster!(eds "cluster1.example.local"),
