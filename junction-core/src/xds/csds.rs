@@ -10,15 +10,18 @@ use std::{
 
 use futures::Stream;
 use tonic::{Request, Response, Status, Streaming};
-use xds_api::pb::envoy::service::status::v3::{
-    client_config::GenericXdsConfig,
-    client_status_discovery_service_server::{
-        ClientStatusDiscoveryService, ClientStatusDiscoveryServiceServer,
+use xds_api::pb::envoy::{
+    admin::v3::ClientResourceStatus,
+    service::status::v3::{
+        client_config::GenericXdsConfig,
+        client_status_discovery_service_server::{
+            ClientStatusDiscoveryService, ClientStatusDiscoveryServiceServer,
+        },
+        ClientConfig, ClientStatusRequest, ClientStatusResponse,
     },
-    ClientConfig, ClientStatusRequest, ClientStatusResponse,
 };
 
-use crate::xds::CacheReader;
+use crate::xds::{CacheReader, XdsConfig};
 
 /// Run a CSDS server listening on `localhost` at the given port.
 pub async fn local_server(cache: CacheReader, port: u16) -> Result<(), tonic::transport::Error> {
@@ -75,19 +78,7 @@ impl ClientStatusDiscoveryService for Server {
         }
 
         let node = request.node;
-        let generic_xds_configs: Vec<_> = self
-            .cache
-            .iter_any()
-            .map(|(name, any_pb)| {
-                let type_url = any_pb.type_url.clone();
-                GenericXdsConfig {
-                    name,
-                    type_url,
-                    xds_config: Some(any_pb),
-                    ..Default::default()
-                }
-            })
-            .collect();
+        let generic_xds_configs: Vec<_> = self.cache.iter_any().map(to_generic_config).collect();
 
         Ok(Response::new(ClientStatusResponse {
             config: vec![ClientConfig {
@@ -96,5 +87,35 @@ impl ClientStatusDiscoveryService for Server {
                 ..Default::default()
             }],
         }))
+    }
+}
+
+/// Convert a crate config to an xDS generic config
+///
+/// There's no way on GenericXdsConfig to indicate that you've ACKed one version
+/// of a config but rejected another. Since xDS generally gets cranky when you
+/// specify a duplicate resource name, we're currently just only showing a
+/// single successful config and hiding any errors.
+///
+/// This is weird but so is xDS. There's a hidden field that describes the last
+/// error trying to apply this config that would do what we want, but it's hidden
+/// as not-implemented!
+///
+/// Either figure out how to use the hidden field, or return MULTIPLE statuses for
+/// resources that have a valid and an invalid resource.
+fn to_generic_config(config: XdsConfig) -> GenericXdsConfig {
+    let client_status = match (&config.xds, &config.last_error) {
+        (Some(_), _) => ClientResourceStatus::Nacked,
+        (None, Some(_)) => ClientResourceStatus::Nacked,
+        _ => ClientResourceStatus::Unknown,
+    };
+
+    GenericXdsConfig {
+        type_url: config.type_url,
+        name: config.name,
+        version_info: config.version.to_string(),
+        xds_config: config.xds,
+        client_status: client_status.into(),
+        ..Default::default()
     }
 }

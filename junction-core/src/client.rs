@@ -2,8 +2,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use xds_api::pb::google::protobuf;
-
 use crate::xds::{self, AdsClient};
 use crate::{Route, RouteTarget};
 
@@ -104,7 +102,7 @@ impl Client {
         crate::xds::csds::local_server(self.ads.cache.clone(), port)
     }
 
-    pub fn dump(&self) -> impl Iterator<Item = (String, protobuf::Any)> + '_ {
+    pub fn dump(&self) -> impl Iterator<Item = crate::XdsConfig> + '_ {
         self.ads.cache.iter_any()
     }
 

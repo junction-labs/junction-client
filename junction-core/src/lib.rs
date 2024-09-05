@@ -24,3 +24,4 @@ mod client;
 mod xds;
 
 pub use client::Client;
+pub use xds::{ResourceVersion, XdsConfig};

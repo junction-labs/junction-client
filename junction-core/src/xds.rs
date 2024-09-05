@@ -49,10 +49,11 @@ use xds_api::pb::{
 };
 
 mod cache;
-mod resources;
+pub use cache::XdsConfig;
 
-pub(crate) use resources::ResourceType;
-use resources::ResourceVec;
+mod resources;
+pub use resources::ResourceVersion;
+pub(crate) use resources::{ResourceType, ResourceVec};
 
 pub(crate) mod csds;
 
@@ -72,7 +73,7 @@ use crate::config;
 ///
 /// These errors are built while decoding, validating, and transforming XDS and
 /// may be exposed to clients via debug outputs or ADS servers via XDS NACKs.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 // TODO: unsupported xds as a variant?
 // TODO: might be nice to include some constructors that do type URL things with type magick
 pub(crate) enum Error {
@@ -446,7 +447,9 @@ impl<'a> AdsConnection<'a> {
         };
 
         // handle the insert, on any error issue a NACK.
-        let (changed_types, errors) = self.cache.insert(resources);
+        let (changed_types, errors) = self
+            .cache
+            .insert(ResourceVersion::from(&version), resources);
         if tracing::enabled!(tracing::Level::TRACE) {
             let changed_types: Vec<_> = changed_types.values().collect();
             tracing::trace!(?changed_types, ?errors, "cache updated");
@@ -565,13 +568,16 @@ mod test_ads_conn {
         let (_, outgoing) = AdsConnection::new(&mut cache);
         assert!(outgoing.is_empty());
 
-        cache.insert(ResourceVec::Listener(vec![xds_test::listener!(
-            "nginx.default.local" => [xds_test::vhost!(
-                "default",
-                ["nginx.default.local"],
-                [xds_test::route!(default "nginx.default.local"),],
-            )],
-        )]));
+        cache.insert(
+            "123".into(),
+            ResourceVec::Listener(vec![xds_test::listener!(
+                "nginx.default.local" => [xds_test::vhost!(
+                    "default",
+                    ["nginx.default.local"],
+                    [xds_test::route!(default "nginx.default.local"),],
+                )],
+            )]),
+        );
 
         let (_, outgoing) = AdsConnection::new(&mut cache);
         assert_eq!(
@@ -592,9 +598,10 @@ mod test_ads_conn {
             ]
         );
 
-        cache.insert(ResourceVec::Cluster(vec![
-            xds_test::cluster!(eds "nginx.default.local"),
-        ]));
+        cache.insert(
+            "123".into(),
+            ResourceVec::Cluster(vec![xds_test::cluster!(eds "nginx.default.local")]),
+        );
 
         let (_, outgoing) = AdsConnection::new(&mut cache);
         assert_eq!(

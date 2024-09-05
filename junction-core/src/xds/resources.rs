@@ -1,6 +1,8 @@
+use std::ops::Deref;
 use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 
 use enum_map::EnumMap;
+use smol_str::SmolStr;
 use xds_api::pb::google::protobuf;
 use xds_api::{
     pb::envoy::{
@@ -14,6 +16,52 @@ use xds_api::{
     },
     WellKnownTypes,
 };
+
+/// An opaque string used to version an xDS resource.
+///
+/// `ResourceVersion`s are immutable and cheap to `clone` and share.
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResourceVersion(SmolStr);
+
+impl Deref for ResourceVersion {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl serde::Serialize for ResourceVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl AsRef<str> for ResourceVersion {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+macro_rules! impl_resource_version_from {
+    ($from_ty:ty) => {
+        impl From<$from_ty> for ResourceVersion {
+            fn from(s: $from_ty) -> ResourceVersion {
+                ResourceVersion(s.into())
+            }
+        }
+    };
+}
+
+impl_resource_version_from!(&str);
+impl_resource_version_from!(&mut str);
+impl_resource_version_from!(String);
+impl_resource_version_from!(&String);
+impl_resource_version_from!(Arc<str>);
+impl_resource_version_from!(Box<str>);
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, enum_map::Enum, Hash)]
 pub(crate) enum ResourceType {
@@ -180,15 +228,14 @@ impl<T> Ord for ResourceName<T> {
 }
 
 // TODO: filters go here
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ApiListener {
-    pub name: String,
     pub xds: xds_http::HttpConnectionManager,
-    pub data: ApiListenerData,
+    pub route_config: ApiListenerRouteConfig,
 }
 
-#[derive(Debug)]
-pub(crate) enum ApiListenerData {
+#[derive(Clone, Debug)]
+pub(crate) enum ApiListenerRouteConfig {
     RouteConfig {
         name: ResourceName<RouteConfig>,
     },
@@ -220,39 +267,40 @@ pub(crate) fn api_listener(
         })
 }
 
-impl TryFrom<(String, xds_http::HttpConnectionManager)> for ApiListener {
-    type Error = crate::xds::Error;
-
-    fn try_from(
-        (name, xds): (String, xds_http::HttpConnectionManager),
-    ) -> Result<Self, Self::Error> {
+impl ApiListener {
+    pub(crate) fn from_xds(
+        name: &str,
+        xds: xds_http::HttpConnectionManager,
+    ) -> Result<Self, crate::xds::Error> {
         use xds_http::http_connection_manager::RouteSpecifier;
 
         let data = match &xds.route_specifier {
-            Some(RouteSpecifier::Rds(rds_config)) => ApiListenerData::RouteConfig {
+            Some(RouteSpecifier::Rds(rds_config)) => ApiListenerRouteConfig::RouteConfig {
                 name: rds_config.route_config_name.clone().into(),
             },
             Some(RouteSpecifier::RouteConfig(route_config)) => {
                 let clusters = RouteConfig::cluster_names(route_config);
                 let routes = RouteConfig::routes(route_config);
-                ApiListenerData::Inlined { clusters, routes }
+                ApiListenerRouteConfig::Inlined { clusters, routes }
             }
             _ => {
                 return Err(crate::xds::Error::InvalidXds {
+                    resource_name: name.to_string(),
                     resource_type: "HttpConnectionManager",
-                    resource_name: name,
                     message: "HttpConnectionManager has no routes configured".to_string(),
                 })
             }
         };
 
-        Ok(Self { name, xds, data })
+        Ok(Self {
+            xds,
+            route_config: data,
+        })
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct RouteConfig {
-    pub name: String,
     pub xds: xds_route::RouteConfiguration,
     pub routes: Arc<Vec<crate::config::Route>>,
     pub clusters: Vec<ResourceName<Cluster>>,
@@ -295,16 +343,12 @@ impl RouteConfig {
     }
 }
 
-impl TryFrom<xds_route::RouteConfiguration> for RouteConfig {
-    type Error = crate::xds::Error;
-
-    fn try_from(xds: xds_route::RouteConfiguration) -> Result<Self, Self::Error> {
-        let name = xds.name.clone();
+impl RouteConfig {
+    pub(crate) fn from_xds(xds: xds_route::RouteConfiguration) -> Result<Self, crate::xds::Error> {
         let clusters = RouteConfig::cluster_names(&xds);
         let routes = RouteConfig::routes(&xds);
 
         Ok(Self {
-            name,
             xds,
             routes,
             clusters,
@@ -313,17 +357,16 @@ impl TryFrom<xds_route::RouteConfiguration> for RouteConfig {
 }
 
 // TODO: Figure out wtf to do to support logical_dns clusters.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Cluster {
-    pub name: String,
     pub xds: xds_cluster::Cluster,
     pub discovery_type: xds_cluster::cluster::DiscoveryType,
     pub load_balancer: Arc<crate::config::LoadBalancer>,
-    pub data: ClusterData,
+    pub endpoints: ClusterEndpointData,
 }
 
-#[derive(Debug)]
-pub(crate) enum ClusterData {
+#[derive(Clone, Debug)]
+pub(crate) enum ClusterEndpointData {
     #[allow(unused)]
     Inlined {
         name: String,
@@ -334,12 +377,10 @@ pub(crate) enum ClusterData {
     },
 }
 
-impl TryFrom<xds_cluster::Cluster> for Cluster {
-    type Error = crate::xds::Error;
-
+impl Cluster {
     // TOOD: support logical DNS clusters to keep parity with GRPC
     // FIXME: validate that the EDS config source uses ADS
-    fn try_from(xds: xds_cluster::Cluster) -> Result<Self, Self::Error> {
+    pub(crate) fn from_xds(xds: xds_cluster::Cluster) -> Result<Self, crate::xds::Error> {
         let Some(discovery_type) = cluster_discovery_type(&xds) else {
             return Err(crate::xds::Error::InvalidXds {
                 resource_type: "Cluster",
@@ -383,16 +424,15 @@ impl TryFrom<xds_cluster::Cluster> for Cluster {
         };
         let load_balancer = Arc::new(load_balancer);
 
-        let data = ClusterData::LoadAssignment {
+        let data = ClusterEndpointData::LoadAssignment {
             name: load_assignment,
         };
 
         Ok(Self {
-            name: xds.name.clone(),
             xds,
             discovery_type,
             load_balancer,
-            data,
+            endpoints: data,
         })
     }
 }
@@ -408,33 +448,21 @@ fn cluster_discovery_type(
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct LoadAssignment {
-    pub name: String,
     pub xds: xds_endpoint::ClusterLoadAssignment,
     pub endpoint_group: Arc<crate::config::load_balancer::EndpointGroup>,
 }
 
-impl
-    TryFrom<(
-        xds_cluster::cluster::DiscoveryType,
-        xds_endpoint::ClusterLoadAssignment,
-    )> for LoadAssignment
-{
-    type Error = crate::xds::Error;
-
-    fn try_from(
-        (dtype, xds): (
-            xds_cluster::cluster::DiscoveryType,
-            xds_endpoint::ClusterLoadAssignment,
-        ),
-    ) -> Result<Self, Self::Error> {
+impl LoadAssignment {
+    pub(crate) fn from_xds(
+        dtype: xds_cluster::cluster::DiscoveryType,
+        xds: xds_endpoint::ClusterLoadAssignment,
+    ) -> Result<Self, crate::xds::Error> {
         match crate::config::load_balancer::EndpointGroup::from_xds(&dtype, &xds) {
             Some(endpoint_group) => {
-                let name = xds.cluster_name.clone();
                 let endpoint_group = Arc::new(endpoint_group);
                 Ok(Self {
-                    name,
                     xds,
                     endpoint_group,
                 })

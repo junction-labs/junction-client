@@ -18,6 +18,7 @@ rand = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true }
 serde_yml = { workspace = true }
+smol_str = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["time", "macros"] }
 tokio-stream = { workspace = true }

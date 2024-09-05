@@ -1,6 +1,7 @@
 use std::{env, net::IpAddr, str::FromStr};
 
 use http::Uri;
+use junction_core::ResourceVersion;
 use once_cell::sync::Lazy;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -9,8 +10,10 @@ use pyo3::{
         PyAnyMethods, PyDict, PyMapping, PyMappingMethods, PyModule, PySequenceMethods,
         PyStringMethods,
     },
-    wrap_pyfunction, Bound, PyObject, PyResult, Python,
+    wrap_pyfunction, Bound, Py, PyAny, PyResult, Python,
 };
+use serde::Serialize;
+use xds_api::pb::google::protobuf;
 
 #[pymodule]
 fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -154,7 +157,6 @@ impl JunctionClient {
             }
             None => Vec::new(),
         };
-        dbg!(&routes);
 
         match DEFAULT_CLIENT.as_ref() {
             Ok(client) => {
@@ -196,15 +198,51 @@ impl JunctionClient {
         Ok(endpoints)
     }
 
-    fn dump_xds(&self, py: Python<'_>) -> PyResult<Vec<(String, PyObject)>> {
+    fn dump_xds(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut values = vec![];
 
-        for (name, any) in self.core.dump() {
-            let value = pythonize::pythonize(py, &any)?;
-            values.push((name, value));
+        for config in self.core.dump() {
+            let config: XdsConfig = config.into();
+            let as_py = pythonize::pythonize(py, &config)?;
+            values.push(as_py);
         }
 
         Ok(values)
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct XdsConfig {
+    name: String,
+
+    version: ResourceVersion,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    xds: Option<protobuf::Any>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_info: Option<XdsErrorInfo>,
+}
+
+#[derive(Debug, Serialize)]
+struct XdsErrorInfo {
+    version: ResourceVersion,
+    message: String,
+}
+
+impl From<junction_core::XdsConfig> for XdsConfig {
+    fn from(value: junction_core::XdsConfig) -> Self {
+        let error_info = value.last_error.map(|(v, e)| XdsErrorInfo {
+            version: v,
+            message: e,
+        });
+
+        Self {
+            name: value.name,
+            version: value.version,
+            xds: value.xds,
+            error_info,
+        }
     }
 }
 
