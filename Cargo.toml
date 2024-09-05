@@ -30,7 +30,7 @@ serde_yml = "0.0.10"
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-xds-api = { git = "ssh://git@github.com/junction-labs/xds-api.git", default-features = false }
+xds-api = { version = "0.1", default-features = false }
 xxhash-rust = { version = "0.8.12", features = ["xxh64"] }
 
 junction-core = { version = "0.1.0", path = "junction-core" }

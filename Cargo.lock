@@ -1678,7 +1678,8 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "xds-api"
 version = "0.1.0"
-source = "git+ssh://git@github.com/junction-labs/xds-api.git#a222ce06bcb42848c3c805a3d634adecd4aa10bb"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b1d81ccce17cbf159137dd38ce7d1a7934b88be5f4189dba581b8ac8d1cbe9b"
 dependencies = [
  "enum-map",
  "once_cell",
