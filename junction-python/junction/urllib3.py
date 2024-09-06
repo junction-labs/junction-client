@@ -95,11 +95,10 @@ class PoolManager(urllib3.PoolManager):
         request_context["scheme"] = endpoint.scheme
         request_context["port"] = endpoint.addr.port
 
-        match endpoint.addr:
-            case endpoint.addr.SocketAddr():
-                request_context["host"] = str(endpoint.addr.addr)
-            case endpoint.addr.DnsName():
-                request_context["host"] = str(endpoint.addr.name)
+        if isinstance(endpoint.addr, endpoint.addr.SocketAddr):
+            request_context["host"] = str(endpoint.addr.addr)
+        elif isinstance(endpoint.addr, endpoint.addr.DnsName):
+            request_context["host"] = str(endpoint.addr.name)
 
         if endpoint.scheme == "https":
             request_context["assert_hostname"] = endpoint.host
