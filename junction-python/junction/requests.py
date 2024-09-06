@@ -19,16 +19,16 @@ class HTTPAdapter(requests.adapters.HTTPAdapter):
     """
 
     def __init__(self, **kwargs):
-        self._jct_kwargs = kwargs.pop("jct_kwargs")
+        kwargs, client = junction._handle_kwargs(kwargs)
+        self.junction = client
         super().__init__(**kwargs)
 
     def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        pool_kwargs.update(self._jct_kwargs)
-
         self.poolmanager: urllib3.PoolManager = PoolManager(
             num_pools=connections,
             maxsize=maxsize,
             block=block,
+            junction_client=self.junction,
             **pool_kwargs,
         )
 
@@ -131,10 +131,8 @@ class Session(requests.Session):
     def __init__(self, **kwargs) -> None:
         super().__init__()
 
-        jct_kwargs = {}
-        for key in junction._KWARG_NAMES:
-            if value := kwargs.pop(key, None):
-                jct_kwargs[key] = value
+        kwargs, client = junction._handle_kwargs(kwargs)
+        self.junction = client
 
-        self.mount("https://", HTTPAdapter(jct_kwargs=jct_kwargs))
-        self.mount("http://", HTTPAdapter(jct_kwargs=jct_kwargs))
+        self.mount("https://", HTTPAdapter(junction_client=self.junction))
+        self.mount("http://", HTTPAdapter(junction_client=self.junction))

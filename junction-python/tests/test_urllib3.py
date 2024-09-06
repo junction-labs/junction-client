@@ -1,7 +1,7 @@
+import os
 import typing
 
 import pytest
-import pytest_httpbin
 from urllib3 import BaseHTTPResponse
 from urllib3 import PoolManager as Urllib3PoolManager
 
@@ -15,42 +15,17 @@ def _responses_equal(a: BaseHTTPResponse, b: BaseHTTPResponse):
 
 
 def _pool_managers(url: str, **kwargs) -> typing.List[Urllib3PoolManager]:
-    pool_kwargs = kwargs.copy()
-    if url.startswith("https"):
-        pool_kwargs["ca_certs"] = pytest_httpbin.certs.where()
-
-    return [
-        pool_cls(ca_certs=pytest_httpbin.certs.where()) for pool_cls in POOL_CLASSES
-    ]
+    return [pool_cls() for pool_cls in POOL_CLASSES]
 
 
-@pytest.mark.skip(reason="figure out test ADS server")
-@pytest.mark.parametrize(
-    "method,path,expected_status",
-    [
-        ("GET", "/json", 200),
-        ("GET", "/status/204", 204),
-        ("GET", "/status/301", 301),
-        ("GET", "/status/404", 404),
-        ("DELETE", "/status/204", 204),
-    ],
+@pytest.mark.skipif(
+    "JUNCTION_ADS_SERVER" not in os.environ,
+    reason="missing ADS server address",
 )
-def test_no_request_body(httpbin_both, method, path, expected_status):
-    url = httpbin_both.url + path
+def test_no_request_body():
+    url = "http://nginx.default.svc.cluster.local"
     pool_managers = _pool_managers(url)
-    responses = [p.urlopen(method, url, redirect=False) for p in pool_managers]
+    responses = [p.urlopen("GET", url, redirect=False) for p in pool_managers]
 
-    assert all(r.status == expected_status for r in responses)
+    assert all(r.status == 200 for r in responses)
     all(_responses_equal(responses[0], r) for r in responses)
-
-
-@pytest.mark.skip(reason="figure out test ADS server")
-def test_post_json(httpbin_both):
-    url = httpbin_both.url + "/post"
-    pool_managers = _pool_managers(url)
-
-    for p in pool_managers:
-        resp = p.request("POST", url, json={"drink": "coffee"})
-        resp_body = resp.json()
-
-        assert resp_body["json"] == {"drink": "coffee"}

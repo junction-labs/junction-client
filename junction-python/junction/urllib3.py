@@ -41,13 +41,8 @@ class PoolManager(urllib3.PoolManager):
         headers: typing.Mapping[str, str] | None = None,
         **kwargs: typing.Any,
     ) -> None:
-        jct_kwargs = {}
-        for key in junction._KWARG_NAMES:
-            if value := kwargs.pop(key, None):
-                jct_kwargs[key] = value
-
-        connection_pool_kw = kwargs
-        self.junction = jct_core.JunctionClient.new_client(**jct_kwargs)
+        connection_pool_kw, client = junction._handle_kwargs(kwargs)
+        self.junction = client
 
         super().__init__(num_pools, headers, **connection_pool_kw)
 

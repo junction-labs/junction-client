@@ -7,8 +7,8 @@ use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     pyclass, pyfunction, pymethods, pymodule,
     types::{
-        PyAnyMethods, PyDict, PyMapping, PyMappingMethods, PyModule, PySequenceMethods,
-        PyStringMethods,
+        PyAnyMethods, PyDict, PyDictMethods, PyMapping, PyMappingMethods, PyModule,
+        PySequenceMethods, PyStringMethods,
     },
     wrap_pyfunction, Bound, Py, PyAny, PyResult, Python,
 };
@@ -17,12 +17,15 @@ use xds_api::pb::google::protobuf;
 
 #[pymodule]
 fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<JunctionClient>()?;
-    m.add_function(wrap_pyfunction!(run_csds, m)?)?;
+    m.add_class::<Junction>()?;
+    m.add_function(wrap_pyfunction!(default_client, m)?)?;
 
     Ok(())
 }
 
+/// An endpoint that an HTTP call can be made to. Includes the address that the
+/// request should resolve to along with the original request URI, the scheme to
+/// use, and the hostname to use for TLS if appropriate.
 #[derive(Debug)]
 #[pyclass]
 pub struct Endpoint {
@@ -39,6 +42,19 @@ pub struct Endpoint {
     request_uri: String,
 }
 
+#[pymethods]
+impl Endpoint {
+    fn __repr__(&self) -> String {
+        format!(
+            "Endpoint({addr}, {uri})",
+            addr = self.addr,
+            uri = self.request_uri
+        )
+    }
+}
+
+/// An endpoint address. An address can either be an IPAddress or a DNS name,
+/// but will always include a port.
 #[derive(Debug, Clone)]
 #[pyclass]
 enum EndpointAddress {
@@ -94,9 +110,10 @@ impl From<junction_core::Endpoint> for Endpoint {
     }
 }
 
+/// A Junction endpoint discovery client.
 #[pyclass]
 #[derive(Clone)]
-pub struct JunctionClient {
+pub struct Junction {
     core: junction_core::Client,
 }
 
@@ -111,13 +128,16 @@ static RUNTIME: once_cell::sync::Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
     rt
 });
 
-static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
-    let ads_address =
-        env::var("JUNCTION_ADS_SERVER").unwrap_or_else(|_| "grpc://127.0.0.1:8080".to_string());
-    let node_name =
-        env::var("JUNCTION_NODE_NAME").unwrap_or_else(|_| "junction-python".to_string());
-    let cluster_name = env::var("JUNCTION_CLUSTER").unwrap_or_default();
-
+/// Create a new client with a new config cache. Any call to resolve_endpoints
+/// on this client will use cached data if available.
+///
+/// This client is safe to share between multiple objects and use from multiple
+/// threads.
+fn new_client(
+    ads_address: String,
+    node_name: String,
+    cluster_name: String,
+) -> PyResult<junction_core::Client> {
     let rt = &RUNTIME;
     rt.block_on(junction_core::Client::build(
         ads_address,
@@ -132,41 +152,104 @@ static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
         };
         PyRuntimeError::new_err(error_message)
     })
+}
+
+fn default_ads_server(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
+    let addr = kwarg_string("ads_server", kwargs)?
+        .or(env::var("JUNCTION_ADS_SERVER").ok())
+        .unwrap_or_else(|| "grpc://junction".to_string());
+
+    Ok(addr)
+}
+
+fn default_node_info(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<(String, String)> {
+    let node_name = kwarg_string("node_name", kwargs)?
+        .or(env::var("JUNCTION_NODE_NAME").ok())
+        .unwrap_or_else(|| "junction-python".to_string());
+
+    let cluster_name = kwarg_string("cluster_name", kwargs)?
+        .or(env::var("JUNCTION_CLUSTER").ok())
+        .unwrap_or_else(|| "junction-python".to_string());
+
+    Ok((node_name, cluster_name))
+}
+
+fn kwarg_string(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<String>> {
+    let Some(kwargs) = kwargs else {
+        return Ok(None);
+    };
+
+    let item = kwargs.get_item(key)?;
+    let py_str = item.map(|s| s.str()).transpose()?;
+    Ok(py_str.map(|s| s.to_string()))
+}
+
+fn default_routes(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<junction_core::Route>> {
+    let Some(kwargs) = kwargs else {
+        return Ok(Vec::new());
+    };
+    let routes = match kwargs.get_item("default_routes")? {
+        Some(default_routes) => pythonize::depythonize_bound(default_routes)?,
+        None => Vec::new(),
+    };
+    Ok(routes)
+}
+
+static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
+    let ads = default_ads_server(None)?;
+    let (node, cluster) = default_node_info(None)?;
+    new_client(ads, node, cluster)
 });
 
+/// Return a reference to a default Junction client. This client will be used by
+/// library integrations if they're not explicitly constructed with a client.
+///
+/// This client can be configured with an ADS server address and node info by
+/// setting the JUNCTION_ADS_SERVER, JUNCTION_NODE, and JUNCTION_CLUSTER
+/// environment variables.
+///
+/// Calls to this function accept a `default_routes` kwarg, and can override the
+/// default routing info for this client while still using config cache shared
+/// with all other default clients.
 #[pyfunction]
-fn run_csds(port: u16) -> PyResult<()> {
+#[pyo3(signature = (**kwargs))]
+fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
+    let routes = default_routes(kwargs)?;
     match DEFAULT_CLIENT.as_ref() {
-        Ok(client) => {
-            RUNTIME.spawn(client.config_server(port));
-            Ok(())
+        Ok(default_client) => {
+            let core = default_client.clone().with_default_routes(routes);
+            Ok(Junction { core })
         }
         Err(e) => Err(PyRuntimeError::new_err(e)),
     }
 }
 
 #[pymethods]
-impl JunctionClient {
-    #[staticmethod]
+impl Junction {
+    /// Create a new Junction client. The client can be shared and is safe
+    /// to use from multiple threads or tasks.
+    #[new]
     #[pyo3(signature = (**kwargs))]
-    fn new_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
-        let routes = match kwargs {
-            Some(route_dict) => {
-                let default_routes = route_dict.get_item("default_routes")?;
-                pythonize::depythonize_bound(default_routes)?
-            }
-            None => Vec::new(),
-        };
+    fn new(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+        let ads = default_ads_server(kwargs)?;
+        let (node, cluster) = default_node_info(kwargs)?;
+        let routes = default_routes(kwargs)?;
 
-        match DEFAULT_CLIENT.as_ref() {
+        match new_client(ads, node, cluster) {
             Ok(client) => {
-                let core = client.clone().with_default_routes(routes);
-                Ok(JunctionClient { core })
+                let core = client.with_default_routes(routes);
+                Ok(Junction { core })
             }
             Err(e) => Err(PyRuntimeError::new_err(e)),
         }
     }
 
+    /// Resolve an endpoint based on an HTTP method, url, and headers.
+    ///
+    /// Returns the list of endpoints that traffic should be directed to, taking
+    /// in to account load balancing and any prior requests. A request should be
+    /// sent to all endpoints, and it's up to the caller to decide how to combine
+    /// multiple responses.
     fn resolve_endpoints(
         &mut self,
         method: &str,
@@ -198,6 +281,25 @@ impl JunctionClient {
         Ok(endpoints)
     }
 
+    /// Spawn a new CSDS server on the given port. Spawning the server will not
+    /// block the current thread.
+    fn run_csds_server(&self, port: u16) -> PyResult<()> {
+        let server_fut = self.core.config_server(port);
+        // FIXME: figure out how to report an error better than this. just printing
+        // the exception is good buuuuuuut.
+        RUNTIME.spawn(async move {
+            if let Err(e) = server_fut.await {
+                let py_err = PyRuntimeError::new_err(format!("csds server exited: {e}"));
+                Python::with_gil(|py| py_err.print(py));
+            }
+        });
+        Ok(())
+    }
+
+    /// Dump the client's current xDS config as a dict.
+    ///
+    /// The xDS config will contain the latest values for all resources and any
+    /// errors encountered while trying to fetch updated versions.
     fn dump_xds(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut values = vec![];
 
