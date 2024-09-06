@@ -69,6 +69,8 @@ pub(crate) use value_or_default;
 
 use crate::config;
 
+// FIXME: nonce is global for a conneciton, not per resource type????
+
 /// An error that occurred while handling an XDS message.
 ///
 /// These errors are built while decoding, validating, and transforming XDS and

@@ -26,7 +26,7 @@ fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// An endpoint that an HTTP call can be made to. Includes the address that the
 /// request should resolve to along with the original request URI, the scheme to
 /// use, and the hostname to use for TLS if appropriate.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[pyclass]
 pub struct Endpoint {
     #[pyo3(get)]
@@ -40,6 +40,9 @@ pub struct Endpoint {
 
     #[pyo3(get)]
     request_uri: String,
+
+    #[pyo3(get)]
+    retry_policy: Option<RetryPolicy>,
 }
 
 #[pymethods]
@@ -100,12 +103,50 @@ impl From<junction_core::Endpoint> for Endpoint {
         let host = ep.url.hostname().to_string();
         let request_uri = ep.url.to_string();
         let addr = ep.address.into();
+        let retry_policy = ep.retry.map(|r| r.into());
 
         Self {
             scheme,
             host,
             request_uri,
             addr,
+            retry_policy,
+        }
+    }
+}
+
+/// A policy that describes how a client should retry requests.
+#[derive(Clone, Debug)]
+#[pyclass]
+pub struct RetryPolicy {
+    #[pyo3(get)]
+    attempts: usize,
+
+    #[pyo3(get)]
+    backoff_min: f64,
+
+    #[pyo3(get)]
+    backoff_max: f64,
+}
+
+#[pymethods]
+impl RetryPolicy {
+    fn __repr__(&self) -> String {
+        format!(
+            "RetryPolicy({attempts}, {min}, {max})",
+            attempts = self.attempts,
+            min = self.backoff_min,
+            max = self.backoff_max
+        )
+    }
+}
+
+impl From<junction_core::RetryPolicy> for RetryPolicy {
+    fn from(value: junction_core::RetryPolicy) -> Self {
+        Self {
+            attempts: value.max_attempts,
+            backoff_min: value.initial_backoff.as_secs_f64(),
+            backoff_max: value.max_backoff.as_secs_f64(),
         }
     }
 }

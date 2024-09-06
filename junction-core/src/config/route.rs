@@ -2,6 +2,8 @@ use serde::Deserialize;
 use std::time::Duration;
 use xds_api::pb::envoy::config::route::v3 as xds_route;
 
+use crate::RetryPolicy;
+
 // FIXME: to allow manual config, allow adding a route to the front of a virtualhost for any vhost that matches a domain
 
 // FIXME: handle wildcard domains and domain search order instead of picking the first match
@@ -95,6 +97,12 @@ impl RouteRule {
             return None;
         };
 
+        let timeout = action
+            .timeout
+            .as_ref()
+            .map(|d| Duration::new(d.seconds as u64, d.nanos as u32));
+        let retry_policy = action.retry_policy.as_ref().map(RetryPolicy::from_xds);
+
         let hash_policies = action
             .hash_policy
             .iter()
@@ -102,16 +110,10 @@ impl RouteRule {
             .collect();
 
         let target = RouteTarget::from_xds(action.cluster_specifier.as_ref()?)?;
-        let timeout = action
-            .timeout
-            .as_ref()
-            .map(|d| Duration::new(d.seconds as u64, d.nanos as u32));
-
-        // FIXME: retry policy
 
         Some(RouteRule {
             timeout,
-            retry_policy: None,
+            retry_policy,
             matches: vec![matcher],
             hash_policies,
             target,
