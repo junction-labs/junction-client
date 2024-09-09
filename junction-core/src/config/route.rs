@@ -258,7 +258,6 @@ impl From<String> for StringMatcher {
     fn from(value: String) -> Self {
         match value.as_ref() {
             "*" => Self::Any,
-            s if s.starts_with('*') => Self::Prefix(value),
             _ => Self::Exact(value),
         }
     }
@@ -268,7 +267,9 @@ impl StringMatcher {
     pub fn is_match(&self, value: &str) -> bool {
         match self {
             StringMatcher::Any => true,
-            StringMatcher::Prefix(prefix) => value.starts_with(prefix),
+            StringMatcher::Prefix(prefix) => {
+                value.len() > prefix.len() && value.starts_with(prefix)
+            }
             StringMatcher::Exact(exact_match) => exact_match == value,
         }
     }
@@ -331,6 +332,58 @@ impl StringMatcher {
             xds_route::route_match::PathSpecifier::Path(p) => Some(StringMatcher::Exact(p.clone())),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod matcher_test {
+    use ::rand::{
+        distributions::{Alphanumeric, DistString},
+        seq::IteratorRandom,
+    };
+
+    use super::*;
+    use crate::rand;
+
+    #[test]
+    fn test_match_any() {
+        let m: StringMatcher = "*".to_string().into();
+        assert_eq!(m, StringMatcher::Any);
+
+        rand::with_thread_rng(|rng| {
+            for _ in 0..30 {
+                let str_len = (8..64).choose(rng).unwrap_or(16);
+                let random_str = Alphanumeric.sample_string(rng, str_len);
+                assert!(
+                    m.is_match(&random_str),
+                    "should have matched any string: failed on {random_str:?}"
+                );
+            }
+        })
+    }
+
+    #[test]
+    fn test_match_prefix() {
+        let m = StringMatcher::Prefix("potato".to_string());
+
+        assert!(
+            !m.is_match("potato"),
+            "prefix should not have matched by itself",
+        );
+
+        // prefix should match
+        let a_string = format!("potatopancakes");
+        assert!(
+            m.is_match(&a_string),
+            "should have matched a prefix: {a_string:?}"
+        );
+
+        // no prefix shouldn't match
+        let a_string = format!("lemonpancakes");
+        assert!(
+            !m.is_match(&a_string),
+            "should not have matched a without prefix: {a_string:?}"
+        );
     }
 }
 
