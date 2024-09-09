@@ -230,7 +230,7 @@ impl<T> Ord for ResourceName<T> {
 // TODO: filters go here
 #[derive(Clone, Debug)]
 pub(crate) struct ApiListener {
-    pub xds: xds_http::HttpConnectionManager,
+    pub xds: xds_listener::Listener,
     pub route_config: ApiListenerRouteConfig,
 }
 
@@ -245,7 +245,7 @@ pub(crate) enum ApiListenerRouteConfig {
     },
 }
 
-pub(crate) fn api_listener(
+fn api_listener(
     listener: &xds_listener::Listener,
 ) -> Result<xds_http::HttpConnectionManager, crate::xds::Error> {
     let api_listener = listener
@@ -270,11 +270,12 @@ pub(crate) fn api_listener(
 impl ApiListener {
     pub(crate) fn from_xds(
         name: &str,
-        xds: xds_http::HttpConnectionManager,
+        xds: xds_listener::Listener,
     ) -> Result<Self, crate::xds::Error> {
         use xds_http::http_connection_manager::RouteSpecifier;
 
-        let data = match &xds.route_specifier {
+        let conn_manager = api_listener(&xds)?;
+        let data = match &conn_manager.route_specifier {
             Some(RouteSpecifier::Rds(rds_config)) => ApiListenerRouteConfig::RouteConfig {
                 name: rds_config.route_config_name.clone().into(),
             },

@@ -204,7 +204,6 @@ impl RoundRobinLb {
 /// Like the Envoy and gRPC implementations, this load balancer ignores locality
 /// and flattens all visible endpoints into a single hash ring. Unlike GRPC and
 /// Envoy, this load balancer ignores endpoint weights.
-///
 #[derive(Debug)]
 pub(crate) struct RingHashLb {
     min_size: usize,

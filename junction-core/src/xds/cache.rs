@@ -85,14 +85,11 @@ use petgraph::{
     Direction,
 };
 use prost::Name;
-use xds_api::pb::envoy::{
-    config::{
-        cluster::v3::{self as xds_cluster},
-        endpoint::v3::{self as xds_endpoint},
-        listener::v3::{self as xds_listener},
-        route::v3::{self as xds_route},
-    },
-    extensions::filters::network::http_connection_manager::v3 as xds_http,
+use xds_api::pb::envoy::config::{
+    cluster::v3::{self as xds_cluster},
+    endpoint::v3::{self as xds_endpoint},
+    listener::v3::{self as xds_listener},
+    route::v3::{self as xds_route},
 };
 use xds_api::pb::google::protobuf;
 
@@ -111,8 +108,8 @@ use xds_api::pb::google::protobuf;
 // early exit if we've already marked a node.
 
 use super::resources::{
-    api_listener, ApiListener, ApiListenerRouteConfig, Cluster, ClusterEndpointData,
-    LoadAssignment, ResourceType, ResourceTypeSet, ResourceVec, RouteConfig,
+    ApiListener, ApiListenerRouteConfig, Cluster, ClusterEndpointData, LoadAssignment,
+    ResourceType, ResourceTypeSet, ResourceVec, RouteConfig,
 };
 use super::ResourceVersion;
 
@@ -143,7 +140,7 @@ macro_rules! impl_cache_entry {
     };
 }
 
-impl_cache_entry!(ApiListener, xds_http::HttpConnectionManager);
+impl_cache_entry!(ApiListener, xds_listener::Listener);
 impl_cache_entry!(RouteConfig, xds_route::RouteConfiguration);
 impl_cache_entry!(Cluster, xds_cluster::Cluster);
 impl_cache_entry!(LoadAssignment, xds_endpoint::ClusterLoadAssignment);
@@ -291,35 +288,6 @@ pub struct XdsConfig {
 
 impl CacheReader {
     pub(crate) fn iter_any(&self) -> impl Iterator<Item = XdsConfig> + '_ {
-        let listener_iter = self.data.listeners.iter().map(|entry| {
-            let name = entry.name().to_string();
-            let type_url = xds_listener::Listener::type_url();
-
-            let xds = entry.data().map(|data| {
-                let api_listener =
-                    protobuf::Any::from_msg(data.xds()).expect("generated invalid protobuf");
-
-                let listener = xds_listener::Listener {
-                    api_listener: Some(xds_listener::ApiListener {
-                        api_listener: Some(api_listener),
-                    }),
-                    ..Default::default()
-                };
-                protobuf::Any::from_msg(&listener).expect("generated invalid protobuf")
-            });
-
-            let version = entry.version().clone();
-            let last_error = entry.last_error().map(|(v, e)| (v.clone(), e.to_string()));
-
-            XdsConfig {
-                name,
-                type_url,
-                version,
-                xds,
-                last_error,
-            }
-        });
-
         macro_rules! any_iter {
             ($field:ident, $xds_type:ty) => {
                 self.data.$field.iter().map(|entry| {
@@ -341,7 +309,7 @@ impl CacheReader {
             };
         }
 
-        listener_iter
+        any_iter!(listeners, xds_listener::Listener)
             .chain(any_iter!(route_configs, xds_route::RouteConfiguration))
             .chain(any_iter!(clusters, xds_cluster::Cluster))
             .chain(any_iter!(
@@ -637,36 +605,21 @@ impl Cache {
         for listener in listeners {
             to_remove.remove(&listener.name);
 
-            // listeners are weird and we have to unzip the API listener before doing anything.
-            let api_listener = match api_listener(&listener) {
-                Ok(l) => l,
-                Err(e) => {
-                    self.data
-                        .listeners
-                        .insert_error(listener.name, version.clone(), e.clone());
-                    errors.push(e);
-                    continue;
-                }
-            };
-
-            if self
-                .data
-                .listeners
-                .is_changed(&listener.name, &api_listener)
-            {
-                let api_listener = match ApiListener::from_xds(&listener.name, api_listener) {
+            if self.data.listeners.is_changed(&listener.name, &listener) {
+                let listener_name = listener.name.clone();
+                let api_listener = match ApiListener::from_xds(&listener_name, listener) {
                     Ok(l) => l,
                     Err(e) => {
                         self.data
                             .listeners
-                            .insert_error(listener.name, version.clone(), e.clone());
+                            .insert_error(listener_name, version.clone(), e.clone());
                         errors.push(e);
                         continue;
                     }
                 };
 
                 // remove the downstream route config ref and replace it with a new one
-                let (node, _) = self.find_or_create_ref(ResourceType::Listener, &listener.name);
+                let (node, _) = self.find_or_create_ref(ResourceType::Listener, &listener_name);
                 self.reset_ref(node);
 
                 match &api_listener.route_config {
@@ -698,7 +651,7 @@ impl Cache {
                 // insert data into cache
                 self.data
                     .listeners
-                    .insert_ok(listener.name.clone(), version.clone(), api_listener);
+                    .insert_ok(listener_name, version.clone(), api_listener);
                 changed.insert(ResourceType::Listener);
             }
         }
