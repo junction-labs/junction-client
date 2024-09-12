@@ -1,0 +1,18 @@
+{
+    "xds_servers": [
+        {
+            "server_uri": "127.0.0.1:8080",
+            "channel_creds": [
+                {
+                    "type": "insecure"
+                }
+            ],
+            "server_features": [
+                "xds_v3"
+            ]
+        }
+    ],
+    "node": {
+        "id": "benl-test"
+    }
+}

@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jct-http-server
+  labels:
+    app: jct-http-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: jct-http-server
+  template:
+    metadata:
+      labels:
+        app: jct-http-server
+    spec:
+      containers:
+      - name: jct-http-server
+        image: jct_http_server:latest
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: VERSION
+            value: "jct-http-server"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jct-http-server
+spec:
+  type: ClusterIP
+  selector:
+    app: jct-http-server
+  ports:
+    - port: 8008
+      targetPort: 8008

@@ -8,7 +8,6 @@ edition = "2021"
 homepage = "https://github.com/junction-labs/junction-client"
 
 [workspace.dependencies]
-
 arc-swap = "1.7"
 bytes = "1.6"
 crossbeam-skiplist = "0.1"
@@ -33,5 +32,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 xds-api = { version = "0.1", default-features = false }
 xxhash-rust = { version = "0.8.12", features = ["xxh64"] }
-
 junction-core = { version = "0.1.0", path = "junction-core" }
