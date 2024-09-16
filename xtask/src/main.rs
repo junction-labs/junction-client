@@ -7,7 +7,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let sh = Shell::new()?;
 
-    let venv = env::var("VENV").unwrap_or_else(|_| ".venv".to_string());
+    let venv = env::var("VIRTUAL_ENV").unwrap_or_else(|_| ".venv".to_string());
 
     match &args.command {
         Commands::PythonClean => clean(&sh, &venv),
