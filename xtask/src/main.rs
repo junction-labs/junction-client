@@ -12,6 +12,7 @@ fn main() -> anyhow::Result<()> {
     match &args.command {
         Commands::PythonClean => clean(&sh, &venv),
         Commands::PythonBuild => python_build(&sh, &venv),
+        Commands::PythonLint { fix } => python_lint(&sh, &venv, *fix),
         Commands::PythonTest => python_test(&sh, &venv),
     }
 }
@@ -31,6 +32,13 @@ enum Commands {
 
     /// Run junction-python's Python tests.
     PythonTest,
+
+    /// Lint and format Python code.
+    PythonLint {
+        /// Try to automatically fix any linter/formatter errors.
+        #[clap(long)]
+        fix: bool,
+    },
 
     /// Clean the current virtualenv and any Python caches.
     PythonClean,
@@ -67,6 +75,41 @@ fn python_test(sh: &Shell, venv: &str) -> anyhow::Result<()> {
     python_build(sh, venv)?;
 
     cmd!(sh, "{venv}/bin/pytest").run()?;
+
+    Ok(())
+}
+
+fn python_lint(sh: &Shell, venv: &str, fix: bool) -> anyhow::Result<()> {
+    ensure_venv(sh, venv)?;
+
+    if !fix {
+        // when not fixing, always run both checks and return an error if either
+        // fails. it's annoying to not see all the errors at first.
+        let check = cmd!(
+            sh,
+            "{venv}/bin/ruff check --config junction-python/pyproject.toml --no-fix"
+        )
+        .run();
+        let format = cmd!(
+            sh,
+            "{venv}/bin/ruff format --config junction-python/pyproject.toml --check"
+        )
+        .run();
+        check.and(format)?;
+    } else {
+        // when fixing, run sequentially in case there's a change in formatting
+        // that a fix would introduce (that would be annoying buuuuuuut).
+        cmd!(
+            sh,
+            "{venv}/bin/ruff check --config junction-python/pyproject.toml --fix"
+        )
+        .run()?;
+        cmd!(
+            sh,
+            "{venv}/bin/ruff format --config junction-python/pyproject.toml"
+        )
+        .run()?;
+    }
 
     Ok(())
 }
