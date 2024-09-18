@@ -26,6 +26,7 @@ import helloworld_pb2
 import helloworld_pb2_grpc
 from concurrent import futures
 
+
 def run(args):
     with grpc.insecure_channel(
         target=args.server,
@@ -36,9 +37,11 @@ def run(args):
         ],
     ) as channel:
         if args.adminPort:
-            admin_server = grpc.server(futures.ThreadPoolExecutor(max_workers=3),
-                                       options= (("grpc.enable_channelz", 1),),)
-            admin_server.add_insecure_port("[::]:" + str(args.adminPort)),
+            admin_server = grpc.server(
+                futures.ThreadPoolExecutor(max_workers=3),
+                options=(("grpc.enable_channelz", 1),),
+            )
+            (admin_server.add_insecure_port("[::]:" + str(args.adminPort)),)
             channelz.add_channelz_servicer(admin_server)
             grpc_csds.add_csds_servicer(admin_server)
             admin_server.start()
@@ -59,12 +62,8 @@ if __name__ == "__main__":
     logging.basicConfig()
 
     parser = argparse.ArgumentParser(description="Greet someone")
-    parser.add_argument(
-        "server", default=None, help="The address of the server."
-    )
-    parser.add_argument(
-        "--adminPort", default=None, help="the admin port.", type=int
-    )
+    parser.add_argument("server", default=None, help="The address of the server.")
+    parser.add_argument("--adminPort", default=None, help="the admin port.", type=int)
     args = parser.parse_args()
 
     run(args)
