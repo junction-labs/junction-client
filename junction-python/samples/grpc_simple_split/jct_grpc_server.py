@@ -20,7 +20,9 @@ import grpc
 import helloworld_pb2
 import helloworld_pb2_grpc
 import random
+
 num = random.random()
+
 
 class Greeter(helloworld_pb2_grpc.GreeterServicer):
     def SayHello(self, request, context):
@@ -35,6 +37,7 @@ def serve():
     server.start()
     print("Server started, listening on " + port)
     server.wait_for_termination()
+
 
 if __name__ == "__main__":
     logging.basicConfig()
