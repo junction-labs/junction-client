@@ -1,0 +1,69 @@
+name: junction-core CI
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "junction-core/*"
+      - ".github/workflows/junction-core-ci.yml"
+
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "junction-core/*"
+      - ".github/workflows/junction-core-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  rust_stable: stable
+  rust_min: 1.79
+
+jobs:
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @${{ env.rust_min }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_min }}
+    - uses: Swatinem/rust-cache@v2
+    - name: check
+      run: cargo check -p junction-core
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @${{ env.rust_stable }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_stable }}
+    - uses: Swatinem/rust-cache@v2
+    - name: test
+      run: cargo test -p junction-core
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @ ${{ env.rust_stable }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_stable }}
+    - uses: Swatinem/rust-cache@v2
+    - name: clippy
+      run: cargo clippy -p junction-core --tests --all-features --no-deps -- -D warnings -D clippy::dbg_macro
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @ ${{ env.rust_stable }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_stable }}
+    - uses: Swatinem/rust-cache@v2
+    - name: fmt
+      run: |
+        if ! rustfmt --check --edition 2021 $(git ls-files 'junction-core/*.rs'); then
+          echo "rustfmt found un-formatted files" >&2
+          exit 1
+        fi

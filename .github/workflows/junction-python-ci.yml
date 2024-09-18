@@ -1,0 +1,98 @@
+name: junction-python CI
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "junction-python/*"
+      - ".github/workflows/junction-python-ci.yml"
+
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "junction-python/*"
+      - ".github/workflows/junction-python-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  rust_stable: stable
+  rust_min: 1.79
+
+jobs:
+  # Rust CI steps
+  #
+  # These should be largely the same as the steps in junction-core-ci.yml but
+  # testing a different package.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @${{ env.rust_min }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_min }}
+    - uses: Swatinem/rust-cache@v2
+    - name: check
+      run: cargo check -p junction-python
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @${{ env.rust_stable }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_stable }}
+    - uses: Swatinem/rust-cache@v2
+    - name: test
+      run: cargo test -p junction-python
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @ ${{ env.rust_stable }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_stable }}
+    - uses: Swatinem/rust-cache@v2
+    - name: clippy
+      run: cargo clippy -p junction-python --tests --all-features --no-deps -- -D warnings -D clippy::dbg_macro
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @ ${{ env.rust_stable }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_stable }}
+    - uses: Swatinem/rust-cache@v2
+    - name: fmt
+      run: |
+        if ! rustfmt --check --edition 2021 $(git ls-files 'junction-python/*.rs'); then
+          echo "rustfmt found un-formatted files" >&2
+          exit 1
+        fi
+  # Python CI steps
+  #
+  # these lean on xtask tasks so they're similar to what you'd run locally
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @ ${{ env.rust_stable }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_stable }}
+    - uses: Swatinem/rust-cache@v2
+    - name: run python tests
+      run: cargo xtask python-test
+  lint-python:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: "Install Rust @ ${{ env.rust_stable }}"
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          toolchain: ${{ env.rust_stable }}
+    - uses: Swatinem/rust-cache@v2
+    - name: run python tests
+      run: cargo xtask python-lint
