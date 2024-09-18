@@ -372,17 +372,17 @@ mod matcher_test {
         );
 
         // prefix should match
-        let a_string = format!("potatopancakes");
+        let a_string = "potatopancakes";
         assert!(
-            m.is_match(&a_string),
+            m.is_match(a_string),
             "should have matched a prefix: {a_string:?}"
         );
 
         // no prefix shouldn't match
-        let a_string = format!("lemonpancakes");
+        let a_string = "lemonpancakes";
         assert!(
-            !m.is_match(&a_string),
-            "should not have matched a without prefix: {a_string:?}"
+            !m.is_match(a_string),
+            "should not have matched without a prefix: {a_string:?}"
         );
     }
 }

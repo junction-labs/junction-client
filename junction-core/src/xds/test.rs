@@ -155,7 +155,6 @@ pub fn api_listener_rds(name: &'static str, route_name: &'static str) -> xds_lis
     let route_specifier = RouteSpecifier::Rds(Rds {
         config_source: Some(ads_config_source()),
         route_config_name: route_name.to_string(),
-        ..Default::default()
     });
 
     let http_connection_manager = xds_http::HttpConnectionManager {
@@ -339,7 +338,7 @@ pub fn lb_endpoint(
         ..Default::default()
     };
 
-    let health = health.unwrap_or_else(|| xds_core::HealthStatus::Healthy);
+    let health = health.unwrap_or(xds_core::HealthStatus::Healthy);
     xds_endpoint::LbEndpoint {
         health_status: health as i32,
         metadata: None,
