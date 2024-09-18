@@ -23,12 +23,13 @@ struct Args {
     command: Commands,
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Subcommand)]
 enum Commands {
     /// Build and install junction-python in a .venv.
     PythonBuild,
 
-    /// Run all junction-python tests, both in Rust and in Python.
+    /// Run junction-python's Python tests.
     PythonTest,
 
     /// Clean the current virtualenv and any Python caches.
@@ -65,7 +66,6 @@ fn python_test(sh: &Shell, venv: &str) -> anyhow::Result<()> {
     ensure_venv(sh, venv)?;
     python_build(sh, venv)?;
 
-    cmd!(sh, "cargo test -p junction-python").run()?;
     cmd!(sh, "{venv}/bin/pytest").run()?;
 
     Ok(())
