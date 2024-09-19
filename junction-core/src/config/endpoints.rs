@@ -1,8 +1,8 @@
-use serde::Deserialize;
-use std::{net::SocketAddr, time::Duration};
-use xds_api::pb::envoy::config::{
-    core::v3 as xds_core, endpoint::v3 as xds_endpoint, route::v3 as xds_route,
+use junction_gateway_api::{
+    gateway_api::httproute::HTTPRouteTimeouts, jct_http_retry_policy::JctHTTPRetryPolicy,
 };
+use std::net::SocketAddr;
+use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
 
 // FIXME: do we need to to support returning filters/rewrites? does supporting
 //        header filters mean adding headers to Endpoint?
@@ -16,8 +16,8 @@ use xds_api::pb::envoy::config::{
 #[derive(Debug)]
 pub struct Endpoint {
     pub url: crate::Url,
-    pub timeout: Duration,
-    pub retry: Option<RetryPolicy>,
+    pub timeouts: Option<HTTPRouteTimeouts>,
+    pub retry: Option<JctHTTPRetryPolicy>,
     pub address: EndpointAddress,
 }
 
@@ -82,41 +82,6 @@ impl EndpointAddress {
         match address {
             xds_core::address::Address::SocketAddress(socket_address) => f(socket_address),
             _ => None,
-        }
-    }
-}
-
-// TODO: add a way to configure the methods/statuses retries are allowed on.
-// right now this just uses the default client lib behavior.
-//
-// NOTE: this differs slightly from the GRPC retry policy mapping to/from xDS: https://github.com/grpc/proposal/blob/master/A44-xds-retry.md#converting-envoy-retrypolicy-to-grpc-retrypolicy
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct RetryPolicy {
-    pub max_attempts: usize,
-    pub initial_backoff: Duration,
-    pub max_backoff: Duration,
-}
-
-impl RetryPolicy {
-    pub(crate) fn from_xds(r: &xds_route::RetryPolicy) -> Self {
-        let (initial, max) = r
-            .retry_back_off
-            .as_ref()
-            .map(|r| (r.base_interval.clone(), r.max_interval.clone()))
-            .unwrap_or((None, None));
-
-        let max_attempts = r.num_retries.clone().map_or(1, |v| v.into()) as usize;
-        let initial_backoff = initial
-            .and_then(|v| v.try_into().ok())
-            .unwrap_or(Duration::from_millis(5));
-        let max_backoff = max
-            .and_then(|v| v.try_into().ok())
-            .unwrap_or(Duration::from_secs(2));
-
-        Self {
-            max_attempts,
-            initial_backoff,
-            max_backoff,
         }
     }
 }

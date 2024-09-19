@@ -15,8 +15,8 @@ pub(crate) mod rand;
 mod config;
 
 pub use config::{
-    endpoints::{Endpoint, EndpointAddress, RetryPolicy},
-    route::{HeaderMatcher, Route, RouteMatcher, RouteRule, RouteTarget, StringMatcher},
+    endpoints::{Endpoint, EndpointAddress},
+    route::{Route, RouteRule, RouteTarget},
 };
 
 // only the client needs to be exported.

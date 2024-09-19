@@ -2,6 +2,9 @@ use std::{env, net::IpAddr, str::FromStr};
 
 use http::Uri;
 use junction_core::ResourceVersion;
+use junction_gateway_api::{
+    gateway_api::httproute::HTTPRouteTimeouts, jct_http_retry_policy::JctHTTPRetryPolicy,
+};
 use once_cell::sync::Lazy;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -43,6 +46,9 @@ pub struct Endpoint {
 
     #[pyo3(get)]
     retry_policy: Option<RetryPolicy>,
+
+    #[pyo3(get)]
+    timeout_policy: Option<TimeoutPolicy>,
 }
 
 #[pymethods]
@@ -104,6 +110,7 @@ impl From<junction_core::Endpoint> for Endpoint {
         let request_uri = ep.url.to_string();
         let addr = ep.address.into();
         let retry_policy = ep.retry.map(|r| r.into());
+        let timeout_policy = ep.timeouts.map(|r| r.into());
 
         Self {
             scheme,
@@ -111,6 +118,7 @@ impl From<junction_core::Endpoint> for Endpoint {
             request_uri,
             addr,
             retry_policy,
+            timeout_policy,
         }
     }
 }
@@ -120,33 +128,67 @@ impl From<junction_core::Endpoint> for Endpoint {
 #[pyclass]
 pub struct RetryPolicy {
     #[pyo3(get)]
+    codes: Vec<u32>,
+
+    #[pyo3(get)]
     attempts: usize,
 
     #[pyo3(get)]
-    backoff_min: f64,
+    backoff: f64,
+}
+
+/// A policy that describes how a client should do timeouts.
+#[derive(Clone, Debug)]
+#[pyclass]
+pub struct TimeoutPolicy {
+    #[pyo3(get)]
+    backend_request: f64,
 
     #[pyo3(get)]
-    backoff_max: f64,
+    request: f64,
 }
 
 #[pymethods]
 impl RetryPolicy {
     fn __repr__(&self) -> String {
         format!(
-            "RetryPolicy({attempts}, {min}, {max})",
+            "RetryPolicy({attempts}, {min})",
+            //FIXME: add codes
             attempts = self.attempts,
-            min = self.backoff_min,
-            max = self.backoff_max
+            min = self.backoff,
         )
     }
 }
 
-impl From<junction_core::RetryPolicy> for RetryPolicy {
-    fn from(value: junction_core::RetryPolicy) -> Self {
+impl From<JctHTTPRetryPolicy> for RetryPolicy {
+    fn from(value: JctHTTPRetryPolicy) -> Self {
         Self {
-            attempts: value.max_attempts,
-            backoff_min: value.initial_backoff.as_secs_f64(),
-            backoff_max: value.max_backoff.as_secs_f64(),
+            codes: value.codes,
+            attempts: value.attempts.unwrap_or(1),
+            backoff: value.backoff.map(|x| x.as_secs_f64()).unwrap_or(0.0),
+        }
+    }
+}
+
+#[pymethods]
+impl TimeoutPolicy {
+    fn __repr__(&self) -> String {
+        format!(
+            "TimeoutPolicy({backend_request}, {request})",
+            backend_request = self.backend_request,
+            request = self.request,
+        )
+    }
+}
+
+impl From<HTTPRouteTimeouts> for TimeoutPolicy {
+    fn from(value: HTTPRouteTimeouts) -> Self {
+        Self {
+            backend_request: value
+                .backend_request
+                .map(|x| x.as_secs_f64())
+                .unwrap_or(0.0),
+            request: value.request.map(|x| x.as_secs_f64()).unwrap_or(0.0),
         }
     }
 }

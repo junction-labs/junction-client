@@ -13,6 +13,7 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 http = { workspace = true }
 junction-core = { workspace = true }
+junction-gateway-api = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

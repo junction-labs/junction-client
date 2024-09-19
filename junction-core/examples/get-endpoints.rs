@@ -1,6 +1,7 @@
 use http::HeaderValue;
-use junction_core::{
-    Client, HeaderMatcher, Route, RouteMatcher, RouteRule, RouteTarget, StringMatcher,
+use junction_core::{Client, Route, RouteRule, RouteTarget};
+use junction_gateway_api::gateway_api::httproute::{
+    HTTPHeaderMatch, HTTPRouteMatch, StringMatchType,
 };
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
@@ -15,26 +16,28 @@ async fn main() {
         domains: vec!["nginx.default.svc.cluster.local".to_string()],
         rules: vec![
             RouteRule {
-                timeout: None,
-                retry_policy: None,
-                matches: vec![RouteMatcher {
-                    path: StringMatcher::Any,
-                    headers: vec![HeaderMatcher {
+                matches: vec![HTTPRouteMatch {
+                    headers: vec![HTTPHeaderMatch {
+                        r#type: StringMatchType::RegularExpression,
                         name: "x-demo-staging".to_string(),
-                        value: StringMatcher::Any,
+                        value: ".*".to_string(),
                     }],
+                    path: None,
+                    method: None,
+                    query_params: vec![],
                 }],
-                hash_policies: vec![],
+                filters: vec![],
+                timeouts: None,
+                retry_policy: None,
+                session_affinity: None,
                 target: RouteTarget::Cluster("default/nginx-staging/cluster".to_string()),
             },
             RouteRule {
-                timeout: None,
+                matches: vec![],
+                filters: vec![],
+                timeouts: None,
                 retry_policy: None,
-                matches: vec![RouteMatcher {
-                    path: StringMatcher::Any,
-                    headers: vec![],
-                }],
-                hash_policies: vec![],
+                session_affinity: None,
                 target: RouteTarget::Cluster("default/nginx/cluster".to_string()),
             },
         ],

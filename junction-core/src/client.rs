@@ -2,6 +2,8 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rand::seq::SliceRandom;
+
 use crate::xds::{self, AdsClient};
 use crate::{Route, RouteTarget};
 
@@ -158,16 +160,12 @@ impl Client {
 }
 
 impl Client {
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
-
     fn get_endpoints(
         &self,
         method: &http::Method,
         url: crate::Url,
         headers: &http::HeaderMap,
     ) -> Result<Vec<crate::Endpoint>, (crate::Url, crate::Error)> {
-        use rand::seq::SliceRandom;
-
         let xds_routes;
         let route_list = if self.default_routes.is_empty() {
             let Some(rs) = self.ads.get_routes(url.hostname()) else {
@@ -227,17 +225,17 @@ impl Client {
         };
 
         let endpoint =
-            match lb.load_balance(&url, headers, &matching_route.hash_policies, &endpoints) {
+            match lb.load_balance(&url, headers, &matching_route.session_affinity, &endpoints) {
                 Some(e) => e,
                 None => return Err((url, crate::Error::NoReachableEndpoints)),
             };
 
-        let timeout = matching_route.timeout.unwrap_or(Self::DEFAULT_TIMEOUT);
+        let timeouts = matching_route.timeouts.clone();
         let retry = matching_route.retry_policy.clone();
 
         Ok(vec![crate::Endpoint {
             url,
-            timeout,
+            timeouts,
             retry,
             address: endpoint.clone(),
         }])
