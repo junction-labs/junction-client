@@ -77,7 +77,7 @@ class PoolManager(urllib3.PoolManager):
             if endpoint.host:
                 kw["headers"]["Host"] = endpoint.host
 
-            # TODO: retries might already be set, right?? should this be a merge in that case
+            # TODO: retries might already be set - this should be a merge in that case
             # rather than a pummel
             if endpoint.retry_policy:
                 kw["retries"] = urllib3.Retry(
@@ -90,7 +90,7 @@ class PoolManager(urllib3.PoolManager):
                 kw["timeouts"] = urllib3.Timeout(
                     total=endpoint.timeout_policy.backend_request
                 )
-            # TODO: how do we implement the endpoint.timeout_policy.request
+            # TODO: how do we implement endpoint.timeout_policy.request?
 
             conn = self.connection_from_endpoint(endpoint, **jct_tls_args)
             return conn.urlopen(
