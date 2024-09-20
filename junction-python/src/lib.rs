@@ -1,8 +1,8 @@
 use std::{env, net::IpAddr, str::FromStr};
 
 use http::Uri;
+use junction_api::http::Route;
 use junction_core::ResourceVersion;
-use junction_gateway_api::{http::httproute::HTTPRouteTimeouts, retry_policy::JctHTTPRetryPolicy};
 use once_cell::sync::Lazy;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -158,8 +158,8 @@ impl RetryPolicy {
     }
 }
 
-impl From<JctHTTPRetryPolicy> for RetryPolicy {
-    fn from(value: JctHTTPRetryPolicy) -> Self {
+impl From<junction_api::http::RouteRetryPolicy> for RetryPolicy {
+    fn from(value: junction_api::http::RouteRetryPolicy) -> Self {
         Self {
             codes: value.codes,
             attempts: value.attempts.unwrap_or(1),
@@ -179,8 +179,8 @@ impl TimeoutPolicy {
     }
 }
 
-impl From<HTTPRouteTimeouts> for TimeoutPolicy {
-    fn from(value: HTTPRouteTimeouts) -> Self {
+impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
+    fn from(value: junction_api::http::RouteTimeouts) -> Self {
         Self {
             backend_request: value
                 .backend_request
@@ -265,7 +265,7 @@ fn kwarg_string(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Optio
     Ok(py_str.map(|s| s.to_string()))
 }
 
-fn default_routes(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<junction_core::Route>> {
+fn default_routes(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Route>> {
     let Some(kwargs) = kwargs else {
         return Ok(Vec::new());
     };
