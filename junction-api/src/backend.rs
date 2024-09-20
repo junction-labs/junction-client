@@ -6,13 +6,14 @@ use xds_api::pb::envoy::config::cluster::v3::cluster::ring_hash_lb_config::HashF
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct JctRingHashParams {
+pub struct RingHashParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_ring_size: Option<usize>,
 }
 
-// TODO: figure out how we want to support the filter_state/connection_properties
-// style of hashing based on source ip or grpc channel.
+// TODO: figure out how we want to support the
+// filter_state/connection_properties style of hashing based on source ip or
+// grpc channel.
 //
 // TODO: add support for query parameter based hashing, which involves parsing
 // query parameters, which http::uri just doesn't do. switch the whole crate to
@@ -22,13 +23,13 @@ pub struct JctRingHashParams {
 //
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, Eq, PartialEq, Default)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum JctLbPolicy {
+pub enum LbPolicy {
     #[default]
     RoundRobin,
-    RingHash(JctRingHashParams),
+    RingHash(RingHashParams),
 }
 
-impl JctLbPolicy {
+impl LbPolicy {
     pub fn from_xds(cluster: &xds_cluster::Cluster) -> Option<Self> {
         match cluster.lb_policy() {
             // for ROUND_ROBIN, ignore the slow_start_config entirely and return
@@ -40,7 +41,7 @@ impl JctLbPolicy {
                     _ => return None,
                 };
 
-                Some(JctLbPolicy::RoundRobin)
+                Some(LbPolicy::RoundRobin)
             }
             // for RING_HASH pull the config out if set or use default values to
             // populate our config.
@@ -60,10 +61,10 @@ impl JctLbPolicy {
                     .try_into()
                     .ok()?;
 
-                let policy = JctRingHashParams {
+                let policy = RingHashParams {
                     min_ring_size: Some(min_ring_size),
                 };
-                Some(JctLbPolicy::RingHash(policy))
+                Some(LbPolicy::RingHash(policy))
             }
             _ => None,
         }
@@ -72,7 +73,7 @@ impl JctLbPolicy {
 
 #[cfg(test)]
 mod tests {
-    use crate::jct_lb_policy::JctLbPolicy;
+    use crate::backend::LbPolicy;
 
     #[test]
     fn parses_policy() {
@@ -83,7 +84,7 @@ mod tests {
         }"#,
         )
         .unwrap();
-        let obj: JctLbPolicy = serde_json::from_value(test_json.clone()).unwrap();
+        let obj: LbPolicy = serde_json::from_value(test_json.clone()).unwrap();
         let output_json = serde_json::to_value(&obj).unwrap();
         assert_eq!(test_json, output_json);
     }

@@ -14,10 +14,7 @@ pub(crate) mod rand;
 // sparingly.
 mod config;
 
-pub use config::{
-    endpoints::{Endpoint, EndpointAddress},
-    route::{Route, RouteRule, RouteTarget},
-};
+pub use config::endpoints::{Endpoint, EndpointAddress};
 
 // only the client needs to be exported.
 mod client;

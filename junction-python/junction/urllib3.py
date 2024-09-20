@@ -72,20 +72,24 @@ class PoolManager(urllib3.PoolManager):
         # instead of configuring this pool manager upfront. unsmuggle them here.
         jct_tls_args = kw.pop("jct_tls_args", {})
 
-        # TODO: add timeout fields to endpoints
         # TODO: actually do shadowing, etc.
         for endpoint in endpoints:
             if endpoint.host:
                 kw["headers"]["Host"] = endpoint.host
 
+            #TODO: retries might already be set, right?? should this be a merge in that case?
             if endpoint.retry_policy:
                 kw["retries"] = urllib3.Retry(
-                    total=endpoint.retry_policy.attempts,
-                    backoff_factor=endpoint.retry_policy.backoff_min,
-                    backoff_max=endpoint.retry_policy.backoff_max,
-                    # TODO: set these based on policy instead of hardcoding
-                    status_forcelist=range(500, 600),
+                    total=endpoint.retry_policy.attempts-1,       #this feels like a wierd thing to force defaul on if we merge
+                    backoff_factor=endpoint.retry_policy.backoff, #TODO: dont set if this is 0  
+                    status_forcelist=endpoint.retry_policy.codes, #TODO: fall back to default if this is empty.. actually that isnt quite right. this should be an option
                 )
+
+            # this one we dont worry about pummeling, 
+            if endpoint.timeout_policy:
+                kw["timeouts"] = urllib3.Timeout(total = endpoint.timeout_policy.backend_request)
+
+            #todo: how do we implement the endpoint.timeout_policy.request
 
             conn = self.connection_from_endpoint(endpoint, **jct_tls_args)
             return conn.urlopen(

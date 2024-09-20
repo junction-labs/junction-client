@@ -1,6 +1,4 @@
-use junction_gateway_api::{
-    gateway_api::httproute::HTTPRouteTimeouts, jct_http_retry_policy::JctHTTPRetryPolicy,
-};
+use junction_api::http::{RouteRetryPolicy, RouteTimeouts};
 use std::net::SocketAddr;
 use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
 
@@ -16,8 +14,8 @@ use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpo
 #[derive(Debug)]
 pub struct Endpoint {
     pub url: crate::Url,
-    pub timeouts: Option<HTTPRouteTimeouts>,
-    pub retry: Option<JctHTTPRetryPolicy>,
+    pub timeouts: Option<RouteTimeouts>,
+    pub retry: Option<RouteRetryPolicy>,
     pub address: EndpointAddress,
 }
 

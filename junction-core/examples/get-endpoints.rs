@@ -1,8 +1,6 @@
 use http::HeaderValue;
-use junction_core::{Client, Route, RouteRule, RouteTarget};
-use junction_gateway_api::gateway_api::httproute::{
-    HTTPHeaderMatch, HTTPRouteMatch, StringMatchType,
-};
+use junction_api::{http::*, shared::StringMatchType};
+use junction_core::Client;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
@@ -13,11 +11,11 @@ async fn main() {
         .init();
 
     let default_routes = vec![Route {
-        domains: vec!["nginx.default.svc.cluster.local".to_string()],
+        hostnames: vec!["nginx.default.svc.cluster.local".to_string()],
         rules: vec![
             RouteRule {
-                matches: vec![HTTPRouteMatch {
-                    headers: vec![HTTPHeaderMatch {
+                matches: vec![RouteMatch {
+                    headers: vec![HeaderMatch {
                         r#type: StringMatchType::RegularExpression,
                         name: "x-demo-staging".to_string(),
                         value: ".*".to_string(),

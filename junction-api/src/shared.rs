@@ -19,8 +19,29 @@ pub enum BackendKind {
     Service,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, Eq, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ParentRef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
+    pub name: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<PortNumber>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_name: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, Eq, PartialEq)]
-pub struct BackendObjectReference {
+pub struct UnWeightedBackendRef {
     pub kind: BackendKind,
 
     pub name: String,
@@ -52,10 +73,9 @@ pub struct BackendRef {
     pub port: Option<PortNumber>,
 }
 
-/// this is for custom filters and objects. FIXME: for now, dont know what to do
-/// with this to make it a non-k8s thing. Has to be some type of abstraction into
-/// a place to get config.
-#[derive(
-    Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-pub struct LocalObjectReference {}
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, Eq, PartialEq, Default)]
+pub enum StringMatchType {
+    #[default]
+    Exact,
+    RegularExpression,
+}

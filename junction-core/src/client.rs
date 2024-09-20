@@ -2,10 +2,11 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use junction_api::{http::*, shared::StringMatchType};
 use rand::seq::SliceRandom;
+use regex::Regex;
 
 use crate::xds::{self, AdsClient};
-use crate::{Route, RouteTarget};
 
 /// A service discovery client that looks up URL information based on URLs,
 /// headers, and methods.
@@ -73,7 +74,7 @@ impl Client {
 
     fn subscribe_to_defaults(&self, default_routes: &[Route]) {
         for route in default_routes {
-            for domain in &route.domains {
+            for domain in &route.hostnames {
                 self.ads
                     .subscribe(xds::ResourceType::Listener, domain.clone())
                     .unwrap();
@@ -184,7 +185,7 @@ impl Client {
 
         let matching_route = match route_list
             .iter()
-            .find_map(|vh| vh.matching_rule(method, &url, headers))
+            .find_map(|vh| matching_rule(vh, method, &url, headers))
         {
             Some(rte) => rte,
             None => return Err((url, crate::Error::NoRouteMatched)),
@@ -240,4 +241,104 @@ impl Client {
             address: endpoint.clone(),
         }])
     }
+}
+
+pub fn matching_rule<'a>(
+    route: &'a Route,
+    method: &http::Method,
+    url: &crate::Url,
+    headers: &http::HeaderMap,
+) -> Option<&'a RouteRule> {
+    if !route
+        .hostnames
+        .iter()
+        .any(|d| d == "*" || d == url.hostname())
+    {
+        return None;
+    }
+
+    route
+        .rules
+        .iter()
+        .find(|rule| is_route_rule_match(rule, method, url, headers))
+}
+
+pub fn is_route_rule_match(
+    rule: &RouteRule,
+    method: &http::Method,
+    url: &crate::Url,
+    headers: &http::HeaderMap,
+) -> bool {
+    if rule.matches.is_empty() {
+        return true;
+    }
+    rule.matches
+        .iter()
+        .any(|m| is_route_match_match(m, method, url, headers))
+}
+
+pub fn is_route_match_match(
+    rule: &RouteMatch,
+    method: &http::Method,
+    url: &crate::Url,
+    headers: &http::HeaderMap,
+) -> bool {
+    let mut method_matches = true;
+    if let Some(rule_method) = &rule.method {
+        method_matches = rule_method.eq(&method.to_string());
+    }
+
+    let mut path_matches = true;
+    if let Some(rule_path) = &rule.path {
+        path_matches = match &rule_path.r#type {
+            PathMatchType::Exact => rule_path.value == url.path(),
+            PathMatchType::PathPrefix => url.path().starts_with(&rule_path.value),
+            PathMatchType::RegularExpression => eval_regex(&rule_path.value, url.path()),
+        }
+    }
+
+    let headers_matches = rule.headers.iter().all(|m| is_header_match(m, headers));
+
+    let qp_matches = rule
+        .query_params
+        .iter()
+        .all(|m| is_query_params_match(m, url.query()));
+
+    return method_matches && path_matches && headers_matches && qp_matches;
+}
+
+pub fn eval_regex(regex: &str, val: &str) -> bool {
+    return match Regex::new(regex) {
+        Ok(re) => re.is_match(val),
+        Err(_) => false,
+    };
+}
+
+pub fn is_header_match(rule: &HeaderMatch, headers: &http::HeaderMap) -> bool {
+    let Some(header_val) = headers.get(&rule.name) else {
+        return false;
+    };
+    let Ok(header_val) = header_val.to_str() else {
+        return false;
+    };
+    return match &rule.r#type {
+        StringMatchType::Exact => header_val == rule.value,
+        StringMatchType::RegularExpression => eval_regex(&rule.value, header_val),
+    };
+}
+
+pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> bool {
+    let Some(query) = query else {
+        return false;
+    };
+
+    for (param, value) in form_urlencoded::parse(query.as_bytes()) {
+        if param == rule.name {
+            return match rule.r#type {
+                StringMatchType::Exact => rule.value == value,
+                StringMatchType::RegularExpression => eval_regex(&rule.value, &value),
+            };
+        }
+    }
+    return false;
 }

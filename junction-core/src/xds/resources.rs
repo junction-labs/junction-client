@@ -2,6 +2,7 @@ use std::ops::Deref;
 use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 
 use enum_map::EnumMap;
+use junction_api::http::Route;
 use smol_str::SmolStr;
 use xds_api::pb::google::protobuf;
 use xds_api::{
@@ -240,7 +241,7 @@ pub(crate) enum ApiListenerRouteConfig {
         name: ResourceName<RouteConfig>,
     },
     Inlined {
-        routes: Arc<Vec<crate::config::Route>>,
+        routes: Arc<Vec<Route>>,
         clusters: Vec<ResourceName<Cluster>>,
     },
 }
@@ -303,7 +304,7 @@ impl ApiListener {
 #[derive(Clone, Debug)]
 pub(crate) struct RouteConfig {
     pub xds: xds_route::RouteConfiguration,
-    pub routes: Arc<Vec<crate::config::Route>>,
+    pub routes: Arc<Vec<Route>>,
     pub clusters: Vec<ResourceName<Cluster>>,
 }
 
@@ -334,12 +335,8 @@ impl RouteConfig {
         clusters.into_iter().map(|n| n.into()).collect()
     }
 
-    fn routes(xds: &xds_route::RouteConfiguration) -> Arc<Vec<crate::config::Route>> {
-        let routes = xds
-            .virtual_hosts
-            .iter()
-            .map(crate::config::Route::from_xds)
-            .collect();
+    fn routes(xds: &xds_route::RouteConfiguration) -> Arc<Vec<Route>> {
+        let routes = xds.virtual_hosts.iter().map(Route::from_xds).collect();
         Arc::new(routes)
     }
 }

@@ -1,11 +1,11 @@
 [package]
-name = "junction-gateway-api"
+name = "junction-api"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 k8s-openapi = { workspace = true, features = ["v1_29"] }
-kube = { workspace = true, features = ["runtime", "client", "derive"] }
+kube = { workspace = true, features = ["derive"] }
 http = { workspace = true }
 regex = { workspace = true }
 schemars = { workspace = true }

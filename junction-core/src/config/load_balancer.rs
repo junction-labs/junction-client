@@ -1,9 +1,6 @@
-use junction_gateway_api::{
-    jct_http_session_affinity_policy::{
-        JctHTTPSessionAffinityHashParam, JctHTTPSessionAffinityHashParamType,
-        JctHTTPSessionAffinityPolicy,
-    },
-    jct_lb_policy::{JctLbPolicy, JctRingHashParams},
+use junction_api::{
+    backend::{LbPolicy, RingHashParams},
+    http::{SessionAffinityPolicy, SessionAffinityHashParam, SessionAffinityHashParamType},
 };
 use std::{
     collections::BTreeMap,
@@ -126,7 +123,7 @@ impl LoadBalancer {
         &self,
         url: &crate::Url,
         headers: &http::HeaderMap,
-        affinity: &Option<JctHTTPSessionAffinityPolicy>,
+        affinity: &Option<SessionAffinityPolicy>,
         locality_endpoints: &'ep EndpointGroup,
     ) -> Option<&'ep crate::EndpointAddress> {
         match self {
@@ -145,12 +142,10 @@ impl LoadBalancer {
 
 impl LoadBalancer {
     pub(crate) fn from_xds(cluster: &xds_cluster::Cluster) -> Option<Self> {
-        let config: Option<JctLbPolicy> = JctLbPolicy::from_xds(cluster);
+        let config: Option<LbPolicy> = LbPolicy::from_xds(cluster);
         match config {
-            Some(JctLbPolicy::RoundRobin) => {
-                Some(LoadBalancer::RoundRobin(RoundRobinLb::default()))
-            }
-            Some(JctLbPolicy::RingHash(x)) => Some(LoadBalancer::RingHash(RingHashLb::new(&x))),
+            Some(LbPolicy::RoundRobin) => Some(LoadBalancer::RoundRobin(RoundRobinLb::default())),
+            Some(LbPolicy::RingHash(x)) => Some(LoadBalancer::RingHash(RingHashLb::new(&x))),
             None => None,
         }
     }
@@ -184,7 +179,7 @@ impl RoundRobinLb {
 ///
 #[derive(Debug)]
 pub(crate) struct RingHashLb {
-    config: JctRingHashParams,
+    config: RingHashParams,
     ring: RwLock<Ring>,
 }
 
@@ -195,7 +190,7 @@ struct RingEntry {
 }
 
 impl RingHashLb {
-    fn new(config: &JctRingHashParams) -> Self {
+    fn new(config: &RingHashParams) -> Self {
         Self {
             config: config.clone(),
             ring: RwLock::new(Ring {
@@ -209,7 +204,7 @@ impl RingHashLb {
         &self,
         url: &crate::Url,
         headers: &http::HeaderMap,
-        affinity: &JctHTTPSessionAffinityPolicy,
+        affinity: &SessionAffinityPolicy,
         endpoint_group: &'e EndpointGroup,
     ) -> Option<&'e EndpointAddress> {
         //the only thing the route can override is the policy
@@ -455,7 +450,7 @@ mod test_ring_hash {
 /// - https://github.com/grpc/proposal/blob/master/A42-xds-ring-hash-lb-policy.md#xds-api-fields
 /// - https://github.com/envoyproxy/envoy/blob/main/source/common/http/hash_policy.cc#L236-L257
 pub(crate) fn hash_request(
-    affinity: &JctHTTPSessionAffinityPolicy,
+    affinity: &SessionAffinityPolicy,
     url: &crate::Url,
     headers: &http::HeaderMap,
 ) -> Option<u64> {
@@ -478,12 +473,12 @@ pub(crate) fn hash_request(
 }
 
 fn hash_target(
-    hash_param: &JctHTTPSessionAffinityHashParam,
+    hash_param: &SessionAffinityHashParam,
     _url: &crate::Url,
     headers: &http::HeaderMap,
 ) -> Option<u64> {
     match hash_param.r#type {
-        JctHTTPSessionAffinityHashParamType::Header => {
+        SessionAffinityHashParamType::Header => {
             let mut header_values: Vec<_> = headers
                 .get_all(&hash_param.name)
                 .into_iter()

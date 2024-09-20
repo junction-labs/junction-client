@@ -2,9 +2,7 @@ use std::{env, net::IpAddr, str::FromStr};
 
 use http::Uri;
 use junction_core::ResourceVersion;
-use junction_gateway_api::{
-    gateway_api::httproute::HTTPRouteTimeouts, jct_http_retry_policy::JctHTTPRetryPolicy,
-};
+use junction_gateway_api::{http::httproute::HTTPRouteTimeouts, retry_policy::JctHTTPRetryPolicy};
 use once_cell::sync::Lazy;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},

@@ -1,16 +1,3 @@
-//! GEP-2257-compliant Duration type for Gateway API
-//!
-//! `gateway_api::Duration` is a duration type where parsing and formatting
-//! obey GEP-2257. It is based on `std::time::Duration` and uses
-//! `kube::core::Duration` for the heavy lifting of parsing.
-//!
-//! GEP-2257 defines a duration format for the Gateway API that is based on
-//! Go's `time.ParseDuration`, with additional restrictions: negative
-//! durations, units smaller than millisecond, and floating point are not
-//! allowed, and durations are limited to four components of no more than five
-//! digits each. See https://gateway-api.sigs.k8s.io/geps/gep-2257 for the
-//! complete specification.
-
 use kube::core::Duration as k8sDuration;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -23,8 +10,8 @@ use std::time::Duration as stdDuration;
 
 /// GEP-2257-compliant Duration type for Gateway API
 ///
-/// `gateway_api::Duration` is a duration type where parsing and formatting
-/// obey GEP-2257. It is based on `std::time::Duration` and uses
+/// `gateway_api::Duration` is a duration type where parsing and formatting obey
+/// GEP-2257. It is based on `std::time::Duration` and uses
 /// `kube::core::Duration` for the heavy lifting of parsing.
 ///
 /// See https://gateway-api.sigs.k8s.io/geps/gep-2257 for the complete
@@ -41,10 +28,10 @@ use std::time::Duration as stdDuration;
 /// durations must be formatted to with only one instance of each applicable
 /// unit, greatest unit first.
 ///
-/// The rules above imply that `gateway_api::Duration` cannot represent
-/// negative durations, durations with sub-millisecond precision, or durations
-/// larger than 99999h59m59s999ms. Since there's no meaningful way in Rust to
-/// allow string formatting to fail, these conditions are checked instead when
+/// The rules above imply that `gateway_api::Duration` cannot represent negative
+/// durations, durations with sub-millisecond precision, or durations larger
+/// than 99999h59m59s999ms. Since there's no meaningful way in Rust to allow
+/// string formatting to fail, these conditions are checked instead when
 /// instantiating `gateway_api::Duration`.
 #[derive(Copy, Clone, PartialEq, Eq, JsonSchema)]
 pub struct Duration(stdDuration);
@@ -55,11 +42,11 @@ const GEP2257_PATTERN: &str = r"^([0-9]{1,5}(h|m|s|ms)){1,4}$";
 /// Maximum duration that can be represented by GEP-2257, in milliseconds.
 const MAX_DURATION_MS: u128 = (((99999 * 3600) + (59 * 60) + 59) * 1_000) + 999;
 
-/// Checks if a duration is valid according to GEP-2257. If it's not, return
-/// an error result explaining why the duration is not valid.
+/// Checks if a duration is valid according to GEP-2257. If it's not, return an
+/// error result explaining why the duration is not valid.
 fn is_valid(duration: stdDuration) -> Result<(), String> {
-    // Check nanoseconds to see if we have sub-millisecond precision in
-    // this duration.
+    // Check nanoseconds to see if we have sub-millisecond precision in this
+    // duration.
     if duration.subsec_nanos() % 1_000_000 != 0 {
         return Err("Cannot express sub-millisecond precision in GEP-2257".to_string());
     }
@@ -72,12 +59,12 @@ fn is_valid(duration: stdDuration) -> Result<(), String> {
     Ok(())
 }
 
-/// Converting from `std::time::Duration` to `gateway_api::Duration` is
-/// allowed, but we need to make sure that the incoming duration is valid
-/// according to GEP-2257.
+/// Converting from `std::time::Duration` to `gateway_api::Duration` is allowed,
+/// but we need to make sure that the incoming duration is valid according to
+/// GEP-2257.
 ///
 /// ```rust
-/// use junction_gateway_api::gateway_api::duration::Duration;
+/// use junction_api::duration::Duration;
 /// use std::convert::TryFrom;
 /// use std::time::Duration as stdDuration;
 ///
@@ -117,24 +104,12 @@ impl TryFrom<stdDuration> for Duration {
     }
 }
 
-impl TryFrom<xds_api::pb::google::protobuf::Duration> for Duration {
-    type Error = String;
-
-    fn try_from(pbduration: xds_api::pb::google::protobuf::Duration) -> Result<Self, Self::Error> {
-        let duration = pbduration.try_into().unwrap();
-        // Check validity, and propagate any error if it's not.
-        is_valid(duration)?;
-        // It's valid, so we can safely convert it to a gateway_api::Duration.
-        Ok(Duration(duration))
-    }
-}
-
-/// Converting from `k8s::time::Duration` to `gateway_api::Duration` is
-/// allowed, but we need to make sure that the incoming duration is valid
-/// according to GEP-2257.
+/// Converting from `k8s::time::Duration` to `gateway_api::Duration` is allowed,
+/// but we need to make sure that the incoming duration is valid according to
+/// GEP-2257.
 ///
 /// ```rust
-/// use junction_gateway_api::gateway_api::duration::Duration;
+/// use junction_api::duration::Duration;
 /// use std::convert::TryFrom;
 /// use std::str::FromStr;
 /// use kube::core::Duration as k8sDuration;
@@ -189,8 +164,8 @@ impl TryFrom<k8sDuration> for Duration {
         }
 
         // Once we know it's not negative, we can safely convert it to a
-        // std::time::Duration (which will always succeed) and then check it
-        // for validity as in TryFrom<stdDuration>.
+        // std::time::Duration (which will always succeed) and then check it for
+        // validity as in TryFrom<stdDuration>.
         let stddur = stdDuration::from(duration);
         is_valid(stddur)?;
         Ok(Duration(stddur))
@@ -198,12 +173,11 @@ impl TryFrom<k8sDuration> for Duration {
 }
 
 impl Duration {
-    /// Create a new `gateway_api::Duration` from seconds and nanoseconds,
-    /// while requiring that the resulting duration is valid according to
-    /// GEP-2257.
+    /// Create a new `gateway_api::Duration` from seconds and nanoseconds, while
+    /// requiring that the resulting duration is valid according to GEP-2257.
     ///
     /// ```rust
-    /// use junction_gateway_api::gateway_api::duration::Duration;
+    /// use junction_api::duration::Duration;
     ///
     /// let duration = Duration::new(7200, 600_000_000);
     /// # assert!(duration.as_ref().is_ok());
@@ -218,11 +192,11 @@ impl Duration {
         Ok(Self(stddur))
     }
 
-    /// Create a new `gateway_api::Duration` from seconds, while requiring
-    /// that the resulting duration is valid according to GEP-2257.
+    /// Create a new `gateway_api::Duration` from seconds, while requiring that
+    /// the resulting duration is valid according to GEP-2257.
     ///
     /// ```rust
-    /// use junction_gateway_api::gateway_api::duration::Duration;
+    /// use junction_api::duration::Duration;
     /// let duration = Duration::from_secs(3600);
     /// # assert!(duration.as_ref().is_ok());
     /// # assert_eq!(format!("{}", duration.unwrap()), "1h");
@@ -231,11 +205,11 @@ impl Duration {
         Self::new(secs, 0)
     }
 
-    /// Create a new `gateway_api::Duration` from microseconds, while
-    /// requiring that the resulting duration is valid according to GEP-2257.
+    /// Create a new `gateway_api::Duration` from microseconds, while requiring
+    /// that the resulting duration is valid according to GEP-2257.
     ///
     /// ```rust
-    /// use junction_gateway_api::gateway_api::duration::Duration;
+    /// use junction_api::duration::Duration;
     /// let duration = Duration::from_micros(1_000_000);
     /// # assert!(duration.as_ref().is_ok());
     /// # assert_eq!(format!("{}", duration.unwrap()), "1s");
@@ -247,11 +221,11 @@ impl Duration {
         Self::new(sec, ns)
     }
 
-    /// Create a new `gateway_api::Duration` from milliseconds, while
-    /// requiring that the resulting duration is valid according to GEP-2257.
+    /// Create a new `gateway_api::Duration` from milliseconds, while requiring
+    /// that the resulting duration is valid according to GEP-2257.
     ///
     /// ```rust
-    /// use junction_gateway_api::gateway_api::duration::Duration;
+    /// use junction_api::duration::Duration;
     /// let duration = Duration::from_millis(1000);
     /// # assert!(duration.as_ref().is_ok());
     /// # assert_eq!(format!("{}", duration.unwrap()), "1s");
@@ -266,7 +240,7 @@ impl Duration {
     /// The number of whole seconds in the entire duration.
     ///
     /// ```rust
-    /// use junction_gateway_api::gateway_api::duration::Duration;
+    /// use junction_api::duration::Duration;
     ///
     /// let duration = Duration::from_secs(3600);     // 1h
     /// # assert!(duration.as_ref().is_ok());
@@ -286,7 +260,7 @@ impl Duration {
     /// support sub-millisecond precision, so this is always exact.
     ///
     /// ```rust
-    /// use junction_gateway_api::gateway_api::duration::Duration;
+    /// use junction_api::duration::Duration;
     ///
     /// let duration = Duration::from_millis(1500);   // 1s500ms
     /// # assert!(duration.as_ref().is_ok());
@@ -300,7 +274,7 @@ impl Duration {
     /// The number of nanoseconds in the whole duration. This is always exact.
     ///
     /// ```rust
-    /// use junction_gateway_api::gateway_api::duration::Duration;
+    /// use junction_api::duration::Duration;
     ///
     /// let duration = Duration::from_millis(1500);   // 1s500ms
     /// # assert!(duration.as_ref().is_ok());
@@ -316,7 +290,7 @@ impl Duration {
     /// will always be 0 or a multiple of 1,000,000.
     ///
     /// ```rust
-    /// use junction_gateway_api::gateway_api::duration::Duration;
+    /// use junction_api::duration::Duration;
     ///
     /// let duration = Duration::from_millis(1500);          // 1s500ms
     /// # assert!(duration.as_ref().is_ok());
@@ -330,7 +304,7 @@ impl Duration {
     /// Checks whether the duration is zero.
     ///
     /// ```rust
-    /// use junction_gateway_api::gateway_api::duration::Duration;
+    /// use junction_api::duration::Duration;
     ///
     /// let duration = Duration::from_secs(0);
     /// # assert!(duration.as_ref().is_ok());
@@ -355,11 +329,11 @@ impl Duration {
 /// - input strings must match `^([0-9]{1,5}(h|m|s|ms)){1,4}$`
 /// - durations are parsed the same way that Go's `time.ParseDuration` does
 ///
-/// If the input string is not valid according to GEP-2257, an error is
-/// returned explaining what went wrong.
+/// If the input string is not valid according to GEP-2257, an error is returned
+/// explaining what went wrong.
 ///
 /// ```rust
-/// use junction_gateway_api::gateway_api::duration::Duration;
+/// use junction_api::duration::Duration;
 /// use std::str::FromStr;
 ///
 /// let duration = Duration::from_str("1h");
@@ -389,11 +363,10 @@ impl FromStr for Duration {
     // `gateway_api::Duration`.
     fn from_str(duration_str: &str) -> Result<Self, Self::Err> {
         // GEP-2257 dictates that string values must match GEP2257_PATTERN and
-        // be parsed the same way that Go's time.ParseDuration parses
-        // durations.
+        // be parsed the same way that Go's time.ParseDuration parses durations.
         //
-        // This Lazy Regex::new should never ever fail, given that the regex
-        // is a compile-time constant. But just in case.....
+        // This Lazy Regex::new should never ever fail, given that the regex is
+        // a compile-time constant. But just in case.....
         static RE: Lazy<Regex> = Lazy::new(|| {
             Regex::new(GEP2257_PATTERN).expect(
                 format!(
@@ -429,7 +402,7 @@ impl FromStr for Duration {
 ///   applicable unit, greatest unit first.
 ///
 /// ```rust
-/// use junction_gateway_api::gateway_api::duration::Duration;
+/// use junction_api::duration::Duration;
 /// use std::fmt::Display;
 ///
 /// // Zero-valued durations are always formatted as "0s".
@@ -454,15 +427,15 @@ impl FromStr for Duration {
 impl fmt::Display for Duration {
     /// Format a `gateway_api::Duration` for display, following GEP-2257 rules.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Short-circuit if the duration is zero, since "0s" is the special
-        // case for a zero-valued duration.
+        // Short-circuit if the duration is zero, since "0s" is the special case
+        // for a zero-valued duration.
         if self.is_zero() {
             return write!(f, "0s");
         }
 
-        // Unfortunately, we can't rely on kube::core::Duration for
-        // formatting, since it can happily hand back things like "5400s"
-        // instead of "1h30m".
+        // Unfortunately, we can't rely on kube::core::Duration for formatting,
+        // since it can happily hand back things like "5400s" instead of
+        // "1h30m".
         //
         // So we'll do the formatting ourselves. Start by grabbing the
         // milliseconds part of the Duration (remember, the constructors make
@@ -498,8 +471,8 @@ impl fmt::Display for Duration {
     }
 }
 
-/// Formatting a `gateway_api::Duration` for debug is the same as formatting
-/// it for display.
+/// Formatting a `gateway_api::Duration` for debug is the same as formatting it
+/// for display.
 impl fmt::Debug for Duration {
     /// Format a `gateway_api::Duration` for debug, following GEP-2257 rules.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -546,14 +519,26 @@ impl<'de> Deserialize<'de> for Duration {
     }
 }
 
+impl TryFrom<xds_api::pb::google::protobuf::Duration> for Duration {
+    type Error = String;
+
+    fn try_from(pbduration: xds_api::pb::google::protobuf::Duration) -> Result<Self, Self::Error> {
+        let duration = pbduration.try_into().unwrap();
+        // Check validity, and propagate any error if it's not.
+        is_valid(duration)?;
+        // It's valid, so we can safely convert it to a gateway_api::Duration.
+        Ok(Duration(duration))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    /// Test that the validation logic in `Duration`'s constructor
-    /// method(s) correctly handles known-good durations. (The tests are
-    /// ordered to match the from_str test cases.)
+    /// Test that the validation logic in `Duration`'s constructor method(s)
+    /// correctly handles known-good durations. (The tests are ordered to match
+    /// the from_str test cases.)
     fn test_gep2257_from_valid_duration() {
         let test_cases = vec![
             Duration::from_secs(0),                        // 0s / 0h0m0s / 0m0s
@@ -580,8 +565,8 @@ mod tests {
     }
 
     #[test]
-    /// Test that the validation logic in `Duration`'s constructor
-    /// method(s) correctly handles known-bad durations.
+    /// Test that the validation logic in `Duration`'s constructor method(s)
+    /// correctly handles known-bad durations.
     fn test_gep2257_from_invalid_duration() {
         let test_cases = vec![
             (
@@ -644,8 +629,8 @@ mod tests {
     }
 
     #[test]
-    /// Test that the TryFrom implementation for k8sDuration correctly fails
-    /// for kube::core::Durations that aren't valid GEP-2257 durations.
+    /// Test that the TryFrom implementation for k8sDuration correctly fails for
+    /// kube::core::Durations that aren't valid GEP-2257 durations.
     fn test_gep2257_from_invalid_k8s_duration() {
         let test_cases: Vec<(k8sDuration, Result<Duration, String>)> = vec![
             (
@@ -681,8 +666,8 @@ mod tests {
     #[test]
     fn test_gep2257_from_str() {
         // Test vectors are mostly taken directly from GEP-2257, but there are
-        // some extras thrown in and it's not meaningful to test e.g. "0.5m"
-        // in Rust.
+        // some extras thrown in and it's not meaningful to test e.g. "0.5m" in
+        // Rust.
         let test_cases = vec![
             ("0h", Duration::from_secs(0)),
             ("0s", Duration::from_secs(0)),
