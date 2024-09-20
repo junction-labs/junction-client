@@ -1,6 +1,6 @@
 use junction_api::{
     backend::{LbPolicy, RingHashParams},
-    http::{SessionAffinityPolicy, SessionAffinityHashParam, SessionAffinityHashParamType},
+    http::{SessionAffinityHashParam, SessionAffinityHashParamType, SessionAffinityPolicy},
 };
 use std::{
     collections::BTreeMap,
@@ -457,7 +457,7 @@ pub(crate) fn hash_request(
     let mut hash: Option<u64> = None;
 
     for hash_param in &affinity.hash_params {
-        if let Some(new_hash) = hash_target(&hash_param, url, headers) {
+        if let Some(new_hash) = hash_target(hash_param, url, headers) {
             hash = Some(match hash {
                 Some(hash) => hash.rotate_left(1) ^ new_hash,
                 None => new_hash,

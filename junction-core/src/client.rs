@@ -304,14 +304,14 @@ pub fn is_route_match_match(
         .iter()
         .all(|m| is_query_params_match(m, url.query()));
 
-    return method_matches && path_matches && headers_matches && qp_matches;
+    method_matches && path_matches && headers_matches && qp_matches
 }
 
 pub fn eval_regex(regex: &str, val: &str) -> bool {
-    return match Regex::new(regex) {
+    match Regex::new(regex) {
         Ok(re) => re.is_match(val),
         Err(_) => false,
-    };
+    }
 }
 
 pub fn is_header_match(rule: &HeaderMatch, headers: &http::HeaderMap) -> bool {
@@ -321,10 +321,10 @@ pub fn is_header_match(rule: &HeaderMatch, headers: &http::HeaderMap) -> bool {
     let Ok(header_val) = header_val.to_str() else {
         return false;
     };
-    return match &rule.r#type {
+    match &rule.r#type {
         StringMatchType::Exact => header_val == rule.value,
         StringMatchType::RegularExpression => eval_regex(&rule.value, header_val),
-    };
+    }
 }
 
 pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> bool {
@@ -340,5 +340,5 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
             };
         }
     }
-    return false;
+    false
 }
