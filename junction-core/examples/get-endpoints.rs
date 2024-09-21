@@ -1,7 +1,10 @@
 use http::HeaderValue;
-use junction_api::{http::*, shared::StringMatchType};
+use junction_api_types::{
+    http::*,
+    shared::{Regex, StringMatch},
+};
 use junction_core::Client;
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -16,9 +19,10 @@ async fn main() {
             RouteRule {
                 matches: vec![RouteMatch {
                     headers: vec![HeaderMatch {
-                        r#type: StringMatchType::RegularExpression,
                         name: "x-demo-staging".to_string(),
-                        value: ".*".to_string(),
+                        value_matcher: StringMatch::RegularExpression {
+                            value: Regex::from_str(".*").unwrap(),
+                        },
                     }],
                     path: None,
                     method: None,
@@ -27,6 +31,7 @@ async fn main() {
                 filters: vec![],
                 timeouts: None,
                 retry_policy: None,
+                session_persistence: None,
                 session_affinity: None,
                 target: RouteTarget::Cluster("default/nginx-staging/cluster".to_string()),
             },
@@ -35,6 +40,7 @@ async fn main() {
                 filters: vec![],
                 timeouts: None,
                 retry_policy: None,
+                session_persistence: None,
                 session_affinity: None,
                 target: RouteTarget::Cluster("default/nginx/cluster".to_string()),
             },

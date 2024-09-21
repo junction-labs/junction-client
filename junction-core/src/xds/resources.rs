@@ -2,7 +2,7 @@ use std::ops::Deref;
 use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 
 use enum_map::EnumMap;
-use junction_api::http::Route;
+use junction_api_types::http::Route;
 use smol_str::SmolStr;
 use xds_api::pb::google::protobuf;
 use xds_api::{

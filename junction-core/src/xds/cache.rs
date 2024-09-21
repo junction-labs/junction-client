@@ -79,7 +79,7 @@ use std::sync::Arc;
 
 use crossbeam_skiplist::SkipMap;
 use enum_map::EnumMap;
-use junction_api::http::Route;
+use junction_api_types::http::Route;
 use petgraph::{
     graph::{DiGraph, NodeIndex},
     visit::{self, Visitable},

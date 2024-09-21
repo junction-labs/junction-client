@@ -2,9 +2,10 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use junction_api::{http::*, shared::StringMatchType};
-use rand::seq::SliceRandom;
-use regex::Regex;
+use junction_api_types::{
+    http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule, RouteTarget},
+    shared::StringMatch,
+};
 
 use crate::xds::{self, AdsClient};
 
@@ -167,6 +168,8 @@ impl Client {
         url: crate::Url,
         headers: &http::HeaderMap,
     ) -> Result<Vec<crate::Endpoint>, (crate::Url, crate::Error)> {
+        use rand::seq::SliceRandom;
+
         let xds_routes;
         let route_list = if self.default_routes.is_empty() {
             let Some(rs) = self.ads.get_routes(url.hostname()) else {
@@ -205,7 +208,7 @@ impl Client {
             }
         };
 
-        let (lb, endpoints) = match self.ads.get_target(cluster_name) {
+        let (lb, endpoints) = match self.ads.get_target(&cluster_name) {
             (None, _) => {
                 return Err((
                     url,
@@ -290,10 +293,10 @@ pub fn is_route_match_match(
 
     let mut path_matches = true;
     if let Some(rule_path) = &rule.path {
-        path_matches = match &rule_path.r#type {
-            PathMatchType::Exact => rule_path.value == url.path(),
-            PathMatchType::PathPrefix => url.path().starts_with(&rule_path.value),
-            PathMatchType::RegularExpression => eval_regex(&rule_path.value, url.path()),
+        path_matches = match &rule_path {
+            PathMatch::Exact { value } => value == url.path(),
+            PathMatch::Prefix { value } => url.path().starts_with(value),
+            PathMatch::RegularExpression { value } => value.is_match(url.path()),
         }
     }
 
@@ -307,13 +310,6 @@ pub fn is_route_match_match(
     method_matches && path_matches && headers_matches && qp_matches
 }
 
-pub fn eval_regex(regex: &str, val: &str) -> bool {
-    match Regex::new(regex) {
-        Ok(re) => re.is_match(val),
-        Err(_) => false,
-    }
-}
-
 pub fn is_header_match(rule: &HeaderMatch, headers: &http::HeaderMap) -> bool {
     let Some(header_val) = headers.get(&rule.name) else {
         return false;
@@ -321,9 +317,9 @@ pub fn is_header_match(rule: &HeaderMatch, headers: &http::HeaderMap) -> bool {
     let Ok(header_val) = header_val.to_str() else {
         return false;
     };
-    match &rule.r#type {
-        StringMatchType::Exact => header_val == rule.value,
-        StringMatchType::RegularExpression => eval_regex(&rule.value, header_val),
+    match &rule.value_matcher {
+        StringMatch::Exact { value } => header_val == value,
+        StringMatch::RegularExpression { value } => value.is_match(header_val),
     }
 }
 
@@ -332,11 +328,11 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
         return false;
     };
 
-    for (param, value) in form_urlencoded::parse(query.as_bytes()) {
+    for (param, value2) in form_urlencoded::parse(query.as_bytes()) {
         if param == rule.name {
-            return match rule.r#type {
-                StringMatchType::Exact => rule.value == value,
-                StringMatchType::RegularExpression => eval_regex(&rule.value, &value),
+            return match &rule.value_matcher {
+                StringMatch::Exact { value } => value2.eq(value),
+                StringMatch::RegularExpression { value } => value.is_match(&value2),
             };
         }
     }

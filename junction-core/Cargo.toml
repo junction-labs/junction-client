@@ -12,7 +12,7 @@ form_urlencoded = { workspace = true }
 futures = { workspace = true }
 h2 = { workspace = true }
 http = { workspace = true }
-junction-api = { workspace = true }
+junction-api-types = { workspace = true }
 once_cell = { workspace = true }
 petgraph = { workspace = true }
 prost = { workspace = true }

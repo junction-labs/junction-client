@@ -897,7 +897,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "junction-api"
+name = "junction-api-types"
 version = "0.1.0"
 dependencies = [
  "http 1.1.0",
@@ -923,7 +923,7 @@ dependencies = [
  "futures",
  "h2",
  "http 1.1.0",
- "junction-api",
+ "junction-api-types",
  "once_cell",
  "petgraph",
  "prost",
@@ -949,7 +949,7 @@ name = "junction-python"
 version = "0.1.0"
 dependencies = [
  "http 1.1.0",
- "junction-api",
+ "junction-api-types",
  "junction-core",
  "once_cell",
  "pyo3",

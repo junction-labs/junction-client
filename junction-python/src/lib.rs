@@ -1,7 +1,7 @@
 use std::{env, net::IpAddr, str::FromStr};
 
 use http::Uri;
-use junction_api::http::Route;
+use junction_api_types::http::Route;
 use junction_core::ResourceVersion;
 use once_cell::sync::Lazy;
 use pyo3::{
@@ -158,8 +158,8 @@ impl RetryPolicy {
     }
 }
 
-impl From<junction_api::http::RouteRetryPolicy> for RetryPolicy {
-    fn from(value: junction_api::http::RouteRetryPolicy) -> Self {
+impl From<junction_api_types::http::RouteRetryPolicy> for RetryPolicy {
+    fn from(value: junction_api_types::http::RouteRetryPolicy) -> Self {
         Self {
             codes: value.codes,
             attempts: value.attempts.unwrap_or(1),
@@ -179,8 +179,8 @@ impl TimeoutPolicy {
     }
 }
 
-impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
-    fn from(value: junction_api::http::RouteTimeouts) -> Self {
+impl From<junction_api_types::http::RouteTimeouts> for TimeoutPolicy {
+    fn from(value: junction_api_types::http::RouteTimeouts) -> Self {
         Self {
             backend_request: value
                 .backend_request

@@ -1,4 +1,4 @@
-use junction_api::http::{RouteRetryPolicy, RouteTimeouts};
+use junction_api_types::http::{RouteRetryPolicy, RouteTimeouts};
 use std::net::SocketAddr;
 use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
 

@@ -1,4 +1,4 @@
-use junction_api::{
+use junction_api_types::{
     backend::{LbPolicy, RingHashParams},
     http::{SessionAffinityHashParam, SessionAffinityHashParamType, SessionAffinityPolicy},
 };
@@ -477,10 +477,10 @@ fn hash_target(
     _url: &crate::Url,
     headers: &http::HeaderMap,
 ) -> Option<u64> {
-    match hash_param.r#type {
-        SessionAffinityHashParamType::Header => {
+    match &hash_param.matcher {
+        SessionAffinityHashParamType::Header { name } => {
             let mut header_values: Vec<_> = headers
-                .get_all(&hash_param.name)
+                .get_all(name)
                 .into_iter()
                 .map(http::HeaderValue::as_bytes)
                 .collect();

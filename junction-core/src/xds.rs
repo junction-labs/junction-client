@@ -32,7 +32,7 @@ use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::TryStreamExt;
-use junction_api::http::Route;
+use junction_api_types::http::Route;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Endpoint;
