@@ -1,8 +1,10 @@
 use http::HeaderValue;
-use junction_core::{
-    Client, HeaderMatcher, Route, RouteMatcher, RouteRule, RouteTarget, StringMatcher,
+use junction_api_types::{
+    http::*,
+    shared::{Regex, StringMatch},
 };
-use std::time::Duration;
+use junction_core::Client;
+use std::{str::FromStr, time::Duration};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -12,29 +14,34 @@ async fn main() {
         .init();
 
     let default_routes = vec![Route {
-        domains: vec!["nginx.default.svc.cluster.local".to_string()],
+        hostnames: vec!["nginx.default.svc.cluster.local".to_string()],
         rules: vec![
             RouteRule {
-                timeout: None,
-                retry_policy: None,
-                matches: vec![RouteMatcher {
-                    path: StringMatcher::Any,
-                    headers: vec![HeaderMatcher {
+                matches: vec![RouteMatch {
+                    headers: vec![HeaderMatch {
                         name: "x-demo-staging".to_string(),
-                        value: StringMatcher::Any,
+                        value_matcher: StringMatch::RegularExpression {
+                            value: Regex::from_str(".*").unwrap(),
+                        },
                     }],
+                    path: None,
+                    method: None,
+                    query_params: vec![],
                 }],
-                hash_policies: vec![],
+                filters: vec![],
+                timeouts: None,
+                retry_policy: None,
+                session_persistence: None,
+                session_affinity: None,
                 target: RouteTarget::Cluster("default/nginx-staging/cluster".to_string()),
             },
             RouteRule {
-                timeout: None,
+                matches: vec![],
+                filters: vec![],
+                timeouts: None,
                 retry_policy: None,
-                matches: vec![RouteMatcher {
-                    path: StringMatcher::Any,
-                    headers: vec![],
-                }],
-                hash_policies: vec![],
+                session_persistence: None,
+                session_affinity: None,
                 target: RouteTarget::Cluster("default/nginx/cluster".to_string()),
             },
         ],

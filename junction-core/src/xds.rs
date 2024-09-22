@@ -32,6 +32,7 @@ use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::TryStreamExt;
+use junction_api_types::http::Route;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Endpoint;
@@ -59,14 +60,6 @@ pub(crate) mod csds;
 
 #[cfg(test)]
 mod test;
-
-macro_rules! value_or_default {
-    ($value:expr, $default:expr) => {
-        $value.as_ref().map(|v| v.value).unwrap_or($default)
-    };
-}
-pub(crate) use value_or_default;
-
 use crate::config;
 
 // FIXME: nonce is global for a conneciton, not per resource type????
@@ -139,7 +132,7 @@ impl AdsClient {
         Ok((client, task))
     }
 
-    pub fn get_routes(&self, name: &str) -> Option<Arc<Vec<config::Route>>> {
+    pub fn get_routes(&self, name: &str) -> Option<Arc<Vec<Route>>> {
         self.cache.get_routes(name)
     }
 

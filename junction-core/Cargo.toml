@@ -8,13 +8,16 @@ arc-swap = { workspace = true }
 bytes = { workspace = true }
 crossbeam-skiplist = { workspace = true }
 enum-map = { workspace = true }
+form_urlencoded = { workspace = true }
 futures = { workspace = true }
 h2 = { workspace = true }
 http = { workspace = true }
+junction-api-types = { workspace = true }
 once_cell = { workspace = true }
 petgraph = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
+regex = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true }
 serde_yml = { workspace = true }

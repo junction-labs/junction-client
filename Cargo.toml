@@ -1,5 +1,5 @@
 [workspace]
-members = ["junction-core", "junction-python", "xtask"]
+members = ["junction-api-types", "junction-core", "junction-python", "xtask"]
 resolver = "2"
 
 [workspace.package]
@@ -12,7 +12,10 @@ arc-swap = "1.7"
 bytes = "1.6"
 crossbeam-skiplist = "0.1"
 enum-map = "2.7"
+form_urlencoded = "1.1.1"
 futures = "0.3"
+k8s-openapi = { version = "0.21" }
+kube = { version = "0.88" }
 h2 = "0.3"
 http = "1.1"
 tokio = { version = "1.38", default-features = false }
@@ -23,6 +26,8 @@ once_cell = "1.19"
 petgraph = "0.6"
 prost = "0.12"
 rand = "0.8"
+regex = "1.10.6"
+schemars = "0.8.21"
 serde = { version = "1.0", default-features = false }
 serde_json = "1.0"
 serde_yml = "0.0.10"
@@ -33,3 +38,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 xds-api = { version = "0.1", default-features = false }
 xxhash-rust = { version = "0.8.12", features = ["xxh64"] }
 junction-core = { version = "0.1.0", path = "junction-core" }
+junction-api-types = { version = "0.1.0", path = "junction-api-types" }

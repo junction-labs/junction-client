@@ -1,49 +1,61 @@
 # http_simple_split
 
-A test case of junction-client that works with `ezbake` and traffic-director
+A test case of junction-client that works with `ezbake` and traffic-director.
+
+*All paths assume you are running from the top level junction-client directory*
 
 ## Using junction-client with `ezbake`
 
+### Set up `ezbake` and the junction python client
+To build the junction python client and set up a venv for it:
+```bash
+cargo xtask python-build
+source .venv/bin/activate
+```
+
+For ezbake see https://github.com/junction-labs/ezbake/README.md
+
+Once setup, you then need to set up the environment variable pointing to it:
+```bash
+export JUNCTION_ADS_SERVER="grpc://"`kubectl get svc ezbake --namespace junction -o jsonpath='{.spec.clusterIP}'`":8008"
+```
+
 ### Build Server docker image
 ```bash
-  docker build -t jct_http_server .
+docker build --tag jct_http_server --file junction-python/samples/http_simple_split/Dockerfile --load junction-python/samples/http_simple_split/Dockerfile
 ```
 
 ### Deploy Servers
 ```bash
-  kubectl apply -f k8s_jct_http_server.yml 
-  kubectl apply -f k8s_jct_http_server_feature_1.yml 
+  kubectl apply -f junction-python/samples/http_simple_split/k8s_jct_http_server.yml 
+  kubectl apply -f junction-python/samples/http_simple_split/k8s_jct_http_server_feature_1.yml 
 ```
 
-### Install gateway API
-
-If on a cluster you can install the gateway CRDs, then all you need
-to do is install them and then create the gateway config
+### Run client using client config
 
 ```bash
-  kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
-  kubectl apply -f k8s_gateway.yml 
+  python junction-python/samples/http_simple_split/jct_http_client.py
 ```
 
-If you are unable to do this, you will have to comment out the manual
-route config code in jct_http_client.py.
+### Run client using dynamic config
 
-### Set up `ezbake`
-See https://github.com/junction-labs/ezbake
-
-### Run client
+For dynamic config you first need to set up the gateway API CRDs
+as per the expake config. You can then install the dynamic config.
 
 ```bash
-  python jct_http_client.py
+  kubectl apply -f junction-python/samples/http_simple_split/k8s_gateway.yml 
+```
+
+Then to run the client:
+
+```bash
+  python junction-python/samples/http_simple_split/jct_http_client.py --session no-client-config
 ```
 
 ### Clean up
 ```bash
-  kubectl delete HTTPRoute jct-http-server-routes
-  kubectl delete service jct-http-server
-  kubectl delete deployment jct-http-server
-  kubectl delete service jct-http-server-feature-1
-  kubectl delete deployment jct-http-server-feature-1
+  kubectl delete -f junction-python/samples/http_simple_split/k8s_jct_http_server.yml 
+  kubectl delete -f junction-python/samples/http_simple_split/k8s_jct_http_server_feature_1.yml 
 ```
 
 ## Using junction-client with Google Traffic Director

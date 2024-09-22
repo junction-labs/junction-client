@@ -79,6 +79,7 @@ use std::sync::Arc;
 
 use crossbeam_skiplist::SkipMap;
 use enum_map::EnumMap;
+use junction_api_types::http::Route;
 use petgraph::{
     graph::{DiGraph, NodeIndex},
     visit::{self, Visitable},
@@ -270,7 +271,7 @@ pub(crate) struct CacheReader {
 #[allow(unused)]
 #[derive(Debug)]
 pub(crate) struct ConfigView {
-    pub routes: Arc<Vec<crate::config::Route>>,
+    pub routes: Arc<Vec<Route>>,
     pub load_balancers: BTreeMap<String, Arc<crate::config::LoadBalancer>>,
     pub endpoints: BTreeMap<String, Arc<crate::config::EndpointGroup>>,
 }
@@ -323,7 +324,7 @@ impl CacheReader {
     /// Will return `None` if the routing table does not yet exist in cache,
     /// either because it hasn't yet been pulled from the ADS servcer or it
     /// doesn't exist.
-    pub(crate) fn get_routes(&self, name: &str) -> Option<Arc<Vec<crate::config::Route>>> {
+    pub(crate) fn get_routes(&self, name: &str) -> Option<Arc<Vec<Route>>> {
         let listener = self.data.listeners.get(name)?;
 
         match &listener.data()?.route_config {

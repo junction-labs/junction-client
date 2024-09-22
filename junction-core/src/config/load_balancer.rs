@@ -1,3 +1,7 @@
+use junction_api_types::{
+    backend::{LbPolicy, RingHashParams},
+    http::{SessionAffinityHashParam, SessionAffinityHashParamType, SessionAffinityPolicy},
+};
 use std::{
     collections::BTreeMap,
     hash::Hash,
@@ -7,12 +11,9 @@ use std::{
     },
 };
 use xds_api::pb::envoy::config::{
-    cluster::v3::{self as xds_cluster, cluster::ring_hash_lb_config::HashFunction},
-    core::v3 as xds_core,
-    endpoint::v3 as xds_endpoint,
+    cluster::v3 as xds_cluster, core::v3 as xds_core, endpoint::v3 as xds_endpoint,
 };
 
-use crate::config::{HashPolicy, HashTarget};
 use crate::EndpointAddress;
 
 // FIXME: need a way to produce RequestContext from a route.
@@ -122,59 +123,30 @@ impl LoadBalancer {
         &self,
         url: &crate::Url,
         headers: &http::HeaderMap,
-        hash_policy: &[HashPolicy],
+        affinity: &Option<SessionAffinityPolicy>,
         locality_endpoints: &'ep EndpointGroup,
     ) -> Option<&'ep crate::EndpointAddress> {
         match self {
             LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(locality_endpoints),
-            LoadBalancer::RingHash(lb) => {
-                lb.pick_endpoint(url, headers, hash_policy, locality_endpoints)
-            }
+            LoadBalancer::RingHash(lb) => lb.pick_endpoint(
+                url,
+                headers,
+                affinity
+                    .as_ref()
+                    .expect("FIXME should be an error thrown to client about trying to use ring has with no affinity function"),
+                locality_endpoints,
+            ),
         }
     }
 }
 
 impl LoadBalancer {
     pub(crate) fn from_xds(cluster: &xds_cluster::Cluster) -> Option<Self> {
-        match cluster.lb_policy() {
-            // for ROUND_ROBIN, ignore the slow_start_config entirely and return
-            // a brand new RoundRobin policy each time. validate that the config
-            // matches the enum field even though it's ignored.
-            xds_cluster::cluster::LbPolicy::RoundRobin => {
-                match cluster.lb_config.as_ref() {
-                    Some(xds_cluster::cluster::LbConfig::RoundRobinLbConfig(_)) | None => (),
-                    _ => return None,
-                };
-
-                Some(LoadBalancer::RoundRobin(RoundRobinLb::default()))
-            }
-            // for RING_HASH pull the config out if set or use default values to
-            // populate our config.
-            xds_cluster::cluster::LbPolicy::RingHash => {
-                let lb_config = match cluster.lb_config.as_ref() {
-                    Some(xds_cluster::cluster::LbConfig::RingHashLbConfig(config)) => config,
-                    None => &xds_cluster::cluster::RingHashLbConfig::default(),
-                    _ => return None,
-                };
-
-                // hash function must be XX_HASH to match gRPC
-                if lb_config.hash_function() != HashFunction::XxHash {
-                    return None;
-                }
-                let min_size: usize =
-                    crate::xds::value_or_default!(lb_config.minimum_ring_size, 2048)
-                        .try_into()
-                        .ok()?;
-                let max_size: usize =
-                    crate::xds::value_or_default!(lb_config.maximum_ring_size, 4096)
-                        .try_into()
-                        .ok()?;
-                if max_size <= min_size {
-                    return None;
-                }
-                Some(LoadBalancer::RingHash(RingHashLb::new(min_size)))
-            }
-            _ => None,
+        let config: Option<LbPolicy> = LbPolicy::from_xds(cluster);
+        match config {
+            Some(LbPolicy::RoundRobin) => Some(LoadBalancer::RoundRobin(RoundRobinLb::default())),
+            Some(LbPolicy::RingHash(x)) => Some(LoadBalancer::RingHash(RingHashLb::new(&x))),
+            None => None,
         }
     }
 }
@@ -204,9 +176,10 @@ impl RoundRobinLb {
 /// Like the Envoy and gRPC implementations, this load balancer ignores locality
 /// and flattens all visible endpoints into a single hash ring. Unlike GRPC and
 /// Envoy, this load balancer ignores endpoint weights.
+///
 #[derive(Debug)]
 pub(crate) struct RingHashLb {
-    min_size: usize,
+    config: RingHashParams,
     ring: RwLock<Ring>,
 }
 
@@ -217,12 +190,12 @@ struct RingEntry {
 }
 
 impl RingHashLb {
-    fn new(min_size: usize) -> Self {
+    fn new(config: &RingHashParams) -> Self {
         Self {
-            min_size,
+            config: config.clone(),
             ring: RwLock::new(Ring {
                 endpoint_group_hash: 0,
-                entries: Vec::with_capacity(min_size),
+                entries: Vec::with_capacity(config.min_ring_size.expect("config not verified")),
             }),
         }
     }
@@ -231,10 +204,11 @@ impl RingHashLb {
         &self,
         url: &crate::Url,
         headers: &http::HeaderMap,
-        hash_policy: &[HashPolicy],
+        affinity: &SessionAffinityPolicy,
         endpoint_group: &'e EndpointGroup,
     ) -> Option<&'e EndpointAddress> {
-        let request_hash = hash_request(hash_policy, url, headers)?;
+        //the only thing the route can override is the policy
+        let request_hash = hash_request(affinity, url, headers)?;
         let endpoint_idx = self.with_ring(endpoint_group, |r| r.pick(request_hash))?;
         endpoint_group.nth(endpoint_idx)
     }
@@ -255,7 +229,10 @@ impl RingHashLb {
 
         std::mem::drop(ring);
         let mut ring = self.ring.write().unwrap();
-        ring.rebuild(self.min_size, endpoint_group);
+        ring.rebuild(
+            self.config.min_ring_size.expect("config not verified"),
+            endpoint_group,
+        );
         cb(&ring)
     }
 }
@@ -473,20 +450,20 @@ mod test_ring_hash {
 /// - https://github.com/grpc/proposal/blob/master/A42-xds-ring-hash-lb-policy.md#xds-api-fields
 /// - https://github.com/envoyproxy/envoy/blob/main/source/common/http/hash_policy.cc#L236-L257
 pub(crate) fn hash_request(
-    hash_policies: &[HashPolicy],
+    affinity: &SessionAffinityPolicy,
     url: &crate::Url,
     headers: &http::HeaderMap,
 ) -> Option<u64> {
     let mut hash: Option<u64> = None;
 
-    for policy in hash_policies {
-        if let Some(new_hash) = hash_target(&policy.target, url, headers) {
+    for hash_param in &affinity.hash_params {
+        if let Some(new_hash) = hash_target(hash_param, url, headers) {
             hash = Some(match hash {
                 Some(hash) => hash.rotate_left(1) ^ new_hash,
                 None => new_hash,
             });
 
-            if policy.terminal {
+            if hash_param.terminal {
                 break;
             }
         }
@@ -495,9 +472,13 @@ pub(crate) fn hash_request(
     hash
 }
 
-fn hash_target(target: &HashTarget, _url: &crate::Url, headers: &http::HeaderMap) -> Option<u64> {
-    match target {
-        HashTarget::Header(name) => {
+fn hash_target(
+    hash_param: &SessionAffinityHashParam,
+    _url: &crate::Url,
+    headers: &http::HeaderMap,
+) -> Option<u64> {
+    match &hash_param.matcher {
+        SessionAffinityHashParamType::Header { name } => {
             let mut header_values: Vec<_> = headers
                 .get_all(name)
                 .into_iter()
@@ -512,7 +493,6 @@ fn hash_target(target: &HashTarget, _url: &crate::Url, headers: &http::HeaderMap
                 Some(thread_local_xxhash::hash_iter(header_values))
             }
         }
-        HashTarget::Query(_) => todo!("not yet implemented"),
     }
 }
 
