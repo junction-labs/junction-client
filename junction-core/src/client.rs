@@ -205,7 +205,7 @@ impl Client {
             }
         };
 
-        let (lb, endpoints) = match self.ads.get_target(&cluster_name) {
+        let (lb, endpoints) = match self.ads.get_target(cluster_name) {
             (None, _) => {
                 return Err((
                     url,
