@@ -1,11 +1,9 @@
+use junction_api_types::http::{
+    HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule, RouteTarget,
+};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-
-use junction_api_types::{
-    http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule, RouteTarget},
-    shared::StringMatch,
-};
 
 use crate::xds::{self, AdsClient};
 
@@ -135,12 +133,11 @@ impl Client {
         // make that happen, and figure out if there is a way to notify when
         // that happens.
         const RESOLVE_BACKOFF: &[Duration] = &[
-            Duration::from_micros(500),
             Duration::from_millis(1),
-            Duration::from_millis(2),
             Duration::from_millis(4),
-            Duration::from_millis(8),
-            Duration::from_millis(8),
+            Duration::from_millis(16),
+            Duration::from_millis(64),
+            Duration::from_millis(256),
         ];
         for backoff in RESOLVE_BACKOFF {
             match self.get_endpoints(method, url, headers) {
@@ -233,7 +230,6 @@ impl Client {
                 Some(e) => e,
                 None => return Err((url, crate::Error::NoReachableEndpoints)),
             };
-
         let timeouts = matching_route.timeouts.clone();
         let retry = matching_route.retry_policy.clone();
 
@@ -301,7 +297,6 @@ pub fn is_route_match_match(
     }
 
     let headers_matches = rule.headers.iter().all(|m| is_header_match(m, headers));
-
     let qp_matches = rule
         .query_params
         .iter()
@@ -317,23 +312,16 @@ pub fn is_header_match(rule: &HeaderMatch, headers: &http::HeaderMap) -> bool {
     let Ok(header_val) = header_val.to_str() else {
         return false;
     };
-    match &rule.value_matcher {
-        StringMatch::Exact { value } => header_val == value,
-        StringMatch::RegularExpression { value } => value.is_match(header_val),
-    }
+    rule.value_matcher.is_match(header_val)
 }
 
 pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> bool {
     let Some(query) = query else {
         return false;
     };
-
-    for (param, value2) in form_urlencoded::parse(query.as_bytes()) {
+    for (param, value) in form_urlencoded::parse(query.as_bytes()) {
         if param == rule.name {
-            return match &rule.value_matcher {
-                StringMatch::Exact { value } => value2.eq(value),
-                StringMatch::RegularExpression { value } => value.is_match(&value2),
-            };
+            return rule.value_matcher.is_match(&value);
         }
     }
     false

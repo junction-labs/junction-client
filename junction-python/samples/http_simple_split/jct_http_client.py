@@ -5,23 +5,29 @@ import requests
 
 
 def run(args):
-    if args.session == "junction":
+    if args.session == "no-client-config":
         session = junction.requests.Session()
-    elif args.session == "junction-with-overrides":
+    elif args.session == "client-config":
         session = junction.requests.Session(
             default_routes=[
                 {
-                    "domains": ["jct-http-server.default"],
+                    "hostnames": ["jct-http-server.default.svc.cluster.local"],
                     "rules": [
                         {
-                            "matches": [{"path": "/feature-1/index"}],
+                            "matches": [{"path": {"value": "/feature-1/index"}}],
                             "target": [
-                                {"name": "jct-http-server.default", "weight": 80},
-                                {"name": "jct-http-server-feature-1", "weight": 20},
+                                {
+                                    "name": "jct-http-server.default.svc.cluster.local",
+                                    "weight": 80,
+                                },
+                                {
+                                    "name": "jct-http-server-feature-1.default.svc.cluster.local",
+                                    "weight": 20,
+                                },
                             ],
                         },
                         {
-                            "target": "jct-http-server.default",
+                            "target": "jct-http-server.default.svc.cluster.local",
                         },
                     ],
                 }
@@ -50,8 +56,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--session",
-        default="junction",
-        choices={"junction", "junction-with-overrides", "basic"},
+        default="client-config",
+        choices={"client-config", "no-client-config", "dns"},
         help="the way to set up requests session",
     )
     args = parser.parse_args()
