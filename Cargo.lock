@@ -962,6 +962,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "junction-typeinfo"
+version = "0.1.0"
+dependencies = [
+ "junction-typeinfo-derive",
+]
+
+[[package]]
+name = "junction-typeinfo-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn",
+]
+
+[[package]]
 name = "k8s-openapi"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
