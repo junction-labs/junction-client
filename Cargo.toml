@@ -1,12 +1,6 @@
 [workspace]
-members = [
-  "crates/*",
-  "junction-python",
-  "xtask",
-]
-default-members = [
-  "crates/*",
-]
+members = ["crates/*", "junction-python", "xtask"]
+default-members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
@@ -47,3 +41,5 @@ xxhash-rust = { version = "0.8.12", features = ["xxh64"] }
 
 junction-api-types = { version = "0.1.0", path = "crates/junction-api-types" }
 junction-core = { version = "0.1.0", path = "crates/junction-core" }
+junction-typeinfo = { version = "0.1.0", path = "crates/junction-typeinfo" }
+junction-typeinfo-derive = { version = "0.1.0", path = "crates/junction-typeinfo-derive" }

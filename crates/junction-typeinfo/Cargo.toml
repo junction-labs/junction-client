@@ -1,0 +1,11 @@
+[package]
+name = "junction-typeinfo"
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+
+[dependencies]
+junction-typeinfo-derive = { workspace = true }
+
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }
