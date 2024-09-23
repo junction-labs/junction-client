@@ -1,17 +1,22 @@
+# CI for all of the core Junction client crates.
+#
+# CI actually covering everything in core depends on having all of the crates
+# in crates/* listed as default-members of the workspace in Cargo.toml.
+
 name: junction-core CI
 
 on:
   push:
     branches: [ "main" ]
     paths:
-      - "junction-core/*"
-      - ".github/workflows/junction-core-ci.yml"
+      - "crates/*"
+      - ".github/workflows/junction-ci.yml"
 
   pull_request:
     branches: [ "main" ]
     paths:
-      - "junction-core/*"
-      - ".github/workflows/junction-core-ci.yml"
+      - "crates/*"
+      - ".github/workflows/junction-ci.yml"
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,7 +34,7 @@ jobs:
           toolchain: ${{ env.rust_min }}
     - uses: Swatinem/rust-cache@v2
     - name: check
-      run: cargo check -p junction-core
+      run: cargo check
   tests:
     runs-on: ubuntu-latest
     steps:
@@ -40,7 +45,7 @@ jobs:
           toolchain: ${{ env.rust_stable }}
     - uses: Swatinem/rust-cache@v2
     - name: test
-      run: cargo test -p junction-core
+      run: cargo test
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -51,7 +56,7 @@ jobs:
           toolchain: ${{ env.rust_stable }}
     - uses: Swatinem/rust-cache@v2
     - name: clippy
-      run: cargo clippy -p junction-core --tests --all-features --no-deps -- -D warnings -D clippy::dbg_macro
+      run: cargo clippy --tests --all-features --no-deps -- -D warnings -D clippy::dbg_macro
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -63,7 +68,7 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: fmt
       run: |
-        if ! rustfmt --check --edition 2021 $(git ls-files 'junction-core/*.rs'); then
+        if ! rustfmt --check --edition 2021 $(git ls-files 'crates/*.rs'); then
           echo "rustfmt found un-formatted files" >&2
           exit 1
         fi
