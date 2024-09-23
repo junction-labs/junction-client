@@ -17,17 +17,17 @@ def run(args):
                             "matches": [{"path": {"value": "/feature-1/index"}}],
                             "target": [
                                 {
-                                    "name": "jct-http-server.default.svc.cluster.local",
+                                    "name": "default/jct-http-server/cluster",
                                     "weight": 80,
                                 },
                                 {
-                                    "name": "jct-http-server-feature-1.default.svc.cluster.local",
+                                    "name": "default/jct-http-server-feature-1/cluster",
                                     "weight": 20,
                                 },
                             ],
                         },
                         {
-                            "target": "jct-http-server.default.svc.cluster.local",
+                            "target": "default/jct-http-server/cluster",
                         },
                     ],
                 }
