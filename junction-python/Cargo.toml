@@ -25,3 +25,5 @@ pythonize = "0.21"
 
 [build-dependencies]
 pyo3-build-config = "0.21"
+junction-api-types = { workspace = true, features = ["typeinfo"] }
+junction-typeinfo = { workspace = true }

@@ -901,6 +901,7 @@ name = "junction-api-types"
 version = "0.1.0"
 dependencies = [
  "http 1.1.0",
+ "junction-typeinfo",
  "k8s-openapi",
  "kube",
  "once_cell",
@@ -951,6 +952,7 @@ dependencies = [
  "http 1.1.0",
  "junction-api-types",
  "junction-core",
+ "junction-typeinfo",
  "once_cell",
  "pyo3",
  "pyo3-build-config",

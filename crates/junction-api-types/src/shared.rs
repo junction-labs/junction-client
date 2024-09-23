@@ -8,6 +8,9 @@ use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
 
+#[cfg(feature = "typeinfo")]
+use junction_typeinfo::TypeInfo;
+
 /// The fully qualified domain name of a network host. This matches the RFC 1123
 /// definition of a hostname with 1 notable exception that numeric IP addresses
 /// are not allowed.
@@ -23,6 +26,7 @@ pub enum BackendKind {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type")]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum StringMatch {
     #[serde(alias = "regex", alias = "Regex")]
     RegularExpression { value: Regex },
@@ -61,6 +65,13 @@ impl std::ops::Deref for Regex {
 impl AsRef<regex::Regex> for Regex {
     fn as_ref(&self) -> &regex::Regex {
         &self.0
+    }
+}
+
+#[cfg(feature = "typeinfo")]
+impl TypeInfo for Regex {
+    fn kind() -> junction_typeinfo::Kind {
+        junction_typeinfo::Kind::String
     }
 }
 
@@ -169,6 +180,13 @@ const GEP2257_PATTERN: &str = r"^([0-9]{1,5}(h|m|s|ms)){1,4}$";
 
 /// Maximum duration that can be represented in milliseconds.
 const MAX_DURATION_MS: u128 = (((99999 * 3600) + (59 * 60) + 59) * 1_000) + 999;
+
+#[cfg(feature = "typeinfo")]
+impl TypeInfo for Duration {
+    fn kind() -> junction_typeinfo::Kind {
+        junction_typeinfo::Kind::Duration
+    }
+}
 
 /// Checks if a duration is valid. If it's not, return an error result
 /// explaining why the duration is not valid.
