@@ -24,13 +24,10 @@ pub enum BackendKind {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type")]
 pub enum StringMatch {
-    RegularExpression {
-        value: Regex,
-    },
+    #[serde(alias = "regex", alias = "Regex")]
+    RegularExpression { value: Regex },
     #[serde(untagged)]
-    Exact {
-        value: String,
-    },
+    Exact { value: String },
 }
 
 impl StringMatch {
@@ -85,11 +82,11 @@ impl<'de> Visitor<'de> for RegexVisitor {
         formatter.write_str("a Regex")
     }
 
-    fn visit_string<E>(self, value: std::string::String) -> Result<Self::Value, E>
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        match Regex::from_str(&value) {
+        match Regex::from_str(value) {
             Ok(s) => Ok(s),
             Err(e) => Err(E::custom(format!("could not parse {}: {}", value, e))),
         }
@@ -119,6 +116,38 @@ impl FromStr for Regex {
             Ok(e) => Ok(Self(e)),
             Err(e) => Err(e.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test_string_matcher {
+    use super::*;
+
+    #[test]
+    fn test_from_json() {
+        let literal_match = serde_json::json!({
+            "value": "literally this"
+        });
+
+        assert_eq!(
+            serde_json::from_value::<StringMatch>(literal_match).unwrap(),
+            StringMatch::Exact {
+                value: "literally this".to_string()
+            }
+        );
+
+        let regex_match = serde_json::json!({
+            "type": "regex",
+            "value": "foo.*bar",
+
+        });
+
+        assert_eq!(
+            serde_json::from_value::<StringMatch>(regex_match).unwrap(),
+            StringMatch::RegularExpression {
+                value: Regex::from_str("foo.*bar").unwrap(),
+            }
+        );
     }
 }
 
@@ -384,13 +413,12 @@ impl FromStr for Duration {
         // This Lazy Regex::new should never ever fail, given that the regex is
         // a compile-time constant. But just in case.....
         static RE: Lazy<regex::Regex> = Lazy::new(|| {
-            regex::Regex::new(GEP2257_PATTERN).expect(
-                format!(
+            regex::Regex::new(GEP2257_PATTERN).unwrap_or_else(|_| {
+                panic!(
                     r#"GEP2257 regex "{}" did not compile (this is a bug!)"#,
                     GEP2257_PATTERN
                 )
-                .as_str(),
-            )
+            })
         });
 
         // If the string doesn't match the regex, it's invalid.
@@ -515,11 +543,11 @@ impl<'de> Visitor<'de> for DurationVisitor {
         formatter.write_str("a GEP-2257 Duration as a string")
     }
 
-    fn visit_string<E>(self, value: std::string::String) -> Result<Self::Value, E>
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        match Duration::from_str(&value) {
+        match Duration::from_str(value) {
             Ok(s) => Ok(s),
             Err(e) => Err(E::custom(format!("could not parse {}: {}", value, e))),
         }
@@ -546,7 +574,7 @@ impl TryFrom<xds_api::pb::google::protobuf::Duration> for Duration {
 }
 
 #[cfg(test)]
-mod tests {
+mod test_duration {
     use super::*;
 
     #[test]

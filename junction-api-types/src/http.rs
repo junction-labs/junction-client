@@ -638,12 +638,12 @@ impl RouteTimeouts {
             backend_request = r1.per_try_timeout.clone().map(|x| x.try_into().unwrap());
         }
         if request.is_some() || backend_request.is_some() {
-            return Some(RouteTimeouts {
-                backend_request: backend_request,
-                request: request,
-            });
+            Some(RouteTimeouts {
+                backend_request,
+                request,
+            })
         } else {
-            return None;
+            None
         }
     }
 }
@@ -710,12 +710,9 @@ impl QueryParamMatch {
                     //regex or maybe just throw an error
                     StringMatch::Exact { value: s.clone() }
                 }
-                Some(MatchPattern::SafeRegex(pfx)) => {
-                    let Some(x) = parse_xds_regex(pfx) else {
-                        return None;
-                    };
-                    StringMatch::RegularExpression { value: x }
-                }
+                Some(MatchPattern::SafeRegex(pfx)) => StringMatch::RegularExpression {
+                    value: parse_xds_regex(pfx)?,
+                },
                 Some(_) | None => {
                     //fixme: raise an error that config is being thrown away
                     return None;
@@ -742,10 +739,9 @@ impl HeaderMatch {
                 StringMatch::Exact { value: s.clone() }
             }
             xds_route::header_matcher::HeaderMatchSpecifier::SafeRegexMatch(pfx) => {
-                let Some(x) = parse_xds_regex(pfx) else {
-                    return None;
-                };
-                StringMatch::RegularExpression { value: x }
+                StringMatch::RegularExpression {
+                    value: parse_xds_regex(pfx)?,
+                }
             }
             _ => {
                 // FIXME: log/record that we are throwing away config
@@ -762,7 +758,7 @@ impl HeaderMatch {
 
 impl PathMatch {
     fn from_xds(path_spec: &xds_route::route_match::PathSpecifier) -> Option<Self> {
-        return match path_spec {
+        match path_spec {
             xds_route::route_match::PathSpecifier::Prefix(p) => {
                 Some(PathMatch::Prefix { value: p.clone() })
             }
@@ -770,16 +766,15 @@ impl PathMatch {
                 Some(PathMatch::Exact { value: p.clone() })
             }
             xds_route::route_match::PathSpecifier::SafeRegex(p) => {
-                let Some(x) = parse_xds_regex(p) else {
-                    return None;
-                };
-                Some(PathMatch::RegularExpression { value: x })
+                Some(PathMatch::RegularExpression {
+                    value: parse_xds_regex(p)?,
+                })
             }
             _ => {
                 // FIXME: log/record that we are throwing away config
                 None
             }
-        };
+        }
     }
 }
 
@@ -790,8 +785,7 @@ impl RouteRetryPolicy {
         let backoff = r
             .retry_back_off
             .as_ref()
-            .map(|r2| r2.base_interval.clone().map(|x| x.try_into().unwrap()))
-            .flatten();
+            .and_then(|r2| r2.base_interval.clone().map(|x| x.try_into().unwrap()));
         Self {
             codes,
             attempts,
@@ -845,22 +839,24 @@ impl SessionAffinityHashParam {
 
 impl SessionAffinityPolicy {
     //only returns session affinity
-    pub fn from_xds(hash_policy: &Vec<xds_route::route_action::HashPolicy>) -> Option<Self> {
+    pub fn from_xds(hash_policy: &[xds_route::route_action::HashPolicy]) -> Option<Self> {
         let hash_params: Vec<_> = hash_policy
             .iter()
             .filter_map(SessionAffinityHashParam::from_xds)
             .collect();
 
-        if hash_params.len() == 0 {
-            return None;
+        if hash_params.is_empty() {
+            None
         } else {
-            return Some(SessionAffinityPolicy { hash_params });
+            Some(SessionAffinityPolicy { hash_params })
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
@@ -868,15 +864,37 @@ mod tests {
         Route, RouteRetryPolicy, RouteTarget, SessionAffinityHashParam,
         SessionAffinityHashParamType,
     };
-    use crate::http::{HeaderMatch, RouteRule, SessionAffinityPolicy};
+    use crate::{
+        http::{HeaderMatch, RouteRule, SessionAffinityPolicy},
+        shared::Regex,
+    };
 
     #[test]
-    fn test_string_matcher() {
+    fn test_header_matcher() {
         let test_json = json!([
             { "name":"bar", "type" : "RegularExpression", "value": ".*foo" },
-            { "name":"bar", "value": ".*foo" },
+            { "name":"bar", "value": "a literal" },
         ]);
         let obj: Vec<HeaderMatch> = serde_json::from_value(test_json.clone()).unwrap();
+
+        assert_eq!(
+            obj,
+            vec![
+                HeaderMatch {
+                    name: "bar".to_string(),
+                    value_matcher: crate::shared::StringMatch::RegularExpression {
+                        value: Regex::from_str(".*foo").unwrap()
+                    },
+                },
+                HeaderMatch {
+                    name: "bar".to_string(),
+                    value_matcher: crate::shared::StringMatch::Exact {
+                        value: "a literal".to_string()
+                    },
+                }
+            ]
+        );
+
         let output_json = serde_json::to_value(&obj).unwrap();
         assert_eq!(test_json, output_json);
     }
