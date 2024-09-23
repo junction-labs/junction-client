@@ -82,11 +82,11 @@ impl<'de> Visitor<'de> for RegexVisitor {
         formatter.write_str("a Regex")
     }
 
-    fn visit_string<E>(self, value: std::string::String) -> Result<Self::Value, E>
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        match Regex::from_str(&value) {
+        match Regex::from_str(value) {
             Ok(s) => Ok(s),
             Err(e) => Err(E::custom(format!("could not parse {}: {}", value, e))),
         }
@@ -413,13 +413,12 @@ impl FromStr for Duration {
         // This Lazy Regex::new should never ever fail, given that the regex is
         // a compile-time constant. But just in case.....
         static RE: Lazy<regex::Regex> = Lazy::new(|| {
-            regex::Regex::new(GEP2257_PATTERN).expect(
-                format!(
+            regex::Regex::new(GEP2257_PATTERN).unwrap_or_else(|_| {
+                panic!(
                     r#"GEP2257 regex "{}" did not compile (this is a bug!)"#,
                     GEP2257_PATTERN
                 )
-                .as_str(),
-            )
+            })
         });
 
         // If the string doesn't match the regex, it's invalid.
@@ -544,11 +543,11 @@ impl<'de> Visitor<'de> for DurationVisitor {
         formatter.write_str("a GEP-2257 Duration as a string")
     }
 
-    fn visit_string<E>(self, value: std::string::String) -> Result<Self::Value, E>
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        match Duration::from_str(&value) {
+        match Duration::from_str(value) {
             Ok(s) => Ok(s),
             Err(e) => Err(E::custom(format!("could not parse {}: {}", value, e))),
         }
