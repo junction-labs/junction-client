@@ -3,8 +3,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+#[cfg(feature = "typeinfo")]
+use junction_typeinfo::TypeInfo;
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
     // fixme: here is where the gateway API allows a Vec<ParentRef>, and we
     // likely we will need something like it
@@ -23,6 +27,7 @@ pub struct Route {
 /// object (backendRefs).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRule {
     /// Defines conditions used for matching the rule against incoming HTTP
     /// requests. Each match is independent, i.e. this rule will be matched if
@@ -92,6 +97,7 @@ pub struct RouteRule {
 /// Defines and configures session persistence for the route rule.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct SessionPersistence {
     /// Defines the name of the persistent session token which may be reflected
     /// in the cookie or the header. Avoid reusing session names to prevent
@@ -125,6 +131,7 @@ pub struct SessionPersistence {
 /// persistence.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct SessionPersistenceCookieConfig {
     /// Specifies whether the cookie has a permanent or session-based lifetime.
     /// A permanent cookie persists until its specified expiry time, defined by
@@ -142,6 +149,7 @@ pub struct SessionPersistenceCookieConfig {
 /// Provides configuration settings that are specific to cookie-based session
 /// persistence.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum SessionPersistenceCookieLifetimeType {
     Permanent,
     Session,
@@ -149,6 +157,7 @@ pub enum SessionPersistenceCookieLifetimeType {
 
 /// Defines and configures session persistence for the route rule.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum SessionPersistenceType {
     Cookie,
     Header,
@@ -158,6 +167,7 @@ pub enum SessionPersistenceType {
 /// value such as "0s" is interpreted as no timeout.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteTimeouts {
     /// Specifies a timeout for an individual request from the gateway to a
     /// backend. This covers the time from when the request first starts being
@@ -206,6 +216,7 @@ pub struct RouteTimeouts {
 /// ```
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteMatch {
     /// Specifies a HTTP request path matcher. If this field is not specified, a
     /// default prefix match on the "/" path is provided.
@@ -244,6 +255,7 @@ pub struct RouteMatch {
 /// - Must not contain consecutive `/` characters (e.g. `/foo///`, `//`)
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type")]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum PathMatch {
     Prefix {
         value: String,
@@ -283,6 +295,7 @@ pub type HeaderName = String;
 /// equivalent.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct HeaderMatch {
     pub name: HeaderName,
     #[serde(flatten)]
@@ -292,6 +305,7 @@ pub struct HeaderMatch {
 /// Describes how to select a HTTP route by matching HTTP query parameters.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct QueryParamMatch {
     pub name: String,
     #[serde(flatten)]
@@ -308,6 +322,7 @@ pub type Method = String;
 /// response lifecycle.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "PascalCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum RouteFilter {
     /// Defines a schema for a filter that modifies request headers.
     #[serde(rename_all = "camelCase")]
@@ -346,6 +361,7 @@ pub enum RouteFilter {
 /// Defines configuration for the RequestHeaderModifier filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RequestHeaderFilter {
     /// Overwrites the request with the given header (name, value) before the
     /// action. Note that the header names are case-insensitive (see
@@ -389,6 +405,7 @@ pub struct RequestHeaderFilter {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct HeaderValue {
     /// The name of the HTTP Header. Note header names are case insensitive.
     /// (See <https://tools.ietf.org/html/rfc7230#section-3.2>).
@@ -401,6 +418,7 @@ pub struct HeaderValue {
 /// Defines configuration for path modifiers.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "PascalCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum PathModifier {
     /// Specifies the value with which to replace the full path of a request
     /// during a rewrite or redirect.
@@ -441,6 +459,7 @@ pub enum PathModifier {
 /// the same Route rule as a URL Rewrite filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RequestRedirectFilter {
     /// The scheme to be used in the value of the `Location` header in the
     /// response. When empty, the scheme of the request is used.
@@ -497,6 +516,7 @@ pub struct RequestRedirectFilter {
 /// Route rule as a RequestRedirect filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct UrlRewriteFilter {
     /// The value to be used to replace the Host header value during forwarding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -510,6 +530,7 @@ pub struct UrlRewriteFilter {
 /// Defines configuration for the RequestMirror filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RequestMirrorFilter {
     /// Represents the percentage of requests that should be mirrored to
     /// BackendRef. Its minimum value is 0 (indicating 0% of requests) and its
@@ -528,6 +549,7 @@ pub struct RequestMirrorFilter {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(untagged, deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum RouteTarget {
     Cluster(String),
     WeightedClusters(Vec<WeightedCluster>),
@@ -535,6 +557,7 @@ pub enum RouteTarget {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct WeightedCluster {
     pub name: String,
     pub weight: u32,
@@ -546,12 +569,13 @@ pub struct WeightedCluster {
 /// https://gateway-api.sigs.k8s.io/geps/gep-1731/ )
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRetryPolicy {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codes: Vec<u32>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attempts: Option<usize>,
+    pub attempts: Option<u32>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backoff: Option<Duration>,
@@ -559,12 +583,14 @@ pub struct RouteRetryPolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(tag = "type")]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum SessionAffinityHashParamType {
     Header { name: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct SessionAffinityHashParam {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terminal: bool,
@@ -574,6 +600,7 @@ pub struct SessionAffinityHashParam {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct SessionAffinityPolicy {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hash_params: Vec<SessionAffinityHashParam>,
@@ -781,7 +808,7 @@ impl PathMatch {
 impl RouteRetryPolicy {
     pub fn from_xds(r: &xds_route::RetryPolicy) -> Self {
         let codes = r.retriable_status_codes.clone();
-        let attempts = Some(1 + r.num_retries.clone().map_or(0, |v| v.into()) as usize);
+        let attempts = Some(1 + r.num_retries.clone().map_or(0, |v| v.into()));
         let backoff = r
             .retry_back_off
             .as_ref()

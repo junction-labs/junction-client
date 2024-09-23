@@ -129,7 +129,7 @@ pub struct RetryPolicy {
     codes: Vec<u32>,
 
     #[pyo3(get)]
-    attempts: usize,
+    attempts: u32,
 
     #[pyo3(get)]
     backoff: f64,
