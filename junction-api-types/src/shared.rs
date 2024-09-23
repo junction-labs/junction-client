@@ -24,13 +24,10 @@ pub enum BackendKind {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type")]
 pub enum StringMatch {
-    RegularExpression {
-        value: Regex,
-    },
+    #[serde(alias = "regex", alias = "Regex")]
+    RegularExpression { value: Regex },
     #[serde(untagged)]
-    Exact {
-        value: String,
-    },
+    Exact { value: String },
 }
 
 impl StringMatch {
@@ -119,6 +116,38 @@ impl FromStr for Regex {
             Ok(e) => Ok(Self(e)),
             Err(e) => Err(e.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test_string_matcher {
+    use super::*;
+
+    #[test]
+    fn test_from_json() {
+        let literal_match = serde_json::json!({
+            "value": "literally this"
+        });
+
+        assert_eq!(
+            serde_json::from_value::<StringMatch>(literal_match).unwrap(),
+            StringMatch::Exact {
+                value: "literally this".to_string()
+            }
+        );
+
+        let regex_match = serde_json::json!({
+            "type": "regex",
+            "value": "foo.*bar",
+
+        });
+
+        assert_eq!(
+            serde_json::from_value::<StringMatch>(regex_match).unwrap(),
+            StringMatch::RegularExpression {
+                value: Regex::from_str("foo.*bar").unwrap(),
+            }
+        );
     }
 }
 
@@ -546,7 +575,7 @@ impl TryFrom<xds_api::pb::google::protobuf::Duration> for Duration {
 }
 
 #[cfg(test)]
-mod tests {
+mod test_duration {
     use super::*;
 
     #[test]

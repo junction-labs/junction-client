@@ -861,6 +861,8 @@ impl SessionAffinityPolicy {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
@@ -868,15 +870,37 @@ mod tests {
         Route, RouteRetryPolicy, RouteTarget, SessionAffinityHashParam,
         SessionAffinityHashParamType,
     };
-    use crate::http::{HeaderMatch, RouteRule, SessionAffinityPolicy};
+    use crate::{
+        http::{HeaderMatch, RouteRule, SessionAffinityPolicy},
+        shared::Regex,
+    };
 
     #[test]
-    fn test_string_matcher() {
+    fn test_header_matcher() {
         let test_json = json!([
             { "name":"bar", "type" : "RegularExpression", "value": ".*foo" },
-            { "name":"bar", "value": ".*foo" },
+            { "name":"bar", "value": "a literal" },
         ]);
         let obj: Vec<HeaderMatch> = serde_json::from_value(test_json.clone()).unwrap();
+
+        assert_eq!(
+            obj,
+            vec![
+                HeaderMatch {
+                    name: "bar".to_string(),
+                    value_matcher: crate::shared::StringMatch::RegularExpression {
+                        value: Regex::from_str(".*foo").unwrap()
+                    },
+                },
+                HeaderMatch {
+                    name: "bar".to_string(),
+                    value_matcher: crate::shared::StringMatch::Exact {
+                        value: "a literal".to_string()
+                    },
+                }
+            ]
+        );
+
         let output_json = serde_json::to_value(&obj).unwrap();
         assert_eq!(test_json, output_json);
     }
