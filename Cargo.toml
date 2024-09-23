@@ -1,5 +1,12 @@
 [workspace]
-members = ["junction-api-types", "junction-core", "junction-python", "xtask"]
+members = [
+  "crates/*",
+  "junction-python",
+  "xtask",
+]
+default-members = [
+  "crates/*",
+]
 resolver = "2"
 
 [workspace.package]
@@ -37,5 +44,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 xds-api = { version = "0.1", default-features = false }
 xxhash-rust = { version = "0.8.12", features = ["xxh64"] }
-junction-core = { version = "0.1.0", path = "junction-core" }
-junction-api-types = { version = "0.1.0", path = "junction-api-types" }
+
+junction-api-types = { version = "0.1.0", path = "crates/junction-api-types" }
+junction-core = { version = "0.1.0", path = "crates/junction-core" }
