@@ -1,0 +1,15 @@
+[package]
+name = "junction-api-gen"
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+
+[dependencies]
+anyhow = "1.0"
+askama = "0.12"
+regex = { workspace = true }
+once_cell = { workspace = true }
+textwrap = { version = "0.16", features = ["smawk"] }
+
+junction-typeinfo = { workspace = true }
+junction-api-types = { workspace = true, features = ["typeinfo"] }
