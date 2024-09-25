@@ -4,16 +4,19 @@ use clap::{Parser, Subcommand};
 use xshell::{cmd, Shell};
 
 fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
     let sh = Shell::new()?;
+    let args = Args::parse();
 
     let venv = env::var("VIRTUAL_ENV").unwrap_or_else(|_| ".venv".to_string());
 
     match &args.command {
-        Commands::PythonClean => clean(&sh, &venv),
-        Commands::PythonBuild => python_build(&sh, &venv),
-        Commands::PythonLint { fix } => python_lint(&sh, &venv, *fix),
-        Commands::PythonTest => python_test(&sh, &venv),
+        Commands::PythonClean => python::clean(&sh, &venv),
+        Commands::PythonBuild {
+            skip_maturin,
+            skip_stubs,
+        } => python::build(&sh, &venv, !*skip_maturin, !*skip_stubs),
+        Commands::PythonLint { fix } => python::lint(&sh, &venv, *fix),
+        Commands::PythonTest => python::test(&sh, &venv),
     }
 }
 
@@ -28,7 +31,17 @@ struct Args {
 #[derive(Subcommand)]
 enum Commands {
     /// Build and install junction-python in a .venv.
-    PythonBuild,
+    PythonBuild {
+        /// Skip rebuilding the junction-python wheel. Useful for working on
+        /// generating config type information.
+        #[clap(long)]
+        skip_maturin: bool,
+
+        /// Skip regenerating API stubs. Useful if you're not changing Junction
+        /// API types and want to skip calls to `ruff`.
+        #[clap(long)]
+        skip_stubs: bool,
+    },
 
     /// Run junction-python's Python tests.
     PythonTest,
@@ -44,97 +57,125 @@ enum Commands {
     PythonClean,
 }
 
-fn clean(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-    cmd!(sh, "rm -rf .ruff_cache/").run()?;
-    cmd!(sh, "rm -rf {venv}").run()?;
+mod python {
+    use super::*;
 
-    Ok(())
-}
+    pub(super) fn clean(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        cmd!(sh, "rm -rf .ruff_cache/").run()?;
+        cmd!(sh, "rm -rf {venv}").run()?;
 
-fn setup_venv(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-    mk_venv(sh, venv)?;
-    install_packages(sh, venv)?;
+        Ok(())
+    }
 
-    Ok(())
-}
+    pub(super) fn build(sh: &Shell, venv: &str, maturin: bool, stubs: bool) -> anyhow::Result<()> {
+        ensure_venv(sh, venv)?;
 
-fn python_build(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-    ensure_venv(sh, venv)?;
+        if maturin {
+            maturin_build(sh, venv)?;
+        }
+        if stubs {
+            generate_typing_hints(sh, venv)?;
+        }
 
-    cmd!(
+        Ok(())
+    }
+
+    fn maturin_build(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        cmd!(
         sh,
         "{venv}/bin/maturin develop -m junction-python/Cargo.toml --extras=test --features extension-module"
     )
     .run()?;
 
-    Ok(())
-}
+        Ok(())
+    }
 
-fn python_test(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-    ensure_venv(sh, venv)?;
-    python_build(sh, venv)?;
+    fn generate_typing_hints(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        let generated = cmd!(sh, "cargo run -p junction-api-gen").read()?;
+        let config_typing = "junction-python/junction/config.py";
+        sh.write_file(config_typing, generated)?;
 
-    cmd!(sh, "{venv}/bin/pytest").run()?;
-
-    Ok(())
-}
-
-fn python_lint(sh: &Shell, venv: &str, fix: bool) -> anyhow::Result<()> {
-    ensure_venv(sh, venv)?;
-
-    if !fix {
-        // when not fixing, always run both checks and return an error if either
-        // fails. it's annoying to not see all the errors at first.
-        let check = cmd!(
-            sh,
-            "{venv}/bin/ruff check --config junction-python/pyproject.toml --no-fix"
-        )
-        .run();
-        let format = cmd!(
-            sh,
-            "{venv}/bin/ruff format --config junction-python/pyproject.toml --check"
-        )
-        .run();
-        check.and(format)?;
-    } else {
-        // when fixing, run sequentially in case there's a change in formatting
-        // that a fix would introduce (that would be annoying buuuuuuut).
         cmd!(
             sh,
-            "{venv}/bin/ruff check --config junction-python/pyproject.toml --fix"
+            "{venv}/bin/ruff check --config junction-python/pyproject.toml --fix {config_typing}"
         )
         .run()?;
         cmd!(
             sh,
-            "{venv}/bin/ruff format --config junction-python/pyproject.toml"
+            "{venv}/bin/ruff format --config junction-python/pyproject.toml {config_typing}"
         )
         .run()?;
+
+        Ok(())
     }
 
-    Ok(())
-}
+    pub(super) fn test(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        ensure_venv(sh, venv)?;
+        build(sh, venv, true, true)?;
 
-fn ensure_venv(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-    if !std::fs::metadata(venv).is_ok_and(|m| m.is_dir()) {
-        setup_venv(sh, venv)?;
+        cmd!(sh, "{venv}/bin/pytest").run()?;
+
+        Ok(())
     }
 
-    Ok(())
-}
+    pub(super) fn lint(sh: &Shell, venv: &str, fix: bool) -> anyhow::Result<()> {
+        ensure_venv(sh, venv)?;
 
-fn mk_venv(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-    cmd!(sh, "python3 -m venv {venv}").run()?;
+        if !fix {
+            // when not fixing, always run both checks and return an error if either
+            // fails. it's annoying to not see all the errors at first.
+            let check = cmd!(
+                sh,
+                "{venv}/bin/ruff check --config junction-python/pyproject.toml --no-fix"
+            )
+            .run();
+            let format = cmd!(
+                sh,
+                "{venv}/bin/ruff format --config junction-python/pyproject.toml --check"
+            )
+            .run();
+            check.and(format)?;
+        } else {
+            // when fixing, run sequentially in case there's a change in formatting
+            // that a fix would introduce (that would be annoying buuuuuuut).
+            cmd!(
+                sh,
+                "{venv}/bin/ruff check --config junction-python/pyproject.toml --fix"
+            )
+            .run()?;
+            cmd!(
+                sh,
+                "{venv}/bin/ruff format --config junction-python/pyproject.toml"
+            )
+            .run()?;
+        }
 
-    Ok(())
-}
+        Ok(())
+    }
 
-fn install_packages(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-    cmd!(sh, "{venv}/bin/python -m pip install --upgrade uv").run()?;
-    cmd!(
+    fn ensure_venv(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        if !std::fs::metadata(venv).is_ok_and(|m| m.is_dir()) {
+            mk_venv(sh, venv)?;
+            install_packages(sh, venv)?;
+        }
+
+        Ok(())
+    }
+
+    fn mk_venv(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        cmd!(sh, "python3 -m venv {venv}").run()?;
+
+        Ok(())
+    }
+
+    fn install_packages(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        cmd!(sh, "{venv}/bin/python -m pip install --upgrade uv").run()?;
+        cmd!(
         sh,
         "{venv}/bin/uv pip install --upgrade --compile-bytecode -r junction-python/requirements-dev.txt"
     )
     .run()?;
 
-    Ok(())
+        Ok(())
+    }
 }

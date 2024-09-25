@@ -36,12 +36,21 @@ class PoolManager(urllib3.PoolManager):
     """
 
     def __init__(
+        # urrlib3
         self,
         num_pools: int = 10,
         headers: typing.Mapping[str, str] | None = None,
+        # junction
+        default_routes: typing.List[junction.config.Route] | None = None,
+        junction_client: junction.Junction | None = None,
+        # kwargs
         **kwargs: typing.Any,
     ) -> None:
-        connection_pool_kw, client = junction._handle_kwargs(kwargs)
+        connection_pool_kw, client = junction._handle_kwargs(
+            default_routes=default_routes,
+            junction_client=junction_client,
+            kwargs=kwargs,
+        )
         self.junction = client
 
         super().__init__(num_pools, headers, **connection_pool_kw)

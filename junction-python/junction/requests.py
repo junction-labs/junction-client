@@ -1,5 +1,6 @@
 import os
-from typing import Mapping
+from typing import List, Mapping
+
 
 import requests
 import urllib3
@@ -15,12 +16,12 @@ class HTTPAdapter(requests.adapters.HTTPAdapter):
     An HTTPAdapater subclass customized to use Junction for endpoint discovery
     and load-balancing.
 
-    You almost never need to use this class directly, use a Session instead.
+    You should almost never need to use this class directly, use a Session
+    instead.
     """
 
-    def __init__(self, **kwargs):
-        kwargs, client = junction._handle_kwargs(kwargs)
-        self.junction = client
+    def __init__(self, junction_client: junction.Junction, **kwargs):
+        self.junction = junction_client
         super().__init__(**kwargs)
 
     def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
@@ -128,10 +129,18 @@ class Session(requests.Session):
     discovery and load-balancing.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(
+        self,
+        default_routes: List[junction.config.Route] | None = None,
+        junction_client: junction.Junction | None = None,
+    ) -> None:
         super().__init__()
 
-        kwargs, client = junction._handle_kwargs(kwargs)
+        _, client = junction._handle_kwargs(
+            default_routes=default_routes,
+            junction_client=junction_client,
+            kwargs={},
+        )
         self.junction = client
 
         self.mount("https://", HTTPAdapter(junction_client=self.junction))

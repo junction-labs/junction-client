@@ -1,23 +1,22 @@
+import typing
 from junction.junction import Junction, default_client
 
-from . import requests, urllib3
-
-_KWARG_NAMES = [
-    "default_routes",
-]
+from . import config, requests, urllib3
 
 
-def _handle_kwargs(kwargs: dict) -> tuple[dict, Junction]:
-    jct_kwargs = {}
-    for key in _KWARG_NAMES:
-        if value := kwargs.pop(key, None):
-            jct_kwargs[key] = value
+def _handle_kwargs(
+    default_routes: typing.List[config.Route] | None,
+    junction_client: Junction | None,
+    kwargs: dict,
+) -> tuple[dict, Junction]:
+    if not junction_client:
+        client = default_client(
+            {
+                "default_routes": default_routes,
+            }
+        )
 
-    jct_client = kwargs.pop("junction_client", None)
-    if not jct_client:
-        jct_client = default_client(**jct_kwargs)
-
-    return kwargs, jct_client
+    return kwargs, client
 
 
-__all__ = (Junction, urllib3, requests, default_client)
+__all__ = (Junction, config, urllib3, requests, default_client)
