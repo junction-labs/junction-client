@@ -4,13 +4,13 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - "junction-python/*"
+      - "junction-python/**"
       - ".github/workflows/junction-python-ci.yml"
 
   pull_request:
     branches: [ "main" ]
     paths:
-      - "junction-python/*"
+      - "junction-python/**"
       - ".github/workflows/junction-python-ci.yml"
 
 env:
@@ -34,17 +34,6 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: check
       run: cargo check -p junction-python
-  rust-tests:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: "Install Rust @${{ env.rust_stable }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
-          toolchain: ${{ env.rust_stable }}
-    - uses: Swatinem/rust-cache@v2
-    - name: test
-      run: cargo test -p junction-python
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -83,6 +72,17 @@ jobs:
       with:
           toolchain: ${{ env.rust_stable }}
     - uses: Swatinem/rust-cache@v2
+    - name: build python
+      run: cargo xtask python-build
+    - name: check for uncommitted changes
+      run: |
+          if [[ -n $(git status --porcelain) ]]; then
+              echo "Found uncomitted changes after running codegen:"
+              git diff
+              exit 1
+          fi
+    - name: run rust tests
+      run: cargo test -p junction-python
     - name: run python tests
       run: cargo xtask python-test
   lint-python:
@@ -94,5 +94,5 @@ jobs:
       with:
           toolchain: ${{ env.rust_stable }}
     - uses: Swatinem/rust-cache@v2
-    - name: run python tests
+    - name: lint
       run: cargo xtask python-lint
