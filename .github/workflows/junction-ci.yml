@@ -9,13 +9,13 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - "crates/*"
+      - "crates/**"
       - ".github/workflows/junction-ci.yml"
 
   pull_request:
     branches: [ "main" ]
     paths:
-      - "crates/*"
+      - "crates/**"
       - ".github/workflows/junction-ci.yml"
 
 env:
