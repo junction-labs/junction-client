@@ -20,6 +20,9 @@ pub enum Error {
 
     #[error("the matched backend does not have any reachable endpoints")]
     NoReachableEndpoints,
+
+    #[error("the passed configuration has routes with no backends defined")]
+    BackendListEmpty,
 }
 
 impl Error {

@@ -284,7 +284,7 @@ impl ApiListener {
             },
             Some(RouteSpecifier::RouteConfig(route_config)) => {
                 let clusters = RouteConfig::cluster_names(route_config);
-                let route = RouteConfig::route(route_config)?;
+                let route = Arc::new(Route::from_xds(route_config)?);
                 ApiListenerRouteConfig::Inlined { clusters, route }
             }
             _ => {
@@ -336,13 +336,6 @@ impl RouteConfig {
         }
         clusters.into_iter().map(|n| n.into()).collect()
     }
-
-    fn route(
-        xds: &xds_route::RouteConfiguration,
-    ) -> Result<Arc<Route>, junction_api_types::xds::Error> {
-        let route = Route::from_xds(xds)?;
-        Ok(Arc::new(route))
-    }
 }
 
 impl RouteConfig {
@@ -350,7 +343,7 @@ impl RouteConfig {
         xds: xds_route::RouteConfiguration,
     ) -> Result<Self, junction_api_types::xds::Error> {
         let clusters = RouteConfig::cluster_names(&xds);
-        let route = RouteConfig::route(&xds)?;
+        let route = Arc::new(Route::from_xds(&xds)?);
 
         Ok(Self {
             xds,
@@ -393,8 +386,42 @@ impl Cluster {
             &backend.lb,
         ));
 
+        let Some(discovery_type) = cluster_discovery_type(&xds) else {
+            return Err(junction_api_types::xds::Error::InvalidXds {
+                resource_type: "Cluster",
+                resource_name: xds.name,
+                message: format!("invalid discovery_type: {:?}", xds.cluster_discovery_type),
+            });
+        };
+
+        let load_assignment = match discovery_type {
+            xds_cluster::cluster::DiscoveryType::Eds => {
+                let Some(eds_config) = xds.eds_cluster_config.as_ref() else {
+                    return Err(junction_api_types::xds::Error::InvalidXds {
+                        resource_type: "Cluster",
+                        resource_name: xds.name,
+                        message: "an EDS cluster must have an eds_cluster_config".to_string(),
+                    });
+                };
+
+                let cla_name = if !eds_config.service_name.is_empty() {
+                    eds_config.service_name.clone()
+                } else {
+                    xds.name.clone()
+                };
+                cla_name.into()
+            }
+            _ => {
+                return Err(junction_api_types::xds::Error::InvalidXds {
+                    resource_type: "Cluster",
+                    resource_name: xds.name,
+                    message: "only EDS clusters are supported".to_string(),
+                })
+            }
+        };
+
         let data = ClusterEndpointData::LoadAssignment {
-            name: backend.attachment.as_cluster_xds_name().into(),
+            name: load_assignment,
         };
 
         Ok(Self {
@@ -403,6 +430,17 @@ impl Cluster {
             load_balancer,
             endpoints: data,
         })
+    }
+}
+
+fn cluster_discovery_type(
+    cluster: &xds_cluster::Cluster,
+) -> Option<xds_cluster::cluster::DiscoveryType> {
+    match cluster.cluster_discovery_type {
+        Some(xds_cluster::cluster::ClusterDiscoveryType::Type(cdt)) => {
+            xds_cluster::cluster::DiscoveryType::try_from(cdt).ok()
+        }
+        _ => None,
     }
 }
 

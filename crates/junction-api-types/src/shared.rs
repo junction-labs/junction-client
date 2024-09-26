@@ -905,7 +905,7 @@ static KUBE_SERVICE_SUFFIX: &str = ".svc.cluster.local";
 ///  So punting thinking more about this until we support DNS properly.
 ///
 impl Attachment {
-    pub fn hostname(&self) -> String {
+    pub fn as_hostname(&self) -> String {
         match self {
             Attachment::DNS(c) => c.hostname.clone(),
             Attachment::Service(c) => match &c.namespace {
@@ -917,38 +917,38 @@ impl Attachment {
 
     pub fn from_hostname(hostname: &str, port: Option<u16>) -> Self {
         if hostname.ends_with(KUBE_SERVICE_SUFFIX) {
-            let mut parts = hostname.split(".");
+            let mut parts = hostname.split('.');
             let name = parts.next().unwrap().to_string();
             let namespace = parts.next().map(|x| x.to_string());
-            return Attachment::Service(ServiceAttachment {
+            Attachment::Service(ServiceAttachment {
                 name,
                 namespace,
                 port,
-            });
+            })
         } else {
-            return Attachment::DNS(DNSAttachment {
+            Attachment::DNS(DNSAttachment {
                 hostname: hostname.to_string(),
-                port: port,
-            });
+                port,
+            })
         }
     }
 
     // FIXME(DNS): no reason we cannot support DNS here, but likely it should
     // be determined by whats in the cluster config so passed as a extra parameter
     pub fn from_cluster_xds_name(name: &str) -> Result<Self, crate::xds::Error> {
-        let parts: Vec<&str> = name.split("/").collect();
+        let parts: Vec<&str> = name.split('/').collect();
         if parts.len() == 3 && parts[2].eq("cluster") {
-            return Ok(Attachment::Service(ServiceAttachment {
+            Ok(Attachment::Service(ServiceAttachment {
                 name: parts[1].to_string(),
                 namespace: Some(parts[0].to_string()),
                 port: None,
-            }));
+            }))
         } else {
-            return Err(crate::xds::Error::InvalidXds {
+            Err(crate::xds::Error::InvalidXds {
                 resource_type: "Cluster",
                 resource_name: name.to_string(),
                 message: "Unable to parse name".to_string(),
-            });
+            })
         }
     }
 
@@ -969,14 +969,14 @@ impl Attachment {
 
     pub fn as_listener_xds_name(&self) -> String {
         //FIXME(ports): for now this is just the hostname, with no support for port
-        self.hostname()
+        self.as_hostname()
     }
 
     pub fn port(&self) -> Option<u16> {
         match self {
-            Attachment::DNS(c) => return c.port,
+            Attachment::DNS(c) => c.port,
             //FIXME(namespace): work out what to do if namespace is optional
-            Attachment::Service(c) => return c.port,
+            Attachment::Service(c) => c.port,
         }
     }
 
@@ -1019,7 +1019,7 @@ impl WeightedBackend {
     ) -> Result<Vec<Self>, crate::xds::Error> {
         match xds {
             Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => Ok(vec![Self {
-                attachment: Attachment::from_cluster_xds_name(&name)?,
+                attachment: Attachment::from_cluster_xds_name(name)?,
                 weight: 1,
             }]),
             Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(weighted_cluster)) => {
@@ -1033,11 +1033,11 @@ impl WeightedBackend {
                 Ok(ret)
             }
             _ => {
-                return Err(crate::xds::Error::InvalidXds {
+                Err(crate::xds::Error::InvalidXds {
                     resource_type: "Cluster",
                     resource_name: "".to_string(), //ideally the xds enum would support a to_string here
                     message: "Unable to parse specifier".to_string(),
-                });
+                })
             }
         }
     }
@@ -1118,7 +1118,7 @@ mod test_session_affinity {
             ]
         });
         let obj: SessionAffinityPolicy = serde_json::from_value(test_json.clone()).unwrap();
-        let output_json = serde_json::to_value(&obj).unwrap();
+        let output_json = serde_json::to_value(obj).unwrap();
         assert_eq!(test_json, output_json);
     }
 }

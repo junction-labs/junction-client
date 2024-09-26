@@ -518,7 +518,7 @@ impl Route {
             // When we bring them back for gateways it means is we will need
             // to return a vector of routes, as the rules are within them
             for route in &virtual_host.routes {
-                rules.push(RouteRule::from_xds(&route)?);
+                rules.push(RouteRule::from_xds(route)?);
             }
         }
         Ok(Route { attachment, rules })
@@ -779,7 +779,7 @@ mod tests {
             "backoff": "1m"
         });
         let obj: RouteRetryPolicy = serde_json::from_value(test_json.clone()).unwrap();
-        let output_json = serde_json::to_value(&obj).unwrap();
+        let output_json = serde_json::to_value(obj).unwrap();
         assert_eq!(test_json, output_json);
     }
 

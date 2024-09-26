@@ -112,7 +112,7 @@ impl Locality {
 
 #[derive(Debug)]
 pub enum LoadBalancer {
-    Unspecified(UnspecifiedLb),
+    Unspecified(RoundRobinLb),
     RoundRobin(RoundRobinLb),
     RingHash(RingHashLb),
 }
@@ -130,18 +130,16 @@ impl LoadBalancer {
             LoadBalancer::Unspecified(lb) => lb.pick_endpoint(locality_endpoints),
             LoadBalancer::RingHash(lb) => {
                 let hash_params;
-                if lb.config.hash_params.len() > 0 {
+                if !lb.config.hash_params.is_empty() {
                     hash_params = &lb.config.hash_params;
-                } else {
-                    if let Some(route_affinity) = route_affinity {
-                        if route_affinity.hash_params.len() > 0 {
-                            hash_params = &route_affinity.hash_params;
-                        } else {
-                            return None; //FIXME: this should be an error
-                        }
+                } else if let Some(route_affinity) = route_affinity {
+                    if !route_affinity.hash_params.is_empty() {
+                        hash_params = &route_affinity.hash_params;
                     } else {
                         return None; //FIXME: this should be an error
                     }
+                } else {
+                    return None; //FIXME: this should be an error
                 }
                 lb.pick_endpoint(url, headers, hash_params, locality_endpoints)
             }
@@ -153,8 +151,8 @@ impl LoadBalancer {
     pub(crate) fn from_config(config: &LbPolicy) -> Self {
         match config {
             LbPolicy::RoundRobin => LoadBalancer::RoundRobin(RoundRobinLb::default()),
-            LbPolicy::RingHash(x) => LoadBalancer::RingHash(RingHashLb::new(&x)),
-            LbPolicy::Unspecified => LoadBalancer::Unspecified(UnspecifiedLb::default()),
+            LbPolicy::RingHash(x) => LoadBalancer::RingHash(RingHashLb::new(x)),
+            LbPolicy::Unspecified => LoadBalancer::Unspecified(RoundRobinLb::default()),
         }
     }
 }
@@ -175,22 +173,6 @@ impl RoundRobinLb {
         let endpoints = endpoint_group.endpoints.get(&Locality::Unknown)?;
         let locality_idx = self.idx.fetch_add(1, Ordering::SeqCst) % endpoints.len();
         Some(&endpoints[locality_idx])
-    }
-}
-
-///
-/// For now when load balanced is unspecified, we just do Round Robin.
-/// There is an argument that maybe we should do something more DNS-like.
-/// FIXME: work out if so
-///
-#[derive(Debug, Default)]
-pub struct UnspecifiedLb(RoundRobinLb);
-impl UnspecifiedLb {
-    fn pick_endpoint<'e>(
-        &self,
-        locality_endpoints: &'e EndpointGroup,
-    ) -> Option<&'e EndpointAddress> {
-        self.0.pick_endpoint(locality_endpoints)
     }
 }
 

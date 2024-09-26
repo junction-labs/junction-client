@@ -11,23 +11,25 @@ def run(args):
         session = junction.requests.Session(
             default_routes=[
                 {
-                    "hostnames": ["jct-http-server.default.svc.cluster.local"],
+                    "attachment": { "name": "jct-http-server", "namespace": "default" },
                     "rules": [
                         {
                             "matches": [{"path": {"value": "/feature-1/index"}}],
-                            "target": [
+                            "backends": [
                                 {
-                                    "name": "default/jct-http-server/cluster",
-                                    "weight": 80,
+                                    "name": "jct-http-server", 
+                                    "namespace": "default",
+                                    "weight": 80
                                 },
                                 {
-                                    "name": "default/jct-http-server-feature-1/cluster",
-                                    "weight": 20,
-                                },
-                            ],
+                                    "name": "jct-http-server-feature-1", 
+                                    "namespace": "default",
+                                    "weight": 20
+                                }
+                            ]
                         },
                         {
-                            "target": "default/jct-http-server/cluster",
+                            "backends": [ { "name": "jct-http-server", "namespace": "default" } ]
                         },
                     ],
                 }

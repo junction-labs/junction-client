@@ -95,17 +95,6 @@ pub struct Backend {
     // pub session_persistence: Option<SessionPersistence>,
 }
 
-fn cluster_discovery_type(
-    cluster: &xds_cluster::Cluster,
-) -> Option<xds_cluster::cluster::DiscoveryType> {
-    match cluster.cluster_discovery_type {
-        Some(xds_cluster::cluster::ClusterDiscoveryType::Type(cdt)) => {
-            xds_cluster::cluster::DiscoveryType::try_from(cdt).ok()
-        }
-        _ => None,
-    }
-}
-
 impl Backend {
     pub fn from_xds(xds: &xds_cluster::Cluster) -> Result<Self, crate::xds::Error> {
         let Some(lb) = LbPolicy::from_xds(xds) else {
@@ -115,42 +104,9 @@ impl Backend {
                 message: "invalid LB config".to_string(),
             });
         };
-        let Some(discovery_type) = cluster_discovery_type(&xds) else {
-            return Err(crate::xds::Error::InvalidXds {
-                resource_type: "Cluster",
-                resource_name: xds.name.clone(),
-                message: format!("invalid discovery_type: {:?}", xds.cluster_discovery_type),
-            });
-        };
-
-        let name = match discovery_type {
-            xds_cluster::cluster::DiscoveryType::Eds => {
-                let Some(eds_config) = xds.eds_cluster_config.as_ref() else {
-                    return Err(crate::xds::Error::InvalidXds {
-                        resource_type: "Cluster",
-                        resource_name: xds.name.clone(),
-                        message: "an EDS cluster must have an eds_cluster_config".to_string(),
-                    });
-                };
-
-                if !eds_config.service_name.is_empty() {
-                    eds_config.service_name.clone()
-                } else {
-                    xds.name.clone()
-                }
-            }
-            _ => {
-                return Err(crate::xds::Error::InvalidXds {
-                    resource_type: "Cluster",
-                    resource_name: xds.name.clone(),
-                    message: "only EDS clusters are supported".to_string(),
-                })
-            }
-        };
-
         //FIXME(DNS): if discovery_type is logical dns, we should do this with dns
         Ok(Backend {
-            attachment: Attachment::from_cluster_xds_name(&name)?,
+            attachment: Attachment::from_cluster_xds_name(&xds.name)?,
             lb,
         })
     }
@@ -169,7 +125,7 @@ mod tests {
             "minRingSize": 100
         });
         let obj: LbPolicy = serde_json::from_value(test_json.clone()).unwrap();
-        let output_json = serde_json::to_value(&obj).unwrap();
+        let output_json = serde_json::to_value(obj).unwrap();
         assert_eq!(test_json, output_json);
     }
 
@@ -182,7 +138,7 @@ mod tests {
             }
         });
         let obj: Backend = serde_json::from_value(test_json.clone()).unwrap();
-        let output_json = serde_json::to_value(&obj).unwrap();
+        let output_json = serde_json::to_value(obj).unwrap();
         assert_eq!(test_json, output_json);
     }
 }

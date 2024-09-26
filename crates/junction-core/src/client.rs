@@ -9,8 +9,8 @@ use std::time::Duration;
 use std::{collections::HashMap, future::Future};
 
 struct DefaultCluster {
-    // the arc here is completely unnecessary in true utility
-    // but makes the match code much simpler
+    // the arc here is completely unnecessary in true utility but makes the
+    // match code much simpler
     pub load_balancer: Arc<crate::config::LoadBalancer>,
 }
 
@@ -41,12 +41,12 @@ pub struct Client {
 
 impl Clone for Client {
     fn clone(&self) -> Self {
-        return Self {
+        Self {
             ads: self.ads.clone(),
             _ads_task: self._ads_task.clone(),
             default_routes: HashMap::default(),
             default_backends: HashMap::default(),
-        };
+        }
     }
 }
 
@@ -58,8 +58,8 @@ impl Client {
     /// shares with an existing cache, call [Client::clone] on an existing
     /// client.
     ///
-    /// This function assumes that you're currently running the context of
-    /// a `tokio` runtime and spawns background tasks.
+    /// This function assumes that you're currently running the context of a
+    /// `tokio` runtime and spawns background tasks.
     pub async fn build(
         address: String,
         node_id: String,
@@ -96,8 +96,6 @@ impl Client {
         default_routes: Vec<Route>,
         default_backends: Vec<Backend>,
     ) -> Client {
-        //fixme: should validate defaults here
-
         let default_routes = default_routes
             .into_iter()
             .map(|x| (x.attachment.as_listener_xds_name(), x))
@@ -116,13 +114,20 @@ impl Client {
         }
     }
 
+    fn _validate_defaults(
+        _default_routes: &[Route],
+        _default_backends: &[Backend],
+    ) -> Result<(), crate::Error> {
+        Ok(())
+    }
+
     fn subscribe_to_defaults(&self) {
-        for route in &self.default_routes {
+        for (route_name, route) in &self.default_routes {
             self.ads
-                .subscribe(xds::ResourceType::Listener, route.0.to_string())
+                .subscribe(xds::ResourceType::Listener, route_name.to_string())
                 .unwrap();
 
-            for rule in &route.1.rules {
+            for rule in &route.rules {
                 for backend in &rule.backends {
                     self.ads
                         .subscribe(
@@ -164,8 +169,8 @@ impl Client {
             .ads
             .subscribe(xds::ResourceType::Listener, url.hostname().to_string());
 
-        // FIXME: this is deeply janky, manual exponential backoff. it should
-        // be possible for the ADS client to signal when a cache entry is
+        // FIXME: this is deeply janky, manual exponential backoff. it should be
+        // possible for the ADS client to signal when a cache entry is
         // available/pending a request/not found instead of just there/not.
         //
         // make that happen, and figure out if there is a way to notify when
@@ -208,10 +213,10 @@ impl Client {
         let key_with_port = Attachment::from_hostname(url.hostname(), Some(url.port()));
         let key_no_port = Attachment::from_hostname(url.hostname(), None);
 
-        // FIXME: for now, the default routes are only looked up if there is
-        // no route coming from XDS. Whereas in reality we likely want to merge the
-        // values. However that requires some thinking about what it means at the rule
-        // equivalence level and is so left for later.
+        // FIXME: for now, the default routes are only looked up if there is no
+        // route coming from XDS. Whereas in reality we likely want to merge the
+        // values. However that requires some thinking about what it means at
+        // the rule equivalence level and is so left for later.
         let arc_holder;
         let matching_route_xds = self
             .ads
@@ -249,8 +254,8 @@ impl Client {
                 .expect("tried to sample from an invalid config")
         });
 
-        // if backend has no port, then then we need to fill in the default which
-        // is the port of the request
+        // if backend has no port, then then we need to fill in the default
+        // which is the port of the request
         let backend_id = match backend.attachment.port() {
             Some(_) => backend.attachment.clone(),
             None => backend.attachment.with_port(url.port()),
@@ -258,11 +263,10 @@ impl Client {
 
         let (lb, endpoints) = match self.ads.get_target(&backend_id) {
             (Some(lb), Some(endpoints)) => {
-                // if the load balancer is simple, we allow a default
-                // to overload
                 // FIXME(ports): should we also allow a default without
                 // a port set to overload
                 match lb.as_ref() {
+                    // if the load balancer is unspecified, we allow a default to overload
                     crate::config::LoadBalancer::Unspecified(_) => {
                         match self.default_backends.get(&backend_id.as_cluster_xds_name()) {
                             Some(x) => (x.load_balancer.clone(), endpoints),
@@ -272,11 +276,6 @@ impl Client {
                     _ => (lb, endpoints),
                 }
             }
-            (Some(_), None) => {
-                // FIXME(DNS): this might be something we want to handle
-                // depending on exactly where DNS lookups get implemented
-                return Err((url, crate::Error::NoEndpoints));
-            }
             (None, Some(endpoints)) => {
                 match self.default_backends.get(&backend_id.as_cluster_xds_name()) {
                     Some(x) => (x.load_balancer.clone(), endpoints),
@@ -285,10 +284,15 @@ impl Client {
                     }
                 }
             }
+            (Some(_), None) => {
+                // FIXME(DNS): this might be something we want to handle
+                // depending on exactly where DNS lookups get implemented
+                return Err((url, crate::Error::NoEndpoints));
+            }
             (None, None) => {
-                // FIXME(DNS): in this case, we still need to check client defaults
-                // as its entirly possible its a DNS address that xDS knows nothing about
-                // but we can still route to.
+                // FIXME(DNS): in this case, we still need to check client
+                // defaults as its entirly possible its a DNS address that xDS
+                // knows nothing about but we can still route to.
                 return Err((url, crate::Error::NoEndpoints));
             }
         };
@@ -310,7 +314,8 @@ impl Client {
     }
 }
 
-//FIXME(routing): picking between these is way more complicated than finding the first match
+//FIXME(routing): picking between these is way more complicated than finding the
+//first match
 pub fn find_matching_rule<'a>(
     route: &'a Route,
     method: &http::Method,
