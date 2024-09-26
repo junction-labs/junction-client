@@ -1,6 +1,8 @@
 use junction_api_types::{
     backend::{LbPolicy, RingHashParams},
-    http::{SessionAffinityHashParam, SessionAffinityHashParamType, SessionAffinityPolicy},
+    shared::{
+        Attachment, SessionAffinityHashParam, SessionAffinityHashParamType, SessionAffinityPolicy,
+    },
 };
 use std::{
     collections::BTreeMap,
@@ -10,9 +12,7 @@ use std::{
         RwLock,
     },
 };
-use xds_api::pb::envoy::config::{
-    cluster::v3 as xds_cluster, core::v3 as xds_core, endpoint::v3 as xds_endpoint,
-};
+use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
 
 use crate::EndpointAddress;
 
@@ -27,14 +27,12 @@ pub(crate) struct EndpointGroup {
 
 impl EndpointGroup {
     pub(crate) fn from_xds(
-        cluster_type: &xds_cluster::cluster::DiscoveryType,
+        attachment: &Attachment,
         cla: &xds_endpoint::ClusterLoadAssignment,
     ) -> Option<Self> {
-        use xds_cluster::cluster::DiscoveryType;
-
-        let make_address = match cluster_type {
-            DiscoveryType::Static | DiscoveryType::Eds => EndpointAddress::from_socket_addr,
-            _ => EndpointAddress::from_dns_name,
+        let make_address = match attachment {
+            Attachment::DNS(_) => EndpointAddress::from_socket_addr,
+            Attachment::Service(_) => EndpointAddress::from_dns_name,
         };
 
         let mut endpoints = BTreeMap::new();
@@ -113,7 +111,8 @@ impl Locality {
 }
 
 #[derive(Debug)]
-pub(crate) enum LoadBalancer {
+pub enum LoadBalancer {
+    Unspecified(UnspecifiedLb),
     RoundRobin(RoundRobinLb),
     RingHash(RingHashLb),
 }
@@ -123,30 +122,39 @@ impl LoadBalancer {
         &self,
         url: &crate::Url,
         headers: &http::HeaderMap,
-        affinity: &Option<SessionAffinityPolicy>,
+        route_affinity: &Option<SessionAffinityPolicy>,
         locality_endpoints: &'ep EndpointGroup,
     ) -> Option<&'ep crate::EndpointAddress> {
         match self {
             LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(locality_endpoints),
-            LoadBalancer::RingHash(lb) => lb.pick_endpoint(
-                url,
-                headers,
-                affinity
-                    .as_ref()
-                    .expect("FIXME should be an error thrown to client about trying to use ring has with no affinity function"),
-                locality_endpoints,
-            ),
+            LoadBalancer::Unspecified(lb) => lb.pick_endpoint(locality_endpoints),
+            LoadBalancer::RingHash(lb) => {
+                let hash_params;
+                if lb.config.hash_params.len() > 0 {
+                    hash_params = &lb.config.hash_params;
+                } else {
+                    if let Some(route_affinity) = route_affinity {
+                        if route_affinity.hash_params.len() > 0 {
+                            hash_params = &route_affinity.hash_params;
+                        } else {
+                            return None; //FIXME: this should be an error
+                        }
+                    } else {
+                        return None; //FIXME: this should be an error
+                    }
+                }
+                lb.pick_endpoint(url, headers, hash_params, locality_endpoints)
+            }
         }
     }
 }
 
 impl LoadBalancer {
-    pub(crate) fn from_xds(cluster: &xds_cluster::Cluster) -> Option<Self> {
-        let config: Option<LbPolicy> = LbPolicy::from_xds(cluster);
+    pub(crate) fn from_config(config: &LbPolicy) -> Self {
         match config {
-            Some(LbPolicy::RoundRobin) => Some(LoadBalancer::RoundRobin(RoundRobinLb::default())),
-            Some(LbPolicy::RingHash(x)) => Some(LoadBalancer::RingHash(RingHashLb::new(&x))),
-            None => None,
+            LbPolicy::RoundRobin => LoadBalancer::RoundRobin(RoundRobinLb::default()),
+            LbPolicy::RingHash(x) => LoadBalancer::RingHash(RingHashLb::new(&x)),
+            LbPolicy::Unspecified => LoadBalancer::Unspecified(UnspecifiedLb::default()),
         }
     }
 }
@@ -157,7 +165,7 @@ impl LoadBalancer {
 //
 // src/core/load_balancing/weighted_round_robin/static_stride_scheduler.cc
 #[derive(Debug, Default)]
-pub(crate) struct RoundRobinLb {
+pub struct RoundRobinLb {
     idx: AtomicUsize,
 }
 
@@ -167,6 +175,22 @@ impl RoundRobinLb {
         let endpoints = endpoint_group.endpoints.get(&Locality::Unknown)?;
         let locality_idx = self.idx.fetch_add(1, Ordering::SeqCst) % endpoints.len();
         Some(&endpoints[locality_idx])
+    }
+}
+
+///
+/// For now when load balanced is unspecified, we just do Round Robin.
+/// There is an argument that maybe we should do something more DNS-like.
+/// FIXME: work out if so
+///
+#[derive(Debug, Default)]
+pub struct UnspecifiedLb(RoundRobinLb);
+impl UnspecifiedLb {
+    fn pick_endpoint<'e>(
+        &self,
+        locality_endpoints: &'e EndpointGroup,
+    ) -> Option<&'e EndpointAddress> {
+        self.0.pick_endpoint(locality_endpoints)
     }
 }
 
@@ -204,11 +228,10 @@ impl RingHashLb {
         &self,
         url: &crate::Url,
         headers: &http::HeaderMap,
-        affinity: &SessionAffinityPolicy,
+        hash_params: &Vec<SessionAffinityHashParam>,
         endpoint_group: &'e EndpointGroup,
     ) -> Option<&'e EndpointAddress> {
-        //the only thing the route can override is the policy
-        let request_hash = hash_request(affinity, url, headers)?;
+        let request_hash = hash_request(hash_params, url, headers)?;
         let endpoint_idx = self.with_ring(endpoint_group, |r| r.pick(request_hash))?;
         endpoint_group.nth(endpoint_idx)
     }
@@ -450,13 +473,13 @@ mod test_ring_hash {
 /// - https://github.com/grpc/proposal/blob/master/A42-xds-ring-hash-lb-policy.md#xds-api-fields
 /// - https://github.com/envoyproxy/envoy/blob/main/source/common/http/hash_policy.cc#L236-L257
 pub(crate) fn hash_request(
-    affinity: &SessionAffinityPolicy,
+    hash_params: &Vec<SessionAffinityHashParam>,
     url: &crate::Url,
     headers: &http::HeaderMap,
 ) -> Option<u64> {
     let mut hash: Option<u64> = None;
 
-    for hash_param in &affinity.hash_params {
+    for hash_param in hash_params {
         if let Some(new_hash) = hash_target(hash_param, url, headers) {
             hash = Some(match hash {
                 Some(hash) => hash.rotate_left(1) ^ new_hash,

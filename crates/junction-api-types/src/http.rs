@@ -1,4 +1,7 @@
-use crate::shared::{Duration, PortNumber, PreciseHostname, Regex, StringMatch};
+use crate::shared::{
+    Attachment, Duration, Fraction, PortNumber, PreciseHostname, Regex, ResolvedBackendReference,
+    SessionAffinityPolicy, StringMatch,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -10,13 +13,14 @@ use junction_typeinfo::TypeInfo;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
-    // fixme: here is where the gateway API allows a Vec<ParentRef>, and we
-    // likely we will need something like it
-    //
+    pub attachment: Attachment,
+
     /// The domains that this applies to. Domains are matched against the
     /// incoming authority of any URL.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hostnames: Vec<String>,
+    /// todo: this is needed eventually to support attaching to gateways
+    /// in the meantime though it just confuses things.
+    //#[serde(default, skip_serializing_if = "Vec::is_empty")]
+    //pub hostnames: Vec<String>,
 
     /// The route rules that determine whether any URLs match.
     pub rules: Vec<RouteRule>,
@@ -72,9 +76,9 @@ pub struct RouteRule {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<RouteFilter>,
 
-    //todo: enable session persistence
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_persistence: Option<SessionPersistence>,
+    //FIXME(persistence): enable session persistence as per the Gateway API
+    //#[serde(default, skip_serializing_if = "Option::is_none")]
+    // pub session_persistence: Option<SessionPersistence>,
 
     // Timeouts defines the timeouts that can be configured for an HTTP request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,81 +90,7 @@ pub struct RouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_policy: Option<RouteRetryPolicy>,
 
-    pub target: RouteTarget,
-    // this is the CRD Version
-    // ```
-    // #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    // pub backend_refs: Vec<HTTPBackendRef>,
-    // ```
-}
-
-/// Defines and configures session persistence for the route rule.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct SessionPersistence {
-    /// Defines the name of the persistent session token which may be reflected
-    /// in the cookie or the header. Avoid reusing session names to prevent
-    /// unintended consequences, such as rejection or unpredictable behavior.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_name: Option<String>,
-
-    /// Defines the absolute timeout of the persistent session. Once the
-    /// AbsoluteTimeout duration has elapsed, the session becomes invalid.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub absolute_timeout: Option<String>,
-
-    /// Provides configuration settings that are specific to cookie-based
-    /// session persistence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cookie_config: Option<SessionPersistenceCookieConfig>,
-
-    /// Defines the idle timeout of the persistent session. Once the session has
-    /// been idle for more than the specified IdleTimeout duration, the session
-    /// becomes invalid.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idle_timeout: Option<Duration>,
-
-    /// Defines the type of session persistence such as through the use a header
-    /// or cookie.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub r#type: Option<SessionPersistenceType>,
-}
-
-/// Provides configuration settings that are specific to cookie-based session
-/// persistence.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct SessionPersistenceCookieConfig {
-    /// Specifies whether the cookie has a permanent or session-based lifetime.
-    /// A permanent cookie persists until its specified expiry time, defined by
-    /// the Expires or Max-Age cookie attributes, while a session cookie is
-    /// deleted when the current session ends.
-    ///
-    /// When set to "Permanent", AbsoluteTimeout indicates the cookie's lifetime
-    /// via the Expires or Max-Age cookie attributes and is required.
-    ///
-    /// When set to "Session", AbsoluteTimeout indicates the absolute lifetime
-    /// of the cookie and is optional.
-    pub lifetime_type: Option<SessionPersistenceCookieLifetimeType>,
-}
-
-/// Provides configuration settings that are specific to cookie-based session
-/// persistence.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub enum SessionPersistenceCookieLifetimeType {
-    Permanent,
-    Session,
-}
-
-/// Defines and configures session persistence for the route rule.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub enum SessionPersistenceType {
-    Cookie,
-    Header,
+    pub backends: Vec<ResolvedBackendReference>,
 }
 
 /// Defines timeouts that can be configured for a http Route. Specifying a zero
@@ -542,25 +472,9 @@ pub struct RequestMirrorFilter {
 
     /// Only one of Fraction or Percent may be specified. If neither field is
     /// specified, 100% of requests will be mirrored.
-    pub fraction: Option<(i32, i32)>,
+    pub fraction: Option<Fraction>,
 
-    pub target: RouteTarget,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(untagged, deny_unknown_fields)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub enum RouteTarget {
-    Cluster(String),
-    WeightedClusters(Vec<WeightedCluster>),
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct WeightedCluster {
-    pub name: String,
-    pub weight: u32,
+    pub backend: Attachment,
 }
 
 /// Specifies a way of configuring client retry policy.
@@ -581,31 +495,6 @@ pub struct RouteRetryPolicy {
     pub backoff: Option<Duration>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
-#[serde(tag = "type")]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub enum SessionAffinityHashParamType {
-    Header { name: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct SessionAffinityHashParam {
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub terminal: bool,
-    #[serde(flatten)]
-    pub matcher: SessionAffinityHashParamType,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct SessionAffinityPolicy {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hash_params: Vec<SessionAffinityHashParam>,
-}
-
 ///
 /// Now get into xDS deserialization for the above
 ///
@@ -615,44 +504,59 @@ use xds_api::pb::envoy::{
 };
 
 impl Route {
-    pub fn from_xds(vhost: &xds_route::VirtualHost) -> Self {
-        let hostnames = vhost.domains.clone();
-        let rules: Vec<_> = vhost
-            .routes
-            .iter()
-            .filter_map(RouteRule::from_xds)
-            .collect();
-
-        Route { hostnames, rules }
+    pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, crate::xds::Error> {
+        let Some(attachment) = Attachment::from_listener_xds_name(&xds.name) else {
+            return Err(crate::xds::Error::InvalidXds {
+                resource_type: "Listener",
+                resource_name: xds.name.clone(),
+                message: "Unable to parse name".to_string(),
+            });
+        };
+        let mut rules = Vec::new();
+        for virtual_host in &xds.virtual_hosts {
+            // todo: as you see, at the moment we totally quash virtual_host and its domains.
+            // When we bring them back for gateways it means is we will need
+            // to return a vector of routes, as the rules are within them
+            for route in &virtual_host.routes {
+                rules.push(RouteRule::from_xds(&route)?);
+            }
+        }
+        Ok(Route { attachment, rules })
     }
 }
 
 impl RouteRule {
-    pub fn from_xds(route: &xds_route::Route) -> Option<Self> {
-        let matches: RouteMatch = route.r#match.as_ref().and_then(RouteMatch::from_xds)?;
-
+    pub fn from_xds(route: &xds_route::Route) -> Result<Self, crate::xds::Error> {
+        let Some(matches) = route.r#match.as_ref().and_then(RouteMatch::from_xds) else {
+            return Err(crate::xds::Error::InvalidXds {
+                resource_type: "Route",
+                resource_name: route.name.to_string(),
+                message: "Unable to parse route".to_string(),
+            });
+        };
         let Some(xds_route::route::Action::Route(action)) = route.action.as_ref() else {
-            return None; //FIXME: is this really the right thing to do once we support filters?
+            return Err(crate::xds::Error::InvalidXds {
+                resource_type: "Route",
+                resource_name: route.name.to_string(),
+                message: "Unable to parse route action".to_string(),
+            });
         };
 
         let timeouts: Option<RouteTimeouts> = RouteTimeouts::from_xds(action);
 
         let retry_policy = action.retry_policy.as_ref().map(RouteRetryPolicy::from_xds);
 
-        let session_persistence = None; //FIXME: fill this from xds
-
         let session_affinity = SessionAffinityPolicy::from_xds(&action.hash_policy);
 
-        let target = RouteTarget::from_xds(action.cluster_specifier.as_ref()?)?;
+        let backends = ResolvedBackendReference::from_xds(action.cluster_specifier.as_ref())?;
 
-        Some(RouteRule {
+        Ok(RouteRule {
             matches: vec![matches],
             retry_policy,
             filters: vec![],
             session_affinity,
             timeouts,
-            target,
-            session_persistence,
+            backends,
         })
     }
 }
@@ -821,65 +725,6 @@ impl RouteRetryPolicy {
     }
 }
 
-impl RouteTarget {
-    fn from_xds(cluster_spec: &xds_route::route_action::ClusterSpecifier) -> Option<Self> {
-        match &cluster_spec {
-            xds_route::route_action::ClusterSpecifier::Cluster(name) => {
-                Some(Self::Cluster(name.clone()))
-            }
-            xds_route::route_action::ClusterSpecifier::WeightedClusters(weighted_cluster) => {
-                let named_and_weights = weighted_cluster
-                    .clusters
-                    .iter()
-                    .map(|w| WeightedCluster {
-                        name: w.name.clone(),
-                        weight: crate::value_or_default!(w.weight, 0),
-                    })
-                    .collect();
-
-                Some(Self::WeightedClusters(named_and_weights))
-            }
-            _ => None,
-        }
-    }
-}
-
-impl SessionAffinityHashParam {
-    //only returns session affinity
-    pub fn from_xds(hash_policy: &xds_route::route_action::HashPolicy) -> Option<Self> {
-        use xds_route::route_action::hash_policy::PolicySpecifier;
-
-        match hash_policy.policy_specifier.as_ref() {
-            Some(PolicySpecifier::Header(h)) => Some(SessionAffinityHashParam {
-                terminal: hash_policy.terminal,
-                matcher: SessionAffinityHashParamType::Header {
-                    name: h.header_name.clone(),
-                },
-            }),
-            _ => {
-                //FIXME; thrown away config
-                None
-            }
-        }
-    }
-}
-
-impl SessionAffinityPolicy {
-    //only returns session affinity
-    pub fn from_xds(hash_policy: &[xds_route::route_action::HashPolicy]) -> Option<Self> {
-        let hash_params: Vec<_> = hash_policy
-            .iter()
-            .filter_map(SessionAffinityHashParam::from_xds)
-            .collect();
-
-        if hash_params.is_empty() {
-            None
-        } else {
-            Some(SessionAffinityPolicy { hash_params })
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -887,13 +732,13 @@ mod tests {
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
-    use super::{
-        Route, RouteRetryPolicy, RouteTarget, SessionAffinityHashParam,
-        SessionAffinityHashParamType,
-    };
+    use super::{Route, RouteRetryPolicy};
     use crate::{
         http::{HeaderMatch, RouteRule, SessionAffinityPolicy},
-        shared::Regex,
+        shared::{
+            Attachment, Regex, ResolvedBackendReference, ServiceAttachment,
+            SessionAffinityHashParam, SessionAffinityHashParamType,
+        },
     };
 
     #[test]
@@ -922,19 +767,6 @@ mod tests {
             ]
         );
 
-        let output_json = serde_json::to_value(&obj).unwrap();
-        assert_eq!(test_json, output_json);
-    }
-
-    #[test]
-    fn parses_session_affinity_policy() {
-        let test_json = json!({
-            "hashParams": [
-                { "type": "Header", "name": "FOO",  "terminal": true },
-                { "type": "Header", "name": "FOO"}
-            ]
-        });
-        let obj: SessionAffinityPolicy = serde_json::from_value(test_json.clone()).unwrap();
         let output_json = serde_json::to_value(&obj).unwrap();
         assert_eq!(test_json, output_json);
     }
@@ -977,7 +809,7 @@ mod tests {
                     "path":{ "type":"ReplacePrefixMatch", "replacePrefixMatch":"/" }
                 }
             }],
-            "target":[
+            "backends":[
                 { "weight": 1, "name": "timeout-svc" }
             ],
             "timeouts": {
@@ -993,23 +825,31 @@ mod tests {
     fn minimal_route() {
         assert_deserialize(
             json!({
-                "hostnames": ["foo.bar"],
+                "attachment": { "name": "foobar" },
                 "rules": [
                     {
-                        "target": "foo.bar",
+                        "backends": [ { "name": "foobar" } ],
                     }
                 ]
             }),
             Route {
-                hostnames: vec!["foo.bar".to_string()],
+                attachment: Attachment::Service(ServiceAttachment {
+                    name: "foobar".to_string(),
+                    ..Default::default()
+                }),
                 rules: vec![RouteRule {
                     matches: vec![],
                     filters: vec![],
                     timeouts: None,
-                    session_persistence: None,
                     session_affinity: None,
                     retry_policy: None,
-                    target: RouteTarget::Cluster("foo.bar".to_string()),
+                    backends: vec![ResolvedBackendReference {
+                        attachment: Attachment::Service(ServiceAttachment {
+                            name: "foobar".to_string(),
+                            ..Default::default()
+                        }),
+                        weight: 1,
+                    }],
                 }],
             },
         );

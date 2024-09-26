@@ -7,6 +7,9 @@ use serde::de::{self, Visitor};
 use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
+use xds_api::pb::envoy::config::route::v3 as xds_route;
+
+use crate::value_or_default;
 
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
@@ -20,8 +23,12 @@ pub type PreciseHostname = String;
 pub type PortNumber = u16;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub enum BackendKind {
-    Service,
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct Fraction {
+    pub numberator: i32,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deonomindator: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -813,64 +820,305 @@ mod test_duration {
     }
 }
 
-///
-/// Everything below is preserved from gateway API types, and may be completely
-/// unnecessary if we dont use its "ref" concept in Junction's API.
-///
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct ServiceAttachment {
+    ///
+    /// The name of the Kubernetes Service
+    ///
+    pub name: String,
+
+    ///
+    /// The namespace of the Kubernetes service.
+    /// FIXME(namespace): what should the semantic be when this is not specified:
+    /// default, namespace of client, namespace of EZbake?
+    ///
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+
+    ///
+    /// The port number of the Kubernetes service to target/
+    /// attach to.
+    ///
+    /// When attaching policies, if it is not specified, the
+    /// attachment will apply to all connections that don't have a specific
+    /// port specified.
+    ///
+    /// When being used to lookup a backend after a matched rule,
+    /// if it is not specified then it will use the same port as the incoming request
+    ///
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<PortNumber>,
+    // FIXME(gateway): Section of the gateway API to attach to
+    // todo: this is needed eventually to support attaching to gateways
+    // in the meantime though it just confuses things.
+    //#[serde(default, skip_serializing_if = "Option::is_none")]
+    //pub section_name: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct DNSAttachment {
+    ///
+    /// The DNS Name to target/attach to
+    ///
+    pub hostname: PreciseHostname,
+
+    ///
+    /// The port number to target/attach to.
+    ///
+    /// When attaching policies, if it is not specified, the
+    /// attachment will apply to all connections that don't have a specific
+    /// port specified.
+    ///
+    /// When being used to lookup a backend after a matched rule,
+    /// if it is not specified then it will use the same port as the incoming request
+    ///
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<PortNumber>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub enum Attachment {
+    DNS(DNSAttachment),
+    #[serde(untagged)]
+    Service(ServiceAttachment),
+}
+
+static KUBE_SERVICE_SUFFIX: &str = ".svc.cluster.local";
+
+///
+///  FIXME(ports): nothing with ports here will work until we move to xdstp
+///
+///  FIXME(DNS): For kube service hostnames, forcing the use of the ".svc.cluster.local"
+///  suffix is icky,in that it stops the current k8s behavoiur of clients sending a request
+///  to http://service_name, and having the namespace resolved based on where
+///  the client is running.
+///
+///  However without it, we are going to have a hard time here saying when an incoming
+///  hostname is targeted at DNS, vs when it is targeted at a kube service. That might
+///  not be a problem though, in that if we can process XDS NACKs, we can use something
+///  at a higher level to work out what it is.
+///
+///  So punting thinking more about this until we support DNS properly.
+///
+impl Attachment {
+    pub fn hostname(&self) -> String {
+        match self {
+            Attachment::DNS(c) => c.hostname.clone(),
+            Attachment::Service(c) => match &c.namespace {
+                Some(x) => format!("{}.{}{}", c.name, x, KUBE_SERVICE_SUFFIX),
+                None => format!("{}{}", c.name, KUBE_SERVICE_SUFFIX), //as per above discusstion, this is not right
+            },
+        }
+    }
+
+    pub fn from_hostname(hostname: &str, port: Option<u16>) -> Self {
+        if hostname.ends_with(KUBE_SERVICE_SUFFIX) {
+            let mut parts = hostname.split(".");
+            let name = parts.next().unwrap().to_string();
+            let namespace = parts.next().map(|x| x.to_string());
+            return Attachment::Service(ServiceAttachment {
+                name,
+                namespace,
+                port,
+            });
+        } else {
+            return Attachment::DNS(DNSAttachment {
+                hostname: hostname.to_string(),
+                port: port,
+            });
+        }
+    }
+
+    // FIXME(DNS): no reason we cannot support DNS here, but likely it should
+    // be determined by whats in the cluster config so passed as a extra parameter
+    pub fn from_cluster_xds_name(name: &str) -> Result<Self, crate::xds::Error> {
+        let parts: Vec<&str> = name.split("/").collect();
+        if parts.len() == 3 && parts[2].eq("cluster") {
+            return Ok(Attachment::Service(ServiceAttachment {
+                name: parts[1].to_string(),
+                namespace: Some(parts[0].to_string()),
+                port: None,
+            }));
+        } else {
+            return Err(crate::xds::Error::InvalidXds {
+                resource_type: "Cluster",
+                resource_name: name.to_string(),
+                message: "Unable to parse name".to_string(),
+            });
+        }
+    }
+
+    pub fn get_cluster_xds_name(&self) -> String {
+        match self {
+            Attachment::DNS(c) => c.hostname.clone(),
+            Attachment::Service(c) => match &c.namespace {
+                Some(x) => format!("{}/{}/cluster", x, c.name),
+                None => format!("{}/cluster", c.name),
+            },
+        }
+    }
+
+    pub fn from_listener_xds_name(name: &str) -> Option<Self> {
+        //for now, the listener name is just the hostname
+        Some(Self::from_hostname(name, None))
+    }
+
+    pub fn get_listener_xds_name(&self) -> String {
+        //FIXME(ports): for now this is just the hostname, with no support for port
+        self.hostname()
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        match self {
+            Attachment::DNS(c) => return c.port,
+            //FIXME(namespace): work out what to do if namespace is optional
+            Attachment::Service(c) => return c.port,
+        }
+    }
+
+    pub fn with_port(&self, port: u16) -> Self {
+        match self {
+            Attachment::DNS(c) => Attachment::DNS(DNSAttachment {
+                port: Some(port),
+                hostname: c.hostname.clone(),
+            }),
+
+            Attachment::Service(c) => Attachment::Service(ServiceAttachment {
+                port: Some(port),
+                name: c.name.clone(),
+                namespace: c.namespace.clone(),
+            }),
+        }
+    }
+}
+
+const WEIGHT_DEFAULT: u32 = 1;
+fn weight_default() -> u32 {
+    WEIGHT_DEFAULT
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct ResolvedBackendReference {
+    #[serde(default = "weight_default")]
+    pub weight: u32,
+
+    #[serde(flatten)]
+    pub attachment: Attachment,
+    //Todo: gateway API also allows filters here under an extended support condition
+    // we need to decide whether this is one where its simpler just to drop it.
+}
+
+impl ResolvedBackendReference {
+    pub(crate) fn from_xds(
+        xds: Option<&xds_route::route_action::ClusterSpecifier>,
+    ) -> Result<Vec<Self>, crate::xds::Error> {
+        match xds {
+            Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => Ok(vec![Self {
+                attachment: Attachment::from_cluster_xds_name(&name)?,
+                weight: 1,
+            }]),
+            Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(weighted_cluster)) => {
+                let mut ret: Vec<_> = vec![];
+                for w in &weighted_cluster.clusters {
+                    ret.push(Self {
+                        attachment: Attachment::from_cluster_xds_name(&w.name)?,
+                        weight: value_or_default!(w.weight, 1),
+                    })
+                }
+                Ok(ret)
+            }
+            _ => {
+                return Err(crate::xds::Error::InvalidXds {
+                    resource_type: "Cluster",
+                    resource_name: "".to_string(), //ideally the xds enum would support a to_string here
+                    message: "Unable to parse specifier".to_string(),
+                });
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub enum SessionAffinityHashParamType {
+    Header { name: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ParentRef {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-
-    pub name: String,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<PortNumber>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub section_name: Option<String>,
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct SessionAffinityHashParam {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terminal: bool,
+    #[serde(flatten)]
+    pub matcher: SessionAffinityHashParamType,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct BackendRef {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub weight: Option<u16>,
-
-    pub kind: BackendKind,
-
-    pub name: String,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-
-    // Port specifies the destination port number to use for this resource.
-    /// Port is required when the referent is a Kubernetes Service or DNS name
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<PortNumber>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct SessionAffinityPolicy {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hash_params: Vec<SessionAffinityHashParam>,
 }
 
-///
-/// this is what the gateway api uses for a mirror filter.
-///
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct MirrorBackendRef {
-    pub kind: BackendKind,
+impl SessionAffinityHashParam {
+    //only returns session affinity
+    pub fn from_xds(hash_policy: &xds_route::route_action::HashPolicy) -> Option<Self> {
+        use xds_route::route_action::hash_policy::PolicySpecifier;
 
-    pub name: String,
+        match hash_policy.policy_specifier.as_ref() {
+            Some(PolicySpecifier::Header(h)) => Some(SessionAffinityHashParam {
+                terminal: hash_policy.terminal,
+                matcher: SessionAffinityHashParamType::Header {
+                    name: h.header_name.clone(),
+                },
+            }),
+            _ => {
+                //FIXME; thrown away config
+                None
+            }
+        }
+    }
+}
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
+impl SessionAffinityPolicy {
+    //only returns session affinity
+    pub fn from_xds(hash_policy: &[xds_route::route_action::HashPolicy]) -> Option<Self> {
+        let hash_params: Vec<_> = hash_policy
+            .iter()
+            .filter_map(SessionAffinityHashParam::from_xds)
+            .collect();
 
-    // Port specifies the destination port number to use for this resource.
-    /// Port is required when the referent is a Kubernetes Service or DNS name
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<PortNumber>,
+        if hash_params.is_empty() {
+            None
+        } else {
+            Some(SessionAffinityPolicy { hash_params })
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_session_affinity {
+    use crate::shared::SessionAffinityPolicy;
+    use serde_json::json;
+
+    #[test]
+    fn parses_session_affinity_policy() {
+        let test_json = json!({
+            "hashParams": [
+                { "type": "Header", "name": "FOO",  "terminal": true },
+                { "type": "Header", "name": "FOO"}
+            ]
+        });
+        let obj: SessionAffinityPolicy = serde_json::from_value(test_json.clone()).unwrap();
+        let output_json = serde_json::to_value(&obj).unwrap();
+        assert_eq!(test_json, output_json);
+    }
 }

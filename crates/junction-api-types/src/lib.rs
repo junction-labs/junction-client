@@ -2,6 +2,7 @@ pub mod backend;
 pub mod crd;
 pub mod http;
 pub mod shared;
+pub mod xds;
 
 macro_rules! value_or_default {
     ($value:expr, $default:expr) => {

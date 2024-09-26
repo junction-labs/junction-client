@@ -1,7 +1,7 @@
 use std::{env, net::IpAddr, str::FromStr};
 
 use http::Uri;
-use junction_api_types::http::Route;
+use junction_api_types::{backend::Backend, http::Route};
 use junction_core::ResourceVersion;
 use once_cell::sync::Lazy;
 use pyo3::{
@@ -42,6 +42,10 @@ pub struct Endpoint {
     #[pyo3(get)]
     request_uri: String,
 
+    ///
+    /// FIXME: this works fine if you keep want to retyring the one address,
+    /// but best practices is to vary the addresses on a retry
+    ///
     #[pyo3(get)]
     retry_policy: Option<RetryPolicy>,
 
@@ -224,7 +228,6 @@ fn new_client(
         ads_address,
         node_name,
         cluster_name,
-        vec![],
     ))
     .map_err(|e| {
         let error_message = match e.source() {
@@ -276,6 +279,17 @@ fn default_routes(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Route>> {
     Ok(routes)
 }
 
+fn default_backends(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Backend>> {
+    let Some(kwargs) = kwargs else {
+        return Ok(Vec::new());
+    };
+    let routes = match kwargs.get_item("default_backends")? {
+        Some(default_backends) => pythonize::depythonize_bound(default_backends)?,
+        None => Vec::new(),
+    };
+    Ok(routes)
+}
+
 static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
     let ads = default_ads_server(None)?;
     let (node, cluster) = default_node_info(None)?;
@@ -296,9 +310,10 @@ static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
 #[pyo3(signature = (**kwargs))]
 fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
     let routes = default_routes(kwargs)?;
+    let backends = default_backends(kwargs)?;
     match DEFAULT_CLIENT.as_ref() {
         Ok(default_client) => {
-            let core = default_client.clone().with_default_routes(routes);
+            let core = default_client.clone().with_defaults(routes, backends);
             Ok(Junction { core })
         }
         Err(e) => Err(PyRuntimeError::new_err(e)),
@@ -315,10 +330,11 @@ impl Junction {
         let ads = default_ads_server(kwargs)?;
         let (node, cluster) = default_node_info(kwargs)?;
         let routes = default_routes(kwargs)?;
+        let backends = default_backends(kwargs)?;
 
         match new_client(ads, node, cluster) {
             Ok(client) => {
-                let core = client.with_default_routes(routes);
+                let core = client.with_defaults(routes, backends);
                 Ok(Junction { core })
             }
             Err(e) => Err(PyRuntimeError::new_err(e)),

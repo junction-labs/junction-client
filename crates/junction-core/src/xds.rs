@@ -26,17 +26,15 @@
 //- Support the Envoy LRS protocol for sending load back to the control plane.
 //  https://www.envoyproxy.io/docs/envoy/latest/start/sandboxes/load-reporting-service.html
 
-use std::{fmt::Debug, io::ErrorKind, sync::Arc, time::Duration};
-
 use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::TryStreamExt;
-use junction_api_types::http::Route;
+use junction_api_types::{http::Route, shared::Attachment};
+use std::{io::ErrorKind, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Endpoint;
-
 use tracing::debug;
 use xds_api::pb::{
     envoy::{
@@ -63,22 +61,6 @@ mod test;
 use crate::config;
 
 // FIXME: nonce is global for a conneciton, not per resource type????
-
-/// An error that occurred while handling an XDS message.
-///
-/// These errors are built while decoding, validating, and transforming XDS and
-/// may be exposed to clients via debug outputs or ADS servers via XDS NACKs.
-#[derive(Clone, Debug, thiserror::Error)]
-// TODO: unsupported xds as a variant?
-// TODO: might be nice to include some constructors that do type URL things with type magick
-pub(crate) enum Error {
-    #[error("invalid xds: {resource_name} '{resource_type}': {message}")]
-    InvalidXds {
-        resource_type: &'static str,
-        resource_name: String,
-        message: String,
-    },
-}
 
 #[derive(Clone)]
 pub struct AdsClient {
@@ -132,18 +114,18 @@ impl AdsClient {
         Ok((client, task))
     }
 
-    pub fn get_routes(&self, name: &str) -> Option<Arc<Vec<Route>>> {
-        self.cache.get_routes(name)
+    pub fn get_route(&self, attachment: &Attachment) -> Option<Arc<Route>> {
+        self.cache.get_route(attachment)
     }
 
     pub fn get_target(
         &self,
-        name: &str,
+        attachment: &Attachment,
     ) -> (
         Option<Arc<config::LoadBalancer>>,
         Option<Arc<config::EndpointGroup>>,
     ) {
-        self.cache.get_target(name)
+        self.cache.get_target(attachment)
     }
 
     pub fn subscribe(&self, resource_type: ResourceType, name: String) -> Result<(), ()> {
@@ -566,10 +548,10 @@ mod test_ads_conn {
         cache.insert(
             "123".into(),
             ResourceVec::Listener(vec![xds_test::listener!(
-                "nginx.default.local" => [xds_test::vhost!(
+                "nginx.default.svc.cluster.local" => [xds_test::vhost!(
                     "default",
-                    ["nginx.default.local"],
-                    [xds_test::route!(default "nginx.default.local"),],
+                    ["nginx.default.svc.cluster.local"],
+                    [xds_test::route!(default "default/nginx/cluster"),],
                 )],
             )]),
         );
@@ -582,20 +564,20 @@ mod test_ads_conn {
                     t = ResourceType::Cluster,
                     v = "",
                     n = "",
-                    rs = vec!["nginx.default.local"]
+                    rs = vec!["default/nginx/cluster"]
                 ),
                 xds_test::req!(
                     t = ResourceType::Listener,
                     v = "",
                     n = "",
-                    rs = vec!["nginx.default.local"]
+                    rs = vec!["nginx.default.svc.cluster.local"]
                 ),
             ]
         );
 
         cache.insert(
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(eds "nginx.default.local")]),
+            ResourceVec::Cluster(vec![xds_test::cluster!(eds "default/nginx/cluster")]),
         );
 
         let (_, outgoing) = AdsConnection::new(&mut cache);
@@ -606,19 +588,19 @@ mod test_ads_conn {
                     t = ResourceType::Cluster,
                     v = "",
                     n = "",
-                    rs = vec!["nginx.default.local"]
+                    rs = vec!["default/nginx/cluster"]
                 ),
                 xds_test::req!(
                     t = ResourceType::ClusterLoadAssignment,
                     v = "",
                     n = "",
-                    rs = vec!["nginx.default.local"]
+                    rs = vec!["default/nginx/cluster"]
                 ),
                 xds_test::req!(
                     t = ResourceType::Listener,
                     v = "",
                     n = "",
-                    rs = vec!["nginx.default.local"]
+                    rs = vec!["nginx.default.svc.cluster.local"]
                 ),
             ]
         );
@@ -631,25 +613,25 @@ mod test_ads_conn {
 
         let request = conn.handle_subscription_update(SubscriptionUpdate::Add(
             ResourceType::Listener,
-            "nginx.default.local".to_string(),
+            "nginx.default.svc.cluster.local".to_string(),
         ));
         assert_eq!(
             request,
             Some(xds_test::req!(
                 t = ResourceType::Listener,
-                rs = vec!["nginx.default.local"]
+                rs = vec!["nginx.default.svc.cluster.local"]
             )),
         );
 
         let request = conn.handle_subscription_update(SubscriptionUpdate::Add(
             ResourceType::Cluster,
-            "nginx.default.local".to_string(),
+            "default/nginx/cluster".to_string(),
         ));
         assert_eq!(
             request,
             Some(xds_test::req!(
                 t = ResourceType::Cluster,
-                rs = vec!["nginx.default.local"]
+                rs = vec!["default/nginx/cluster"]
             )),
         );
     }
@@ -661,13 +643,13 @@ mod test_ads_conn {
 
         let request = conn.handle_subscription_update(SubscriptionUpdate::Add(
             ResourceType::Listener,
-            "nginx.default.local".to_string(),
+            "nginx.default.svc.cluster.local".to_string(),
         ));
         assert_eq!(
             request,
             Some(xds_test::req!(
                 t = ResourceType::Listener,
-                rs = vec!["nginx.default.local"]
+                rs = vec!["nginx.default.svc.cluster.local"]
             ))
         );
 
@@ -675,10 +657,10 @@ mod test_ads_conn {
             "v1",
             "n1",
             vec![xds_test::listener!(
-                "nginx.default.local" => [xds_test::vhost!(
+                "nginx.default.svc.cluster.local" => [xds_test::vhost!(
                     "default",
-                    ["nginx.default.local"],
-                    [xds_test::route!(default "nginx.default.local"),],
+                    ["nginx.default.svc.cluster.local"],
+                    [xds_test::route!(default "default/nginx/cluster"),],
                 )],
             )],
         ));
@@ -691,21 +673,21 @@ mod test_ads_conn {
                     ResourceType::Listener,
                     "v1",
                     "n1",
-                    vec!["nginx.default.local"]
+                    vec!["nginx.default.svc.cluster.local"]
                 ),
                 // request the cluster that it targets. will have no version or nonce
                 xds_test::discovery_request(
                     ResourceType::Cluster,
                     "",
                     "",
-                    vec!["nginx.default.local"]
+                    vec!["default/nginx/cluster"]
                 ),
             ]
         );
 
         assert_eq!(
             conn.cache.subscriptions(ResourceType::Cluster),
-            vec!["nginx.default.local"],
+            vec!["default/nginx/cluster"],
         );
     }
 
@@ -718,11 +700,11 @@ mod test_ads_conn {
         assert_eq!(
             conn.handle_subscription_update(SubscriptionUpdate::Add(
                 ResourceType::Listener,
-                "nginx.default.local".to_string(),
+                "nginx.default.svc.cluster.local".to_string(),
             )),
             Some(xds_test::req!(
                 t = ResourceType::Listener,
-                rs = vec!["nginx.default.local"]
+                rs = vec!["nginx.default.svc.cluster.local"]
             ))
         );
 
@@ -731,12 +713,12 @@ mod test_ads_conn {
             "v1",
             "n1",
             vec![xds_test::listener!(
-                "nginx.default.local" => [xds_test::vhost!(
+                "nginx.default.svc.cluster.local" => [xds_test::vhost!(
                     "default",
-                    ["nginx.default.local"],
+                    ["nginx.default.svc.cluster.local"],
                     [
-                        xds_test::route!(header "x-staging" => "nginx-staging.default.local"),
-                        xds_test::route!(default "nginx.default.local"),
+                        xds_test::route!(header "x-staging" => "default/nginx-staging/cluster"),
+                        xds_test::route!(default "default/nginx/cluster"),
                     ],
                 )],
             )],
@@ -746,8 +728,8 @@ mod test_ads_conn {
         assert_eq!(
             requests,
             vec![
-                xds_test::req!(t = ResourceType::Listener, v = "v1", n = "n1", rs = vec!["nginx.default.local"]),
-                xds_test::req!(t = ResourceType::Cluster, v = "", n = "", rs = vec!["nginx-staging.default.local", "nginx.default.local"]),
+                xds_test::req!(t = ResourceType::Listener, v = "v1", n = "n1", rs = vec!["nginx.default.svc.cluster.local"]),
+                xds_test::req!(t = ResourceType::Cluster, v = "", n = "", rs = vec!["default/nginx-staging/cluster", "default/nginx/cluster"]),
             ]
         );
 
@@ -759,14 +741,14 @@ mod test_ads_conn {
         let requests = conn.handle_ads_message(xds_test::discovery_response(
             "v1",
             "n2",
-            vec![xds_test::cluster_eds("nginx.default.local")],
+            vec![xds_test::cluster_eds("default/nginx/cluster")],
         ));
         #[rustfmt::skip]
         assert_eq!(
             requests,
             vec![
-                xds_test::req!(t = ResourceType::Cluster, v = "v1", n = "n2", rs = vec!["nginx-staging.default.local", "nginx.default.local"]),
-                xds_test::req!(t = ResourceType::ClusterLoadAssignment, rs = vec!["nginx.default.local"]),
+                xds_test::req!(t = ResourceType::Cluster, v = "v1", n = "n2", rs = vec!["default/nginx-staging/cluster", "default/nginx/cluster"]),
+                xds_test::req!(t = ResourceType::ClusterLoadAssignment, rs = vec!["default/nginx/cluster"]),
             ],
             "cluster request should include all resources",
         );
@@ -776,16 +758,16 @@ mod test_ads_conn {
             "v1",
             "n3",
             vec![
-                xds_test::cluster!(eds "nginx.default.local"),
-                xds_test::cluster!(eds "nginx-staging.default.local"),
+                xds_test::cluster!(eds "default/nginx/cluster"),
+                xds_test::cluster!(eds "default/nginx-staging/cluster"),
             ],
         ));
         #[rustfmt::skip]
         assert_eq!(
             requests,
             vec![
-                xds_test::req!(t = ResourceType::Cluster, v = "v1", n = "n3", rs = vec!["nginx-staging.default.local", "nginx.default.local"]),
-                xds_test::req!(t = ResourceType::ClusterLoadAssignment, rs = vec!["nginx.default.local", "nginx-staging.default.local"]),
+                xds_test::req!(t = ResourceType::Cluster, v = "v1", n = "n3", rs = vec!["default/nginx-staging/cluster", "default/nginx/cluster"]),
+                xds_test::req!(t = ResourceType::ClusterLoadAssignment, rs = vec!["default/nginx/cluster", "default/nginx-staging/cluster"]),
             ],
             "clusters should get acked again",
         );

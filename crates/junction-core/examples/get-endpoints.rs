@@ -1,7 +1,7 @@
 use http::HeaderValue;
 use junction_api_types::{
     http::*,
-    shared::{Regex, StringMatch},
+    shared::{Attachment, Regex, ResolvedBackendReference, ServiceAttachment, StringMatch},
 };
 use junction_core::Client;
 use std::{str::FromStr, time::Duration};
@@ -13,8 +13,21 @@ async fn main() {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
+    let client = Client::build(
+        "http://127.0.0.1:8008".to_string(),
+        "example-client".to_string(),
+        "example-cluster".to_string(),
+    )
+    .await
+    .unwrap();
+    tokio::spawn(client.config_server(8009));
+
     let default_routes = vec![Route {
-        hostnames: vec!["nginx.default.svc.cluster.local".to_string()],
+        attachment: Attachment::Service(ServiceAttachment {
+            name: "nginx".to_string(),
+            namespace: Some("default".to_string()),
+            port: None,
+        }),
         rules: vec![
             RouteRule {
                 matches: vec![RouteMatch {
@@ -31,31 +44,28 @@ async fn main() {
                 filters: vec![],
                 timeouts: None,
                 retry_policy: None,
-                session_persistence: None,
                 session_affinity: None,
-                target: RouteTarget::Cluster("default/nginx-staging/cluster".to_string()),
+                backends: vec![ResolvedBackendReference {
+                    attachment: Attachment::from_cluster_xds_name("default/nginx-staging/cluster")
+                        .unwrap(),
+                    weight: 1,
+                }],
             },
             RouteRule {
                 matches: vec![],
                 filters: vec![],
                 timeouts: None,
                 retry_policy: None,
-                session_persistence: None,
                 session_affinity: None,
-                target: RouteTarget::Cluster("default/nginx/cluster".to_string()),
+                backends: vec![ResolvedBackendReference {
+                    attachment: Attachment::from_cluster_xds_name("default/nginx/cluster").unwrap(),
+                    weight: 1,
+                }],
             },
         ],
     }];
-    let mut client = Client::build(
-        "http://127.0.0.1:8008".to_string(),
-        "example-client".to_string(),
-        "example-cluster".to_string(),
-        default_routes,
-    )
-    .await
-    .unwrap();
-
-    tokio::spawn(client.config_server(8009));
+    let default_backends = vec![];
+    let mut client = client.with_defaults(default_routes, default_backends);
 
     let url: http::Uri = "https://nginx.default.svc.cluster.local".parse().unwrap();
     let headers = http::HeaderMap::new();
