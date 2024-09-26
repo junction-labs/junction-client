@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use proc_macro2::Span;
 use quote::{quote, quote_spanned};
 use syn::{
-    spanned::Spanned, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr, FieldsNamed,
+    spanned::Spanned, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr, Field, FieldsNamed,
     FieldsUnnamed, Ident, Meta, Variant,
 };
 
@@ -119,7 +119,7 @@ fn enum_typeinfo(
     for v in &data.variants {
         match &v.fields {
             // a fieldless variant gets treated as a string literal
-            syn::Fields::Unit => variants.push(unit_variant_kind(name, v, &internal_tag)),
+            syn::Fields::Unit => variants.push(unit_variant(name, v, &internal_tag)),
             // a tuple variant gets treated differently depending on how many
             // fields it has.
             //
@@ -132,35 +132,29 @@ fn enum_typeinfo(
             //
             // we generally don't support newtype structs anywhere so just return an error
             // if an unnamed field gets mixed in when the enum is internally tagged.
-            syn::Fields::Unnamed(fields) => {
-                if internal_tag.is_some() {
-                    return Err(syn::Error::new(
-                        v.span(),
-                        "TypeInfo can't be derived for an internally \
-                        tagged enum with Tuple variants. Either remove this variant or \
-                        remove the serde(tag) attribute",
-                    ));
+            syn::Fields::Unnamed(fields) => match fields.unnamed.len() {
+                0 => variants.push(unit_variant(&v.ident, v, &internal_tag)),
+                1 => {
+                    let field = fields.unnamed.first().expect(
+                        "junction-typeinfo-derive: proc-macro has a bug: fields has no elements",
+                    );
+                    variants.push(newtype_variant(name, v, field, &internal_tag));
                 }
-                match fields.unnamed.len() {
-                    1 => {
-                        let field = fields.unnamed.first().expect(
-                            "junction-typeinfo-derive: proc-macro has a bug: fields has no elements"
-                        );
-
-                        let field_type = &field.ty;
-                        variants.push(quote_spanned! {v.span()=>
-                            junction_typeinfo::Variant::Newtype(<#field_type as junction_typeinfo::TypeInfo>::kind())
-                        });
+                _ => {
+                    if internal_tag.is_some() {
+                        return Err(syn::Error::new(
+                            v.span(),
+                            "TypeInfo can't be derived for an internally \
+                                tagged enum with Tuple variants. Either remove this variant or \
+                                remove the serde(tag) attribute",
+                        ));
                     }
-                    0 => variants.push(literal_variant(&v.ident, v.span())),
-                    _ => {
-                        let kinds = tuple_kinds(fields);
-                        variants.push(quote! {
-                            junction_typeinfo::Variant::Tuple(#kinds)
-                        });
-                    }
+                    let kinds = tuple_kinds(fields);
+                    variants.push(quote! {
+                        junction_typeinfo::Variant::Tuple(#kinds)
+                    });
                 }
-            }
+            },
             // A named variant should always be turned into an anonymous object
             syn::Fields::Named(fields) => {
                 let variant_name = &v.ident;
@@ -197,7 +191,39 @@ fn enum_typeinfo(
     })
 }
 
-fn unit_variant_kind(
+fn newtype_variant(
+    enum_name: &Ident,
+    variant: &Variant,
+    field: &Field,
+    internal_tag: &Option<Ident>,
+) -> proc_macro2::TokenStream {
+    if let Some(internal_tag) = internal_tag {
+        let field_type = &field.ty;
+        let variant_name = &variant.ident;
+        let tag_field = internal_tag_field(internal_tag);
+
+        quote_spanned! {variant.span()=>
+            {
+                let mut fields = vec![#tag_field];
+                fields.extend(<#field_type as junction_typeinfo::TypeInfo>::fields());
+
+                junction_typeinfo::Variant::Struct(junction_typeinfo::StructVariant{
+                    parent: stringify!(#enum_name),
+                    name: stringify!(#variant_name),
+                    doc: None,
+                    fields,
+                })
+            }
+        }
+    } else {
+        let field_type = &field.ty;
+        quote_spanned! {variant.span()=>
+            junction_typeinfo::Variant::Newtype(<#field_type as junction_typeinfo::TypeInfo>::kind())
+        }
+    }
+}
+
+fn unit_variant(
     enum_name: &Ident,
     variant: &Variant,
     internal_tag: &Option<Ident>,
@@ -212,10 +238,13 @@ fn unit_variant_kind(
                 doc: None,
                 fields: vec![#tag_field],
             })
-
         }
     } else {
-        literal_variant(&variant.ident, variant.span())
+        let name: &Ident = &variant.ident;
+        let span = variant.span();
+        quote_spanned! {span=>
+            junction_typeinfo::Variant::Literal(stringify!(#name))
+        }
     }
 }
 
@@ -349,12 +378,6 @@ fn tuple_kinds(fields: &FieldsUnnamed) -> proc_macro2::TokenStream {
         vec![
             #( #field_kinds, )*
         ]
-    }
-}
-
-fn literal_variant(name: &Ident, span: Span) -> proc_macro2::TokenStream {
-    quote_spanned! {span=>
-        junction_typeinfo::Variant::Literal(stringify!(#name))
     }
 }
 
