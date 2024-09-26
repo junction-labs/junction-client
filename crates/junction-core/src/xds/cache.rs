@@ -333,7 +333,7 @@ impl CacheReader {
         let listener = self
             .data
             .listeners
-            .get(&attachment.get_listener_xds_name())?;
+            .get(&attachment.as_listener_xds_name())?;
 
         match &listener.data()?.route_config {
             ApiListenerRouteConfig::RouteConfig { name } => {
@@ -365,7 +365,7 @@ impl CacheReader {
             };
         }
 
-        let cluster = tri!(self.data.clusters.get(&attachment.get_cluster_xds_name()));
+        let cluster = tri!(self.data.clusters.get(&attachment.as_cluster_xds_name()));
         let cluster_data = tri!(cluster.data());
 
         let lb = Some(cluster_data.load_balancer.clone());

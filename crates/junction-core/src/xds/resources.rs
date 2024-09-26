@@ -394,7 +394,7 @@ impl Cluster {
         ));
 
         let data = ClusterEndpointData::LoadAssignment {
-            name: backend.attachment.get_cluster_xds_name().into(),
+            name: backend.attachment.as_cluster_xds_name().into(),
         };
 
         Ok(Self {

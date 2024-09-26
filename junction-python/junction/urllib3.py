@@ -42,12 +42,14 @@ class PoolManager(urllib3.PoolManager):
         headers: typing.Mapping[str, str] | None = None,
         # junction
         default_routes: typing.List[junction.config.Route] | None = None,
+        default_backends: typing.List[junction.config.Backend] | None = None,
         junction_client: junction.Junction | None = None,
         # kwargs
         **kwargs: typing.Any,
     ) -> None:
         connection_pool_kw, client = junction._handle_kwargs(
             default_routes=default_routes,
+            default_backends=default_backends,
             junction_client=junction_client,
             kwargs=kwargs,
         )

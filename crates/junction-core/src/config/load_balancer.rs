@@ -219,7 +219,12 @@ impl RingHashLb {
             config: config.clone(),
             ring: RwLock::new(Ring {
                 endpoint_group_hash: 0,
-                entries: Vec::with_capacity(config.min_ring_size.expect("config not verified")),
+                entries: Vec::with_capacity(
+                    config
+                        .min_ring_size
+                        .map(|x| x.try_into().unwrap())
+                        .expect("config not verified"),
+                ),
             }),
         }
     }
@@ -253,7 +258,10 @@ impl RingHashLb {
         std::mem::drop(ring);
         let mut ring = self.ring.write().unwrap();
         ring.rebuild(
-            self.config.min_ring_size.expect("config not verified"),
+            self.config
+                .min_ring_size
+                .map(|x| x.try_into().unwrap())
+                .expect("config not verified"),
             endpoint_group,
         );
         cb(&ring)

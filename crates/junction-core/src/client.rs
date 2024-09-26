@@ -100,12 +100,12 @@ impl Client {
 
         let default_routes = default_routes
             .into_iter()
-            .map(|x| (x.attachment.get_listener_xds_name(), x))
+            .map(|x| (x.attachment.as_listener_xds_name(), x))
             .collect();
 
         let default_backends = default_backends
             .into_iter()
-            .map(|x| (x.attachment.get_cluster_xds_name(), DefaultCluster::new(x)))
+            .map(|x| (x.attachment.as_cluster_xds_name(), DefaultCluster::new(x)))
             .collect();
 
         self.subscribe_to_defaults();
@@ -127,7 +127,7 @@ impl Client {
                     self.ads
                         .subscribe(
                             xds::ResourceType::Cluster,
-                            backend.attachment.get_cluster_xds_name(),
+                            backend.attachment.as_cluster_xds_name(),
                         )
                         .unwrap();
                 }
@@ -225,11 +225,8 @@ impl Client {
             None => {
                 let default = self
                     .default_routes
-                    .get(&key_with_port.get_listener_xds_name())
-                    .or_else(|| {
-                        self.default_routes
-                            .get(&key_no_port.get_listener_xds_name())
-                    });
+                    .get(&key_with_port.as_listener_xds_name())
+                    .or_else(|| self.default_routes.get(&key_no_port.as_listener_xds_name()));
 
                 if default.is_none() {
                     return Err((url, crate::Error::NoRouteMatched));
@@ -267,10 +264,7 @@ impl Client {
                 // a port set to overload
                 match lb.as_ref() {
                     crate::config::LoadBalancer::Unspecified(_) => {
-                        match self
-                            .default_backends
-                            .get(&backend_id.get_cluster_xds_name())
-                        {
+                        match self.default_backends.get(&backend_id.as_cluster_xds_name()) {
                             Some(x) => (x.load_balancer.clone(), endpoints),
                             None => (lb, endpoints),
                         }
@@ -284,10 +278,7 @@ impl Client {
                 return Err((url, crate::Error::NoEndpoints));
             }
             (None, Some(endpoints)) => {
-                match self
-                    .default_backends
-                    .get(&backend_id.get_cluster_xds_name())
-                {
+                match self.default_backends.get(&backend_id.as_cluster_xds_name()) {
                     Some(x) => (x.load_balancer.clone(), endpoints),
                     None => {
                         return Err((url, crate::Error::NoEndpoints));

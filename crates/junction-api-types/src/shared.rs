@@ -952,7 +952,7 @@ impl Attachment {
         }
     }
 
-    pub fn get_cluster_xds_name(&self) -> String {
+    pub fn as_cluster_xds_name(&self) -> String {
         match self {
             Attachment::DNS(c) => c.hostname.clone(),
             Attachment::Service(c) => match &c.namespace {
@@ -967,7 +967,7 @@ impl Attachment {
         Some(Self::from_hostname(name, None))
     }
 
-    pub fn get_listener_xds_name(&self) -> String {
+    pub fn as_listener_xds_name(&self) -> String {
         //FIXME(ports): for now this is just the hostname, with no support for port
         self.hostname()
     }
@@ -1003,7 +1003,7 @@ fn weight_default() -> u32 {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct ResolvedBackendReference {
+pub struct WeightedBackend {
     #[serde(default = "weight_default")]
     pub weight: u32,
 
@@ -1013,7 +1013,7 @@ pub struct ResolvedBackendReference {
     // we need to decide whether this is one where its simpler just to drop it.
 }
 
-impl ResolvedBackendReference {
+impl WeightedBackend {
     pub(crate) fn from_xds(
         xds: Option<&xds_route::route_action::ClusterSpecifier>,
     ) -> Result<Vec<Self>, crate::xds::Error> {

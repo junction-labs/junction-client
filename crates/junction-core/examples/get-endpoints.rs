@@ -1,7 +1,7 @@
 use http::HeaderValue;
 use junction_api_types::{
     http::*,
-    shared::{Attachment, Regex, ResolvedBackendReference, ServiceAttachment, StringMatch},
+    shared::{Attachment, Regex, ServiceAttachment, StringMatch, WeightedBackend},
 };
 use junction_core::Client;
 use std::{str::FromStr, time::Duration};
@@ -45,7 +45,7 @@ async fn main() {
                 timeouts: None,
                 retry_policy: None,
                 session_affinity: None,
-                backends: vec![ResolvedBackendReference {
+                backends: vec![WeightedBackend {
                     attachment: Attachment::from_cluster_xds_name("default/nginx-staging/cluster")
                         .unwrap(),
                     weight: 1,
@@ -57,7 +57,7 @@ async fn main() {
                 timeouts: None,
                 retry_policy: None,
                 session_affinity: None,
-                backends: vec![ResolvedBackendReference {
+                backends: vec![WeightedBackend {
                     attachment: Attachment::from_cluster_xds_name("default/nginx/cluster").unwrap(),
                     weight: 1,
                 }],

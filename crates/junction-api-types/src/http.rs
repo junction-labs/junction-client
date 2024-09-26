@@ -1,6 +1,6 @@
 use crate::shared::{
-    Attachment, Duration, Fraction, PortNumber, PreciseHostname, Regex, ResolvedBackendReference,
-    SessionAffinityPolicy, StringMatch,
+    Attachment, Duration, Fraction, PortNumber, PreciseHostname, Regex, SessionAffinityPolicy,
+    StringMatch, WeightedBackend,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ pub struct Route {
 
     /// The domains that this applies to. Domains are matched against the
     /// incoming authority of any URL.
-    /// todo: this is needed eventually to support attaching to gateways
+    /// FIXME(gateway): this is needed eventually to support attaching to gateways
     /// in the meantime though it just confuses things.
     //#[serde(default, skip_serializing_if = "Vec::is_empty")]
     //pub hostnames: Vec<String>,
@@ -90,7 +90,7 @@ pub struct RouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_policy: Option<RouteRetryPolicy>,
 
-    pub backends: Vec<ResolvedBackendReference>,
+    pub backends: Vec<WeightedBackend>,
 }
 
 /// Defines timeouts that can be configured for a http Route. Specifying a zero
@@ -548,7 +548,7 @@ impl RouteRule {
 
         let session_affinity = SessionAffinityPolicy::from_xds(&action.hash_policy);
 
-        let backends = ResolvedBackendReference::from_xds(action.cluster_specifier.as_ref())?;
+        let backends = WeightedBackend::from_xds(action.cluster_specifier.as_ref())?;
 
         Ok(RouteRule {
             matches: vec![matches],
@@ -736,8 +736,8 @@ mod tests {
     use crate::{
         http::{HeaderMatch, RouteRule, SessionAffinityPolicy},
         shared::{
-            Attachment, Regex, ResolvedBackendReference, ServiceAttachment,
-            SessionAffinityHashParam, SessionAffinityHashParamType,
+            Attachment, Regex, ServiceAttachment, SessionAffinityHashParam,
+            SessionAffinityHashParamType, WeightedBackend,
         },
     };
 
@@ -843,7 +843,7 @@ mod tests {
                     timeouts: None,
                     session_affinity: None,
                     retry_policy: None,
-                    backends: vec![ResolvedBackendReference {
+                    backends: vec![WeightedBackend {
                         attachment: Attachment::Service(ServiceAttachment {
                             name: "foobar".to_string(),
                             ..Default::default()

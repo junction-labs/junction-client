@@ -1,5 +1,7 @@
 use crate::shared::{Attachment, SessionAffinityHashParam};
 use crate::value_or_default;
+#[cfg(feature = "typeinfo")]
+use junction_typeinfo::TypeInfo;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use xds_api::pb::envoy::config::cluster::v3 as xds_cluster;
@@ -7,9 +9,10 @@ use xds_api::pb::envoy::config::cluster::v3::cluster::ring_hash_lb_config::HashF
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RingHashParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_ring_size: Option<usize>,
+    pub min_ring_size: Option<u32>,
 
     // FIXME: Ben votes to skip the extra "affinity" naming here as its redundant
     // that is fine, big question is still how to fill this field over xDS
@@ -29,6 +32,7 @@ pub struct RingHashParams {
 //
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
 #[serde(tag = "type", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum LbPolicy {
     #[default]
     RoundRobin,
@@ -63,7 +67,7 @@ impl LbPolicy {
                     return None;
                 }
                 //FIXME(defaults): is this really the place to insist on defaults?
-                let min_ring_size: usize = value_or_default!(lb_config.minimum_ring_size, 2048)
+                let min_ring_size: u32 = value_or_default!(lb_config.minimum_ring_size, 2048)
                     .try_into()
                     .ok()?;
 
@@ -80,6 +84,7 @@ impl LbPolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Backend {
     pub attachment: Attachment,
 
