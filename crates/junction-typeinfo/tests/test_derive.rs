@@ -251,6 +251,11 @@ fn test_serde_flatten_enum() {
 
 #[test]
 fn test_serde_tag() {
+    #[derive(TypeInfo, Serialize)]
+    struct Bar {
+        bar: u32,
+    }
+
     #[allow(unused)]
     #[derive(TypeInfo, Serialize)]
     #[serde(tag = "type")]
@@ -258,6 +263,7 @@ fn test_serde_tag() {
         One,
         Two { value: i32 },
         Three { value: String },
+        Four(Bar),
     }
 
     assert_eq!(
@@ -310,6 +316,25 @@ fn test_serde_tag() {
                             name: "value",
                             nullable: false,
                             kind: Kind::String,
+                            doc: None,
+                        }
+                    ],
+                }),
+                Variant::Struct(StructVariant {
+                    parent: "Foo",
+                    name: "Four",
+                    doc: None,
+                    fields: vec![
+                        Field {
+                            name: "type",
+                            nullable: false,
+                            kind: Kind::String,
+                            doc: None,
+                        },
+                        Field {
+                            name: "bar",
+                            nullable: false,
+                            kind: Kind::Int,
                             doc: None,
                         }
                     ],
