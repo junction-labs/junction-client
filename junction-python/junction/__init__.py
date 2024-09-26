@@ -10,13 +10,12 @@ def _handle_kwargs(
     kwargs: dict,
 ) -> tuple[dict, Junction]:
     if not junction_client:
-        client = default_client(
-            {
-                "default_routes": default_routes,
-            }
-        )
+        client_kwargs = {}
+        if default_routes:
+            client_kwargs["default_routes"] = default_routes
+        junction_client = default_client(**client_kwargs)
 
-    return kwargs, client
+    return kwargs, junction_client
 
 
 __all__ = (Junction, config, urllib3, requests, default_client)

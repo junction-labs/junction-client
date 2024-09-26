@@ -62,6 +62,7 @@ mod python {
 
     pub(super) fn clean(sh: &Shell, venv: &str) -> anyhow::Result<()> {
         cmd!(sh, "rm -rf .ruff_cache/").run()?;
+        cmd!(sh, "rm -rf .pytest_cache/").run()?;
         cmd!(sh, "rm -rf {venv}").run()?;
 
         Ok(())
