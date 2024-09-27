@@ -15,7 +15,7 @@ use std::{
 };
 use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
 
-// FIXME: need a way to produce RequestContext from a route.
+// FIXME: Need a way to produce RequestContext from a route.
 // FIXME: include endpoint weights in EndpointGroup
 
 #[derive(Debug, Default, Hash)]

@@ -6,8 +6,8 @@ import datetime
 
 
 class Fraction(typing.TypedDict):
-    numberator: int
-    deonomindator: int
+    numerator: int
+    denominator: int
 
 
 class WeightedBackend(typing.TypedDict):
