@@ -1,5 +1,6 @@
 use http::HeaderValue;
 use junction_api_types::{
+    backend::{Backend, LbPolicy},
     http::*,
     shared::{Attachment, Regex, ServiceAttachment, StringMatch, WeightedBackend},
 };
@@ -22,12 +23,19 @@ async fn main() {
     .unwrap();
     tokio::spawn(client.config_server(8009));
 
+    let nginx = Attachment::Service(ServiceAttachment {
+        name: "nginx".to_string(),
+        namespace: Some("default".to_string()),
+        port: Some(80),
+    });
+    let nginx_staging = Attachment::Service(ServiceAttachment {
+        name: "nginx-staging".to_string(),
+        namespace: Some("default".to_string()),
+        port: Some(80),
+    });
+
     let default_routes = vec![Route {
-        attachment: Attachment::Service(ServiceAttachment {
-            name: "nginx".to_string(),
-            namespace: Some("default".to_string()),
-            port: None,
-        }),
+        attachment: nginx.clone(),
         rules: vec![
             RouteRule {
                 matches: vec![RouteMatch {
@@ -37,43 +45,48 @@ async fn main() {
                             value: Regex::from_str(".*").unwrap(),
                         },
                     }],
-                    path: None,
-                    method: None,
-                    query_params: vec![],
+                    ..Default::default()
                 }],
-                filters: vec![],
-                timeouts: None,
-                retry_policy: None,
-                session_affinity: None,
                 backends: vec![WeightedBackend {
-                    attachment: Attachment::from_cluster_xds_name("default/nginx-staging/cluster")
-                        .unwrap(),
+                    attachment: nginx_staging.clone(),
                     weight: 1,
                 }],
+                ..Default::default()
             },
             RouteRule {
-                matches: vec![],
-                filters: vec![],
-                timeouts: None,
-                retry_policy: None,
-                session_affinity: None,
                 backends: vec![WeightedBackend {
-                    attachment: Attachment::from_cluster_xds_name("default/nginx/cluster").unwrap(),
+                    attachment: nginx.clone(),
                     weight: 1,
                 }],
+                ..Default::default()
             },
         ],
     }];
-    let default_backends = vec![];
-    let mut client = client.with_defaults(default_routes, default_backends);
+    let default_backends = vec![
+        Backend {
+            attachment: nginx,
+            lb: LbPolicy::Unspecified,
+        },
+        Backend {
+            attachment: nginx_staging,
+            lb: LbPolicy::Unspecified,
+        },
+    ];
+    let mut client = client
+        .with_defaults(default_routes, default_backends)
+        .unwrap();
 
     let url: http::Uri = "https://nginx.default.svc.cluster.local".parse().unwrap();
-    let headers = http::HeaderMap::new();
-    let mut staging_headers = http::HeaderMap::new();
-    staging_headers.insert("x-demo-staging", HeaderValue::from_static("true"));
+    let prod_headers = http::HeaderMap::new();
+    let staging_headers = {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-demo-staging", HeaderValue::from_static("true"));
+        headers
+    };
 
     loop {
-        let prod_endpoints = client.resolve_endpoints(&http::Method::GET, url.clone(), &headers);
+        let prod_endpoints =
+            client.resolve_endpoints(&http::Method::GET, url.clone(), &prod_headers);
         let staging_endpoints =
             client.resolve_endpoints(&http::Method::GET, url.clone(), &staging_headers);
 

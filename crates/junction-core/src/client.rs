@@ -21,6 +21,13 @@ impl DefaultCluster {
     }
 }
 
+fn validate_defaults(
+    _default_routes: &[Route],
+    _default_backends: &[Backend],
+) -> Result<(), crate::Error> {
+    Ok(())
+}
+
 /// A service discovery client that looks up URL information based on URLs,
 /// headers, and methods.
 ///
@@ -95,7 +102,9 @@ impl Client {
         self,
         default_routes: Vec<Route>,
         default_backends: Vec<Backend>,
-    ) -> Client {
+    ) -> Result<Client, crate::Error> {
+        validate_defaults(&default_routes, &default_backends)?;
+
         let default_routes = default_routes
             .into_iter()
             .map(|x| (x.attachment.as_listener_xds_name(), x))
@@ -107,18 +116,12 @@ impl Client {
             .collect();
 
         self.subscribe_to_defaults(&default_routes);
-        Client {
+
+        Ok(Client {
             default_routes,
             default_backends,
             ..self
-        }
-    }
-
-    fn _validate_defaults(
-        _default_routes: &[Route],
-        _default_backends: &[Backend],
-    ) -> Result<(), crate::Error> {
-        Ok(())
+        })
     }
 
     fn subscribe_to_defaults(&self, default_routes: &HashMap<String, Route>) {
