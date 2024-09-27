@@ -20,6 +20,8 @@ use xds_api::{
     WellKnownTypes,
 };
 
+use crate::config::BackendLb;
+
 /// An opaque string used to version an xDS resource.
 ///
 /// `ResourceVersion`s are immutable and cheap to `clone` and share.
@@ -184,10 +186,6 @@ pub(crate) struct ResourceName<T> {
 impl<T> ResourceName<T> {
     pub fn as_str(&self) -> &str {
         &self.name
-    }
-
-    pub fn as_string(&self) -> String {
-        self.name.clone()
     }
 }
 
@@ -357,8 +355,7 @@ impl RouteConfig {
 #[derive(Clone, Debug)]
 pub(crate) struct Cluster {
     pub xds: xds_cluster::Cluster,
-    pub config: Backend,
-    pub load_balancer: Arc<crate::config::LoadBalancer>,
+    pub backend_lb: Arc<BackendLb>,
     pub endpoints: ClusterEndpointData,
 }
 
@@ -382,9 +379,7 @@ impl Cluster {
     ) -> Result<Self, junction_api_types::xds::Error> {
         let backend = Backend::from_xds(&xds)?;
 
-        let load_balancer = Arc::new(crate::config::load_balancer::LoadBalancer::from_config(
-            &backend.lb,
-        ));
+        let load_balancer = crate::config::load_balancer::LoadBalancer::from_config(&backend.lb);
 
         let Some(discovery_type) = cluster_discovery_type(&xds) else {
             return Err(junction_api_types::xds::Error::InvalidXds {
@@ -420,15 +415,18 @@ impl Cluster {
             }
         };
 
-        let data = ClusterEndpointData::LoadAssignment {
+        let backend_lb = Arc::new(BackendLb {
+            backend,
+            load_balancer,
+        });
+        let endpoints = ClusterEndpointData::LoadAssignment {
             name: load_assignment,
         };
 
         Ok(Self {
             xds,
-            config: backend,
-            load_balancer,
-            endpoints: data,
+            backend_lb,
+            endpoints,
         })
     }
 }

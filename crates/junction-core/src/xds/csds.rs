@@ -78,7 +78,7 @@ impl ClientStatusDiscoveryService for Server {
         }
 
         let node = request.node;
-        let generic_xds_configs: Vec<_> = self.cache.iter_any().map(to_generic_config).collect();
+        let generic_xds_configs: Vec<_> = self.cache.iter_xds().map(to_generic_config).collect();
 
         Ok(Response::new(ClientStatusResponse {
             config: vec![ClientConfig {

@@ -41,6 +41,15 @@ pub enum LbPolicy {
 }
 
 impl LbPolicy {
+    #[doc(hidden)]
+    pub fn is_default_policy(&self) -> bool {
+        match self {
+            // FIXME: only Unspecified should be here
+            LbPolicy::RoundRobin | LbPolicy::Unspecified => true,
+            _ => false,
+        }
+    }
+
     //FIXME: work out what XDS leads to Unspecified being returned
     pub(crate) fn from_xds(cluster: &xds_cluster::Cluster) -> Option<Self> {
         match cluster.lb_policy() {

@@ -84,7 +84,7 @@ use petgraph::{
     Direction,
 };
 use prost::Name;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use xds_api::pb::envoy::config::{
     cluster::v3::{self as xds_cluster},
@@ -107,6 +107,8 @@ use xds_api::pb::google::protobuf;
 //
 // this is mostly a handful of DFS passes on the graph, but with an
 // early exit if we've already marked a node.
+
+use crate::config::BackendLb;
 
 use super::resources::{
     ApiListener, ApiListenerRouteConfig, Cluster, ClusterEndpointData, LoadAssignment,
@@ -268,19 +270,6 @@ pub(crate) struct CacheReader {
     data: Arc<CacheData>,
 }
 
-/// A complete-enough view of config for routing.
-///
-/// Configuration is complete-enough if a full routing table can be
-/// assembled. There is no guarantee that the target services are available
-/// yet.
-#[allow(unused)]
-#[derive(Debug)]
-pub(crate) struct ConfigView {
-    pub route: Arc<Route>,
-    pub load_balancers: BTreeMap<String, Arc<crate::config::LoadBalancer>>,
-    pub endpoints: BTreeMap<String, Arc<crate::config::EndpointGroup>>,
-}
-
 /// A single xDS configuration object, with additional metadata about when it
 /// was fetched and processed.
 #[derive(Debug, Default, Clone)]
@@ -293,7 +282,33 @@ pub struct XdsConfig {
 }
 
 impl CacheReader {
-    pub(crate) fn iter_any(&self) -> impl Iterator<Item = XdsConfig> + '_ {
+    pub(crate) fn iter_routes(&self) -> impl Iterator<Item = Arc<Route>> + '_ {
+        let listener_routes = self.data.listeners.iter().filter_map(|entry| {
+            entry
+                .data()
+                .and_then(|api_listener| match &api_listener.route_config {
+                    ApiListenerRouteConfig::Inlined { route, .. } => Some(route.clone()),
+                    _ => None,
+                })
+        });
+
+        let route_config_routes = self
+            .data
+            .route_configs
+            .iter()
+            .filter_map(|entry| entry.data().map(|route_config| route_config.route.clone()));
+
+        listener_routes.chain(route_config_routes)
+    }
+
+    pub(crate) fn iter_backends(&self) -> impl Iterator<Item = Arc<BackendLb>> + '_ {
+        self.data
+            .clusters
+            .iter()
+            .filter_map(|entry| entry.data().map(|cluster| cluster.backend_lb.clone()))
+    }
+
+    pub(crate) fn iter_xds(&self) -> impl Iterator<Item = XdsConfig> + '_ {
         macro_rules! any_iter {
             ($field:ident, $xds_type:ty) => {
                 self.data.$field.iter().map(|entry| {
@@ -344,16 +359,17 @@ impl CacheReader {
         }
     }
 
-    /// Get the load balancer and endpoint group for a routing target.
+    /// Get the load balancer config, load balancer, and endpoint group for a
+    /// routing target.
     ///
-    /// May return no data, only a load balancer, or a load balancer and an
+    /// May return no data, or load balancer, or a load balancer and an
     /// endpoint group if configuration hasn't yet been fetched from the ADS
     /// server or if the resources don't exist.
     pub(crate) fn get_target(
         &self,
         attachment: &Attachment,
     ) -> (
-        Option<Arc<crate::config::LoadBalancer>>,
+        Option<Arc<BackendLb>>,
         Option<Arc<crate::config::EndpointGroup>>,
     ) {
         macro_rules! tri {
@@ -368,78 +384,18 @@ impl CacheReader {
         let cluster = tri!(self.data.clusters.get(&attachment.as_cluster_xds_name()));
         let cluster_data = tri!(cluster.data());
 
-        let lb = Some(cluster_data.load_balancer.clone());
+        let backend_and_lb = Some(cluster_data.backend_lb.clone());
 
         match &cluster_data.endpoints {
             ClusterEndpointData::Inlined { endpoint_group, .. } => {
-                (lb, Some(endpoint_group.clone()))
+                (backend_and_lb, Some(endpoint_group.clone()))
             }
             ClusterEndpointData::LoadAssignment { name } => {
                 let load_assignment = tri!(self.data.load_assignments.get(name.as_str()));
                 let endpoint_group = load_assignment.data().map(|d| d.endpoint_group.clone());
-                (lb, endpoint_group)
+                (backend_and_lb, endpoint_group)
             }
         }
-    }
-
-    /// Get a [complete-enough view][ConfigView] of configuration for a hostname to handle a
-    /// request. Returns `None` if configuration is not available for this name.
-    #[allow(unused)]
-    pub(crate) fn get(&self, name: &str) -> Option<ConfigView> {
-        let listener = self.data.listeners.get(name)?;
-
-        let (route, cluster_names) = match &listener.data()?.route_config {
-            ApiListenerRouteConfig::RouteConfig { name } => {
-                let rc = self.data.route_configs.get(name.as_str())?;
-                let rc_data = rc.data()?;
-
-                let route = rc_data.route.clone();
-                let cluster_name = rc_data.clusters.clone();
-                (route, cluster_name)
-            }
-            ApiListenerRouteConfig::Inlined { route, clusters } => {
-                (route.clone(), clusters.clone())
-            }
-        };
-
-        let mut load_balancers = BTreeMap::new();
-        let mut endpoints = BTreeMap::new();
-
-        for cluster_name in cluster_names {
-            let Some(cluster) = self.data.clusters.get(cluster_name.as_str()) else {
-                continue;
-            };
-            let Some(cluster) = cluster.data() else {
-                continue;
-            };
-
-            load_balancers.insert(cluster_name.as_string(), cluster.load_balancer.clone());
-
-            match &cluster.endpoints {
-                ClusterEndpointData::Inlined {
-                    name,
-                    endpoint_group,
-                } => {
-                    endpoints.insert(name.clone(), endpoint_group.clone());
-                }
-                ClusterEndpointData::LoadAssignment { name } => {
-                    let Some(cla) = self.data.load_assignments.get(name.as_str()) else {
-                        continue;
-                    };
-                    let Some(cla) = cla.data() else {
-                        continue;
-                    };
-
-                    endpoints.insert(name.as_string(), cla.endpoint_group.clone());
-                }
-            };
-        }
-
-        Some(ConfigView {
-            route,
-            load_balancers,
-            endpoints,
-        })
     }
 }
 
@@ -851,7 +807,8 @@ impl Cache {
                     cluster
                         .data()
                         .expect("GC leak: parent Cluster has no data")
-                        .config
+                        .backend_lb
+                        .backend
                         .attachment
                         .clone()
                 };

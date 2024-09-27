@@ -385,7 +385,7 @@ impl Junction {
     /// Spawn a new CSDS server on the given port. Spawning the server will not
     /// block the current thread.
     fn run_csds_server(&self, port: u16) -> PyResult<()> {
-        let server_fut = self.core.config_server(port);
+        let server_fut = self.core.csds_server(port);
         // FIXME: figure out how to report an error better than this. just
         // printing the exception is good buuuuuuut.
         RUNTIME.spawn(async move {
@@ -397,14 +397,43 @@ impl Junction {
         Ok(())
     }
 
-    /// Dump the client's current xDS config as a dict.
+    /// Dump the client's route config.
+    ///
+    /// This is the same merged view of dynamic config and static config that
+    /// the client uses to make its routing decisions.
+    fn dump_routes(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let mut values = vec![];
+
+        for route in self.core.dump_routes() {
+            values.push(pythonize::pythonize(py, &route)?);
+        }
+
+        Ok(values)
+    }
+
+    /// Dump the client's backend config.
+    ///
+    /// This is the same merged view of dynamic config and static config that
+    /// the client uses to make its load balancing decisions after a route
+    /// is selected.
+    fn dump_backends(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let mut values = vec![];
+
+        for backend_lb in self.core.dump_backends() {
+            values.push(pythonize::pythonize(py, &backend_lb.backend)?);
+        }
+
+        Ok(values)
+    }
+
+    /// Dump the client's current xDS config as a pbjson dict.
     ///
     /// The xDS config will contain the latest values for all resources and any
     /// errors encountered while trying to fetch updated versions.
     fn dump_xds(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut values = vec![];
 
-        for config in self.core.dump() {
+        for config in self.core.dump_xds() {
             let config: XdsConfig = config.into();
             let as_py = pythonize::pythonize(py, &config)?;
             values.push(as_py);
