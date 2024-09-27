@@ -22,7 +22,7 @@ export JUNCTION_ADS_SERVER="grpc://"`kubectl get svc ezbake --namespace junction
 
 ### Build Server docker image
 ```bash
-docker build --tag jct_http_server --file junction-python/samples/http_simple_split/Dockerfile --load junction-python/samples/http_simple_split/Dockerfile
+docker build --tag jct_http_server --file junction-python/samples/http_simple_split/Dockerfile --load junction-python/samples/http_simple_split/
 ```
 
 ### Deploy Servers

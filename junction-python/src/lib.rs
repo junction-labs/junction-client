@@ -1,7 +1,5 @@
-use std::{env, net::IpAddr, str::FromStr};
-
 use http::Uri;
-use junction_api_types::http::Route;
+use junction_api_types::{backend::Backend, http::Route};
 use junction_core::ResourceVersion;
 use once_cell::sync::Lazy;
 use pyo3::{
@@ -14,6 +12,7 @@ use pyo3::{
     wrap_pyfunction, Bound, Py, PyAny, PyResult, Python,
 };
 use serde::Serialize;
+use std::{env, net::IpAddr, str::FromStr};
 use xds_api::pb::google::protobuf;
 
 #[pymodule]
@@ -121,6 +120,10 @@ impl From<junction_core::Endpoint> for Endpoint {
     }
 }
 
+//
+// FIXME: this works fine if you keep want to retyring the one address, but best
+// practices is to vary the addresses on a retry, which requires bigger changes
+//
 /// A policy that describes how a client should retry requests.
 #[derive(Clone, Debug)]
 #[pyclass]
@@ -224,7 +227,6 @@ fn new_client(
         ads_address,
         node_name,
         cluster_name,
-        vec![],
     ))
     .map_err(|e| {
         let error_message = match e.source() {
@@ -276,6 +278,17 @@ fn default_routes(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Route>> {
     Ok(routes)
 }
 
+fn default_backends(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Backend>> {
+    let Some(kwargs) = kwargs else {
+        return Ok(Vec::new());
+    };
+    let backends = match kwargs.get_item("default_backends")? {
+        Some(default_backends) => pythonize::depythonize_bound(default_backends)?,
+        None => Vec::new(),
+    };
+    Ok(backends)
+}
+
 static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
     let ads = default_ads_server(None)?;
     let (node, cluster) = default_node_info(None)?;
@@ -289,16 +302,17 @@ static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
 /// setting the JUNCTION_ADS_SERVER, JUNCTION_NODE, and JUNCTION_CLUSTER
 /// environment variables.
 ///
-/// Calls to this function accept a `default_routes` kwarg, and can override the
-/// default routing info for this client while still using config cache shared
-/// with all other default clients.
+/// Calls to this function accept `default_routes` and `default_backends`
+/// kwargs, to set defaults for the routing done by this client while still
+/// using the dynamic config cache shared with all other default clients.
 #[pyfunction]
 #[pyo3(signature = (**kwargs))]
 fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
     let routes = default_routes(kwargs)?;
+    let backends = default_backends(kwargs)?;
     match DEFAULT_CLIENT.as_ref() {
         Ok(default_client) => {
-            let core = default_client.clone().with_default_routes(routes);
+            let core = default_client.clone().with_defaults(routes, backends);
             Ok(Junction { core })
         }
         Err(e) => Err(PyRuntimeError::new_err(e)),
@@ -307,18 +321,19 @@ fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
 
 #[pymethods]
 impl Junction {
-    /// Create a new Junction client. The client can be shared and is safe
-    /// to use from multiple threads or tasks.
+    /// Create a new Junction client. The client can be shared and is safe to
+    /// use from multiple threads or tasks.
     #[new]
     #[pyo3(signature = (**kwargs))]
     fn new(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let ads = default_ads_server(kwargs)?;
         let (node, cluster) = default_node_info(kwargs)?;
         let routes = default_routes(kwargs)?;
+        let backends = default_backends(kwargs)?;
 
         match new_client(ads, node, cluster) {
             Ok(client) => {
-                let core = client.with_default_routes(routes);
+                let core = client.with_defaults(routes, backends);
                 Ok(Junction { core })
             }
             Err(e) => Err(PyRuntimeError::new_err(e)),
@@ -329,8 +344,8 @@ impl Junction {
     ///
     /// Returns the list of endpoints that traffic should be directed to, taking
     /// in to account load balancing and any prior requests. A request should be
-    /// sent to all endpoints, and it's up to the caller to decide how to combine
-    /// multiple responses.
+    /// sent to all endpoints, and it's up to the caller to decide how to
+    /// combine multiple responses.
     fn resolve_endpoints(
         &mut self,
         method: &str,
@@ -366,8 +381,8 @@ impl Junction {
     /// block the current thread.
     fn run_csds_server(&self, port: u16) -> PyResult<()> {
         let server_fut = self.core.config_server(port);
-        // FIXME: figure out how to report an error better than this. just printing
-        // the exception is good buuuuuuut.
+        // FIXME: figure out how to report an error better than this. just
+        // printing the exception is good buuuuuuut.
         RUNTIME.spawn(async move {
             if let Err(e) = server_fut.await {
                 let py_err = PyRuntimeError::new_err(format!("csds server exited: {e}"));

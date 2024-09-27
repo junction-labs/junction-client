@@ -2,7 +2,9 @@ use std::ops::Deref;
 use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 
 use enum_map::EnumMap;
+use junction_api_types::backend::Backend;
 use junction_api_types::http::Route;
+use junction_api_types::shared::Attachment;
 use smol_str::SmolStr;
 use xds_api::pb::google::protobuf;
 use xds_api::{
@@ -241,19 +243,19 @@ pub(crate) enum ApiListenerRouteConfig {
         name: ResourceName<RouteConfig>,
     },
     Inlined {
-        routes: Arc<Vec<Route>>,
+        route: Arc<Route>,
         clusters: Vec<ResourceName<Cluster>>,
     },
 }
 
 fn api_listener(
     listener: &xds_listener::Listener,
-) -> Result<xds_http::HttpConnectionManager, crate::xds::Error> {
+) -> Result<xds_http::HttpConnectionManager, junction_api_types::xds::Error> {
     let api_listener = listener
         .api_listener
         .as_ref()
         .and_then(|l| l.api_listener.as_ref())
-        .ok_or_else(|| crate::xds::Error::InvalidXds {
+        .ok_or_else(|| junction_api_types::xds::Error::InvalidXds {
             resource_type: "Listener",
             resource_name: listener.name.clone(),
             message: "Listener has no api_listener".to_string(),
@@ -261,7 +263,7 @@ fn api_listener(
 
     api_listener
         .to_msg()
-        .map_err(|e| crate::xds::Error::InvalidXds {
+        .map_err(|e| junction_api_types::xds::Error::InvalidXds {
             resource_type: "Listener",
             resource_name: listener.name.clone(),
             message: format!("invalid HttpConnectionManager: {e}"),
@@ -272,7 +274,7 @@ impl ApiListener {
     pub(crate) fn from_xds(
         name: &str,
         xds: xds_listener::Listener,
-    ) -> Result<Self, crate::xds::Error> {
+    ) -> Result<Self, junction_api_types::xds::Error> {
         use xds_http::http_connection_manager::RouteSpecifier;
 
         let conn_manager = api_listener(&xds)?;
@@ -282,11 +284,11 @@ impl ApiListener {
             },
             Some(RouteSpecifier::RouteConfig(route_config)) => {
                 let clusters = RouteConfig::cluster_names(route_config);
-                let routes = RouteConfig::routes(route_config);
-                ApiListenerRouteConfig::Inlined { clusters, routes }
+                let route = Arc::new(Route::from_xds(route_config)?);
+                ApiListenerRouteConfig::Inlined { clusters, route }
             }
             _ => {
-                return Err(crate::xds::Error::InvalidXds {
+                return Err(junction_api_types::xds::Error::InvalidXds {
                     resource_name: name.to_string(),
                     resource_type: "HttpConnectionManager",
                     message: "HttpConnectionManager has no routes configured".to_string(),
@@ -304,7 +306,7 @@ impl ApiListener {
 #[derive(Clone, Debug)]
 pub(crate) struct RouteConfig {
     pub xds: xds_route::RouteConfiguration,
-    pub routes: Arc<Vec<Route>>,
+    pub route: Arc<Route>,
     pub clusters: Vec<ResourceName<Cluster>>,
 }
 
@@ -334,21 +336,18 @@ impl RouteConfig {
         }
         clusters.into_iter().map(|n| n.into()).collect()
     }
-
-    fn routes(xds: &xds_route::RouteConfiguration) -> Arc<Vec<Route>> {
-        let routes = xds.virtual_hosts.iter().map(Route::from_xds).collect();
-        Arc::new(routes)
-    }
 }
 
 impl RouteConfig {
-    pub(crate) fn from_xds(xds: xds_route::RouteConfiguration) -> Result<Self, crate::xds::Error> {
+    pub(crate) fn from_xds(
+        xds: xds_route::RouteConfiguration,
+    ) -> Result<Self, junction_api_types::xds::Error> {
         let clusters = RouteConfig::cluster_names(&xds);
-        let routes = RouteConfig::routes(&xds);
+        let route = Arc::new(Route::from_xds(&xds)?);
 
         Ok(Self {
             xds,
-            routes,
+            route,
             clusters,
         })
     }
@@ -358,7 +357,7 @@ impl RouteConfig {
 #[derive(Clone, Debug)]
 pub(crate) struct Cluster {
     pub xds: xds_cluster::Cluster,
-    pub discovery_type: xds_cluster::cluster::DiscoveryType,
+    pub config: Backend,
     pub load_balancer: Arc<crate::config::LoadBalancer>,
     pub endpoints: ClusterEndpointData,
 }
@@ -376,11 +375,19 @@ pub(crate) enum ClusterEndpointData {
 }
 
 impl Cluster {
-    // TOOD: support logical DNS clusters to keep parity with GRPC
+    // TODO: support logical DNS clusters to keep parity with GRPC
     // FIXME: validate that the EDS config source uses ADS
-    pub(crate) fn from_xds(xds: xds_cluster::Cluster) -> Result<Self, crate::xds::Error> {
+    pub(crate) fn from_xds(
+        xds: xds_cluster::Cluster,
+    ) -> Result<Self, junction_api_types::xds::Error> {
+        let backend = Backend::from_xds(&xds)?;
+
+        let load_balancer = Arc::new(crate::config::load_balancer::LoadBalancer::from_config(
+            &backend.lb,
+        ));
+
         let Some(discovery_type) = cluster_discovery_type(&xds) else {
-            return Err(crate::xds::Error::InvalidXds {
+            return Err(junction_api_types::xds::Error::InvalidXds {
                 resource_type: "Cluster",
                 resource_name: xds.name,
                 message: format!("invalid discovery_type: {:?}", xds.cluster_discovery_type),
@@ -390,7 +397,7 @@ impl Cluster {
         let load_assignment = match discovery_type {
             xds_cluster::cluster::DiscoveryType::Eds => {
                 let Some(eds_config) = xds.eds_cluster_config.as_ref() else {
-                    return Err(crate::xds::Error::InvalidXds {
+                    return Err(junction_api_types::xds::Error::InvalidXds {
                         resource_type: "Cluster",
                         resource_name: xds.name,
                         message: "an EDS cluster must have an eds_cluster_config".to_string(),
@@ -405,7 +412,7 @@ impl Cluster {
                 cla_name.into()
             }
             _ => {
-                return Err(crate::xds::Error::InvalidXds {
+                return Err(junction_api_types::xds::Error::InvalidXds {
                     resource_type: "Cluster",
                     resource_name: xds.name,
                     message: "only EDS clusters are supported".to_string(),
@@ -413,22 +420,13 @@ impl Cluster {
             }
         };
 
-        let Some(load_balancer) = crate::config::load_balancer::LoadBalancer::from_xds(&xds) else {
-            return Err(crate::xds::Error::InvalidXds {
-                resource_type: "Cluster",
-                resource_name: xds.name,
-                message: "invalid LB config".to_string(),
-            });
-        };
-        let load_balancer = Arc::new(load_balancer);
-
         let data = ClusterEndpointData::LoadAssignment {
             name: load_assignment,
         };
 
         Ok(Self {
             xds,
-            discovery_type,
+            config: backend,
             load_balancer,
             endpoints: data,
         })
@@ -454,10 +452,10 @@ pub(crate) struct LoadAssignment {
 
 impl LoadAssignment {
     pub(crate) fn from_xds(
-        dtype: xds_cluster::cluster::DiscoveryType,
+        attachment: Attachment,
         xds: xds_endpoint::ClusterLoadAssignment,
-    ) -> Result<Self, crate::xds::Error> {
-        match crate::config::load_balancer::EndpointGroup::from_xds(&dtype, &xds) {
+    ) -> Result<Self, junction_api_types::xds::Error> {
+        match crate::config::load_balancer::EndpointGroup::from_xds(&attachment, &xds) {
             Some(endpoint_group) => {
                 let endpoint_group = Arc::new(endpoint_group);
                 Ok(Self {
@@ -465,7 +463,7 @@ impl LoadAssignment {
                     endpoint_group,
                 })
             }
-            None => Err(crate::xds::Error::InvalidXds {
+            None => Err(junction_api_types::xds::Error::InvalidXds {
                 resource_type: "ClusterLoadAssignment",
                 resource_name: xds.cluster_name,
                 message: "invalid CLA".to_string(),

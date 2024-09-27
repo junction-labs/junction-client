@@ -1,11 +1,25 @@
-use junction_api_types::http::{
-    HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule, RouteTarget,
+use crate::xds::{self, AdsClient};
+use junction_api_types::{
+    backend::Backend,
+    http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
+    shared::Attachment,
 };
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::HashMap, future::Future};
 
-use crate::xds::{self, AdsClient};
+struct DefaultCluster {
+    // the arc here is completely unnecessary in true utility but makes the
+    // match code much simpler
+    pub load_balancer: Arc<crate::config::LoadBalancer>,
+}
+
+impl DefaultCluster {
+    fn new(config: Backend) -> Self {
+        let load_balancer = Arc::new(crate::config::LoadBalancer::from_config(&config.lb));
+        Self { load_balancer }
+    }
+}
 
 /// A service discovery client that looks up URL information based on URLs,
 /// headers, and methods.
@@ -14,12 +28,26 @@ use crate::xds::{self, AdsClient};
 /// never has to block on a remote service.
 ///
 /// Clients are cheaply cloneable, and should be cloned to create multiple
-/// clients that share the same in-memory cache.
-#[derive(Clone)]
+/// clients that share the same in-memory cache. Note clones do not compy across
+/// any defaults
 pub struct Client {
     ads: AdsClient,
-    default_routes: Vec<Route>,
     _ads_task: Arc<tokio::task::JoinHandle<()>>,
+    // the default routes are keyed off the route's XDS listener name
+    default_routes: HashMap<String, Route>,
+    // the default backends are keyed off the backends's XDS cluster name
+    default_backends: HashMap<String, DefaultCluster>,
+}
+
+impl Clone for Client {
+    fn clone(&self) -> Self {
+        Self {
+            ads: self.ads.clone(),
+            _ads_task: self._ads_task.clone(),
+            default_routes: HashMap::default(),
+            default_backends: HashMap::default(),
+        }
+    }
 }
 
 impl Client {
@@ -30,13 +58,12 @@ impl Client {
     /// shares with an existing cache, call [Client::clone] on an existing
     /// client.
     ///
-    /// This function assumes that you're currently running the context of
-    /// a `tokio` runtime and spawns background tasks.
+    /// This function assumes that you're currently running the context of a
+    /// `tokio` runtime and spawns background tasks.
     pub async fn build(
         address: String,
         node_id: String,
         cluster: String,
-        default_routes: Vec<Route>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let (ads, mut ads_task) = AdsClient::build(address, node_id, cluster).unwrap();
 
@@ -55,43 +82,59 @@ impl Client {
         });
 
         let client = Self {
-            default_routes,
+            default_routes: HashMap::default(),
+            default_backends: HashMap::default(),
             ads,
             _ads_task: Arc::new(handle),
         };
-        client.subscribe_to_defaults(&client.default_routes);
+
         Ok(client)
     }
 
-    pub fn with_default_routes(self, default_routes: Vec<Route>) -> Client {
+    pub fn with_defaults(
+        self,
+        default_routes: Vec<Route>,
+        default_backends: Vec<Backend>,
+    ) -> Client {
+        let default_routes = default_routes
+            .into_iter()
+            .map(|x| (x.attachment.as_listener_xds_name(), x))
+            .collect();
+
+        let default_backends = default_backends
+            .into_iter()
+            .map(|x| (x.attachment.as_cluster_xds_name(), DefaultCluster::new(x)))
+            .collect();
+
         self.subscribe_to_defaults(&default_routes);
         Client {
             default_routes,
+            default_backends,
             ..self
         }
     }
 
-    fn subscribe_to_defaults(&self, default_routes: &[Route]) {
-        for route in default_routes {
-            for domain in &route.hostnames {
-                self.ads
-                    .subscribe(xds::ResourceType::Listener, domain.clone())
-                    .unwrap();
-            }
+    fn _validate_defaults(
+        _default_routes: &[Route],
+        _default_backends: &[Backend],
+    ) -> Result<(), crate::Error> {
+        Ok(())
+    }
+
+    fn subscribe_to_defaults(&self, default_routes: &HashMap<String, Route>) {
+        for (route_name, route) in default_routes {
+            self.ads
+                .subscribe(xds::ResourceType::Listener, route_name.to_string())
+                .unwrap();
 
             for rule in &route.rules {
-                match &rule.target {
-                    RouteTarget::Cluster(cluster_name) => self
-                        .ads
-                        .subscribe(xds::ResourceType::Cluster, cluster_name.clone())
-                        .unwrap(),
-                    RouteTarget::WeightedClusters(wcs) => {
-                        for wc in wcs {
-                            self.ads
-                                .subscribe(xds::ResourceType::Cluster, wc.name.clone())
-                                .unwrap()
-                        }
-                    }
+                for backend in &rule.backends {
+                    self.ads
+                        .subscribe(
+                            xds::ResourceType::Cluster,
+                            backend.attachment.as_cluster_xds_name(),
+                        )
+                        .unwrap();
                 }
             }
         }
@@ -126,8 +169,8 @@ impl Client {
             .ads
             .subscribe(xds::ResourceType::Listener, url.hostname().to_string());
 
-        // FIXME: this is deeply janky, manual exponential backoff. it should
-        // be possible for the ADS client to signal when a cache entry is
+        // FIXME: this is deeply janky, manual exponential backoff. it should be
+        // possible for the ADS client to signal when a cache entry is
         // available/pending a request/not found instead of just there/not.
         //
         // make that happen, and figure out if there is a way to notify when
@@ -156,6 +199,19 @@ impl Client {
         self.get_endpoints(method, url, headers)
             .map_err(|(_url, e)| e)
     }
+
+    fn is_simple_forwarding_route(x: &Route) -> bool {
+        x.rules.len() == 1
+            && x.rules[0].backends.len() == 1
+            && x.rules[0].matches.len() == 1
+            && x.rules[0].matches[0].method.is_none()
+            && x.rules[0].matches[0].headers.is_empty()
+            && x.rules[0].matches[0].query_params.is_empty()
+            && x.rules[0].matches[0].path
+                == Some(PathMatch::Prefix {
+                    value: "".to_string(),
+                })
+    }
 }
 
 impl Client {
@@ -167,71 +223,102 @@ impl Client {
     ) -> Result<Vec<crate::Endpoint>, (crate::Url, crate::Error)> {
         use rand::seq::SliceRandom;
 
-        let xds_routes;
-        let route_list = if self.default_routes.is_empty() {
-            let Some(rs) = self.ads.get_routes(url.hostname()) else {
-                return Err((
-                    url,
-                    crate::Error::NotReady {
-                        reason: "no routes found",
-                    },
-                ));
-            };
-            xds_routes = rs;
-            xds_routes.as_slice()
-        } else {
-            self.default_routes.as_slice()
-        };
+        let key_with_port = Attachment::from_hostname(url.hostname(), Some(url.port()));
+        let key_no_port = Attachment::from_hostname(url.hostname(), None);
 
-        let matching_route = match route_list
-            .iter()
-            .find_map(|vh| matching_rule(vh, method, &url, headers))
-        {
-            Some(rte) => rte,
-            None => return Err((url, crate::Error::NoRouteMatched)),
-        };
-
-        let cluster_name = match &matching_route.target {
-            RouteTarget::Cluster(name) => name,
-            RouteTarget::WeightedClusters(weighted_clusters) => {
-                crate::rand::with_thread_rng(|rng| {
-                    &weighted_clusters
-                        .choose_weighted(rng, |wc| wc.weight)
-                        // TODO: this is really an invalid config error. we should have
-                        // caught this earlier. for now, panic here.
-                        .expect("tried to sample from an invalid config")
-                        .name
-                })
+        // FIXME: for now, the default routes are only looked up if there is no
+        // route coming from XDS. Whereas in reality we likely want to merge the
+        // values. However that requires some thinking about what it means at
+        // the rule equivalence level and is so left for later.
+        let default = self
+            .default_routes
+            .get(&key_with_port.as_listener_xds_name())
+            .or_else(|| self.default_routes.get(&key_no_port.as_listener_xds_name()));
+        let arc_holder;
+        let matching_route_xds = self
+            .ads
+            .get_route(&key_with_port)
+            .or_else(|| self.ads.get_route(&key_no_port));
+        let matching_route = match matching_route_xds {
+            Some(x) => {
+                if Self::is_simple_forwarding_route(&x) {
+                    default.unwrap()
+                } else {
+                    arc_holder = x;
+                    arc_holder.as_ref()
+                }
+            }
+            None => {
+                if default.is_none() {
+                    return Err((url, crate::Error::NoRouteMatched));
+                }
+                default.unwrap()
             }
         };
 
-        let (lb, endpoints) = match self.ads.get_target(cluster_name) {
-            (None, _) => {
-                return Err((
-                    url,
-                    crate::Error::NotReady {
-                        reason: "no load balancer configured",
-                    },
-                ))
+        //if we got here, we have resolved to a list of routes
+        let Some(matching_rule) = find_matching_rule(matching_route, method, &url, headers) else {
+            return Err((url, crate::Error::NoRuleMatched));
+        };
+
+        let backend = crate::rand::with_thread_rng(|rng| {
+            matching_rule
+                .backends
+                .choose_weighted(rng, |wc| wc.weight)
+                // TODO: this is really an invalid config error. we should have
+                // caught this earlier. for now, panic here.
+                .expect("tried to sample from an invalid config")
+        });
+        // if backend has no port, then then we need to fill in the default
+        // which is the port of the request
+        let backend_id = match backend.attachment.port() {
+            Some(_) => backend.attachment.clone(),
+            None => backend.attachment.with_port(url.port()),
+        };
+
+        let (lb, endpoints) = match self.ads.get_target(&backend_id) {
+            (Some(lb), Some(endpoints)) => {
+                // FIXME(ports): should we also allow a default without
+                // a port set to overload
+                match lb.as_ref() {
+                    // if the load balancer is unspecified, we allow a default to overload
+                    crate::config::LoadBalancer::RoundRobin(_) => {
+                        match self.default_backends.get(&backend_id.as_cluster_xds_name()) {
+                            Some(x) => (x.load_balancer.clone(), endpoints),
+                            None => (lb, endpoints),
+                        }
+                    }
+                    _ => (lb, endpoints),
+                }
+            }
+            (None, Some(endpoints)) => {
+                match self.default_backends.get(&backend_id.as_cluster_xds_name()) {
+                    Some(x) => (x.load_balancer.clone(), endpoints),
+                    None => {
+                        return Err((url, crate::Error::NoEndpoints));
+                    }
+                }
             }
             (Some(_), None) => {
-                return Err((
-                    url,
-                    crate::Error::NotReady {
-                        reason: "no endpoint data found",
-                    },
-                ))
+                // FIXME(DNS): this might be something we want to handle
+                // depending on exactly where DNS lookups get implemented
+                return Err((url, crate::Error::NoEndpoints));
             }
-            (Some(lb), Some(endpoints)) => (lb, endpoints),
+            (None, None) => {
+                // FIXME(DNS): in this case, we still need to check client
+                // defaults as its entirly possible its a DNS address that xDS
+                // knows nothing about but we can still route to.
+                return Err((url, crate::Error::NoEndpoints));
+            }
         };
 
         let endpoint =
-            match lb.load_balance(&url, headers, &matching_route.session_affinity, &endpoints) {
+            match lb.load_balance(&url, headers, &matching_rule.session_affinity, &endpoints) {
                 Some(e) => e,
                 None => return Err((url, crate::Error::NoReachableEndpoints)),
             };
-        let timeouts = matching_route.timeouts.clone();
-        let retry = matching_route.retry_policy.clone();
+        let timeouts = matching_rule.timeouts.clone();
+        let retry = matching_rule.retry_policy.clone();
 
         Ok(vec![crate::Endpoint {
             url,
@@ -242,20 +329,14 @@ impl Client {
     }
 }
 
-pub fn matching_rule<'a>(
+//FIXME(routing): picking between these is way more complicated than finding the
+//first match
+pub fn find_matching_rule<'a>(
     route: &'a Route,
     method: &http::Method,
     url: &crate::Url,
     headers: &http::HeaderMap,
 ) -> Option<&'a RouteRule> {
-    if !route
-        .hostnames
-        .iter()
-        .any(|d| d == "*" || d == url.hostname())
-    {
-        return None;
-    }
-
     route
         .rules
         .iter()

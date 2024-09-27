@@ -9,21 +9,27 @@ pub enum Error {
     #[error("ADS connection lost, client has crashed")]
     AdsConnectionLost,
 
-    #[error("no configuration for hostname: {reason}")]
-    NotReady { reason: &'static str },
-
-    #[error("no route matched this request")]
+    #[error("no route matched the hostname and port")]
     NoRouteMatched,
 
-    #[error("no reachable endpoints")]
+    #[error("no rule within the matching route matched the request parameters")]
+    NoRuleMatched,
+
+    #[error("the matched backend does not have any endpoints")]
+    NoEndpoints,
+
+    #[error("the matched backend does not have any reachable endpoints")]
     NoReachableEndpoints,
+
+    #[error("the passed configuration has routes with no backends defined")]
+    BackendListEmpty,
 }
 
 impl Error {
     pub(crate) fn is_temporary(&self) -> bool {
         matches!(
             self,
-            Error::NotReady { .. } | Error::NoRouteMatched | Error::NoReachableEndpoints
+            Error::NoRouteMatched | Error::NoRuleMatched | Error::NoEndpoints
         )
     }
 }

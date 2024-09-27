@@ -5,12 +5,112 @@ import typing
 import datetime
 
 
-class WeightedCluster(typing.TypedDict):
-    name: str
+class Fraction(typing.TypedDict):
+    numerator: int
+    denominator: int
+
+
+class WeightedBackend(typing.TypedDict):
     weight: int
+    hostname: str
+    """The DNS Name to target/attach to"""
+
+    name: str
+    """The name of the Kubernetes Service"""
+
+    namespace: str
+    """The namespace of the Kubernetes service.
+    FIXME(namespace): what should the semantic be when this is not specified:
+    default, namespace of client, namespace of EZbake?"""
+
+    port: int
+    """The port number to target/attach to.
+
+    When attaching policies, if it is not specified, the
+    attachment will apply to all connections that don't have a specific
+    port specified.
+
+    When being used to lookup a backend after a matched rule,
+    if it is not specified then it will use the same port as the incoming request"""
+
+    type: str
 
 
-RouteTarget = str | typing.List[WeightedCluster]
+class DNS(typing.TypedDict):
+    type: str
+    hostname: str
+    """The DNS Name to target/attach to"""
+
+    port: int
+    """The port number to target/attach to.
+
+    When attaching policies, if it is not specified, the
+    attachment will apply to all connections that don't have a specific
+    port specified.
+
+    When being used to lookup a backend after a matched rule,
+    if it is not specified then it will use the same port as the incoming request"""
+
+
+class Service(typing.TypedDict):
+    type: str
+    name: str
+    """The name of the Kubernetes Service"""
+
+    namespace: str
+    """The namespace of the Kubernetes service.
+    FIXME(namespace): what should the semantic be when this is not specified:
+    default, namespace of client, namespace of EZbake?"""
+
+    port: int
+    """The port number of the Kubernetes service to target/
+    attach to.
+
+    When attaching policies, if it is not specified, the
+    attachment will apply to all connections that don't have a specific
+    port specified.
+
+    When being used to lookup a backend after a matched rule,
+    if it is not specified then it will use the same port as the incoming request"""
+
+
+Attachment = DNS | Service
+
+
+class DNSAttachment(typing.TypedDict):
+    hostname: str
+    """The DNS Name to target/attach to"""
+
+    port: int
+    """The port number to target/attach to.
+
+    When attaching policies, if it is not specified, the
+    attachment will apply to all connections that don't have a specific
+    port specified.
+
+    When being used to lookup a backend after a matched rule,
+    if it is not specified then it will use the same port as the incoming request"""
+
+
+class ServiceAttachment(typing.TypedDict):
+    name: str
+    """The name of the Kubernetes Service"""
+
+    namespace: str
+    """The namespace of the Kubernetes service.
+    FIXME(namespace): what should the semantic be when this is not specified:
+    default, namespace of client, namespace of EZbake?"""
+
+    port: int
+    """The port number of the Kubernetes service to target/
+    attach to.
+
+    When attaching policies, if it is not specified, the
+    attachment will apply to all connections that don't have a specific
+    port specified.
+
+    When being used to lookup a backend after a matched rule,
+    if it is not specified then it will use the same port as the incoming request"""
 
 
 class Prefix(typing.TypedDict):
@@ -190,59 +290,8 @@ class SessionAffinityHashParam(typing.TypedDict):
     type: str
 
 
-SessionPersistenceCookieLifetimeType = (
-    typing.Literal["Permanent"] | typing.Literal["Session"]
-)
-
-
-class SessionPersistenceCookieConfig(typing.TypedDict):
-    """Provides configuration settings that are specific to cookie-based session
-    persistence."""
-
-    lifetime_type: SessionPersistenceCookieLifetimeType
-    """Specifies whether the cookie has a permanent or session-based lifetime.
-    A permanent cookie persists until its specified expiry time, defined by
-    the Expires or Max-Age cookie attributes, while a session cookie is
-    deleted when the current session ends.
-
-    When set to "Permanent", AbsoluteTimeout indicates the cookie's lifetime
-    via the Expires or Max-Age cookie attributes and is required.
-
-    When set to "Session", AbsoluteTimeout indicates the absolute lifetime
-    of the cookie and is optional."""
-
-
-SessionPersistenceType = typing.Literal["Cookie"] | typing.Literal["Header"]
-
-
 class SessionAffinityPolicy(typing.TypedDict):
     hash_params: typing.List[SessionAffinityHashParam]
-
-
-class SessionPersistence(typing.TypedDict):
-    """Defines and configures session persistence for the route rule."""
-
-    session_name: str
-    """Defines the name of the persistent session token which may be reflected
-    in the cookie or the header. Avoid reusing session names to prevent
-    unintended consequences, such as rejection or unpredictable behavior."""
-
-    absolute_timeout: str
-    """Defines the absolute timeout of the persistent session. Once the
-    AbsoluteTimeout duration has elapsed, the session becomes invalid."""
-
-    cookie_config: SessionPersistenceCookieConfig
-    """Provides configuration settings that are specific to cookie-based
-    session persistence."""
-
-    idle_timeout: datetime.timedelta
-    """Defines the idle timeout of the persistent session. Once the session has
-    been idle for more than the specified IdleTimeout duration, the session
-    becomes invalid."""
-
-    type: SessionPersistenceType
-    """Defines the type of session persistence such as through the use a header
-    or cookie."""
 
 
 class RequestHeaderFilter(typing.TypedDict):
@@ -296,11 +345,11 @@ class RequestMirrorFilter(typing.TypedDict):
     Only one of Fraction or Percent may be specified. If neither field is
     specified, 100% of requests will be mirrored."""
 
-    fraction: typing.Tuple[int, int]
+    fraction: Fraction
     """Only one of Fraction or Percent may be specified. If neither field is
     specified, 100% of requests will be mirrored."""
 
-    target: RouteTarget
+    backend: Attachment
 
 
 class RequestRedirectFilter(typing.TypedDict):
@@ -472,17 +521,45 @@ class RouteRule(typing.TypedDict):
     All filters are compatible with each other except for the URLRewrite and
     RequestRedirect filters, which may not be combined."""
 
-    session_persistence: SessionPersistence
     timeouts: RouteTimeouts
     session_affinity: SessionAffinityPolicy
     retry_policy: RouteRetryPolicy
-    target: RouteTarget
+    backends: typing.List[WeightedBackend]
 
 
 class Route(typing.TypedDict):
-    hostnames: typing.List[str]
-    """The domains that this applies to. Domains are matched against the
-    incoming authority of any URL."""
-
+    attachment: Attachment
     rules: typing.List[RouteRule]
+    """The domains that this applies to. Domains are matched against the
+    incoming authority of any URL.
+    FIXME(gateway): this is needed eventually to support attaching to gateways
+    in the meantime though it just confuses things.
+    The route rules that determine whether any URLs match."""
+
+
+class RingHashParams(typing.TypedDict):
+    min_ring_size: int
+    hash_params: typing.List[SessionAffinityHashParam]
+
+
+class RoundRobin(typing.TypedDict):
+    type: str
+
+
+class RingHash(typing.TypedDict):
+    type: str
+    min_ring_size: int
+    hash_params: typing.List[SessionAffinityHashParam]
+
+
+class Unspecified(typing.TypedDict):
+    type: str
+
+
+LbPolicy = RoundRobin | RingHash | Unspecified
+
+
+class Backend(typing.TypedDict):
+    attachment: Attachment
+    lb: LbPolicy
     """The route rules that determine whether any URLs match."""

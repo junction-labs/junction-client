@@ -132,12 +132,14 @@ class Session(requests.Session):
     def __init__(
         self,
         default_routes: List[junction.config.Route] | None = None,
+        default_backends: List[junction.config.Backend] | None = None,
         junction_client: junction.Junction | None = None,
     ) -> None:
         super().__init__()
 
         _, client = junction._handle_kwargs(
             default_routes=default_routes,
+            default_backends=default_backends,
             junction_client=junction_client,
             kwargs={},
         )

@@ -9,42 +9,65 @@ def run(args):
         session = junction.requests.Session()
     elif args.session == "client-config":
         session = junction.requests.Session(
+            default_backends=[
+                {
+                    "attachment": {
+                        "name": "jct-http-server-feature-1",
+                        "namespace": "default",
+                    },
+                    "lb": {
+                        "type": "RingHash",
+                        "minRingSize": 1024,
+                        "hashParams": [{"type": "Header", "name": "USER"}],
+                    },
+                }
+            ],
             default_routes=[
                 {
-                    "hostnames": ["jct-http-server.default.svc.cluster.local"],
+                    "attachment": {"name": "jct-http-server", "namespace": "default"},
                     "rules": [
                         {
                             "matches": [{"path": {"value": "/feature-1/index"}}],
-                            "target": [
+                            "backends": [
                                 {
-                                    "name": "default/jct-http-server/cluster",
+                                    "name": "jct-http-server",
+                                    "namespace": "default",
                                     "weight": 80,
                                 },
                                 {
-                                    "name": "default/jct-http-server-feature-1/cluster",
+                                    "name": "jct-http-server-feature-1",
+                                    "namespace": "default",
                                     "weight": 20,
                                 },
                             ],
                         },
                         {
-                            "target": "default/jct-http-server/cluster",
+                            "backends": [
+                                {"name": "jct-http-server", "namespace": "default"}
+                            ]
                         },
                     ],
                 }
-            ]
+            ],
         )
     else:
         session = requests.Session()
 
     for path in ["/index", "/feature-1/index"]:
-        counters = defaultdict(int)
-        for _ in range(100):
-            resp = session.get(f"{args.base_url}{path}")
-            resp.raise_for_status()
-            counters[resp.text] += 1
-        print(f"{path} hit - ")
-        for key in counters.keys():
-            print(f"  {key}: {counters[key]}")
+        for header_opt in ["without_header", "with_header"]:
+            counters = defaultdict(int)
+            for _ in range(100):
+                headers = {}
+                if header_opt == "with_header":
+                    headers = {"USER": "inowland"}
+                resp = session.get(f"{args.base_url}{path}", headers=headers)
+                resp.raise_for_status()
+                counters[resp.text] += 1
+            print(f"*** {path} {header_opt} ***")
+            myKeys = list(counters.keys())
+            myKeys.sort()
+            for key in myKeys:
+                print(f"  {key}: {counters[key]}")
 
 
 if __name__ == "__main__":

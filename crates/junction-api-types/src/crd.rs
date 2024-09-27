@@ -1,17 +1,31 @@
-///
-/// These are the custom CRDs for junction-specific extensions that aren't
-/// in the Gateway API CRDs.
-///
+use crate::{backend::LbPolicy, http::RouteRetryPolicy, shared::SessionAffinityPolicy};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    backend::LbPolicy,
-    http::{RouteRetryPolicy, SessionAffinityPolicy},
-    shared::ParentRef,
-};
+///
+/// These are the custom CRDs for junction-specific extensions that aren't
+/// in the Gateway API CRDs.
+///
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPolicyTargetReference {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
+    pub name: String,
+}
+
+///
+///  HTTPRoutePolicyConfig is due to become in the standard, and we have picked
+///  the exact parameters likely to standardize. However (a) they may change and
+///  (b) aren't in any CRDs yet. So this policy is to allow those, and any
+///  similar extensions in the future.
+///
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default, JsonSchema)]
 #[kube(
     group = "policies.junctionlabs.io",
@@ -23,7 +37,7 @@ use crate::{
 //#[kube(status = "JctHTTPRoutePolicyStatus")]
 #[kube(derive = "Default")]
 pub struct JctHTTPRoutePolicySpec {
-    pub parent_ref: ParentRef,
+    pub target_refs: Vec<LocalPolicyTargetReference>,
 
     #[serde(flatten)]
     pub inner: JctHTTPRoutePolicyConfig,
@@ -39,6 +53,10 @@ pub struct JctHTTPRoutePolicyConfig {
     pub retry: Option<RouteRetryPolicy>,
 }
 
+///
+/// session_persitence will be handled the the upcoming 1.2 release of BackendLBPolicy
+/// so the junction CRD only has to support our customized load balancer config.
+///
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default, JsonSchema)]
 #[kube(
     group = "policies.junctionlabs.io",
@@ -50,15 +68,8 @@ pub struct JctHTTPRoutePolicyConfig {
 //#[kube(status = "JctBackendPolicyStatus")]
 #[kube(derive = "Default")]
 pub struct JctBackendPolicySpec {
-    pub parent_ref: ParentRef,
+    pub target_refs: Vec<LocalPolicyTargetReference>,
 
-    #[serde(flatten)]
-    pub inner: JctBackendPolicyConfig,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Default, JsonSchema)]
-pub struct JctBackendPolicyConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lb: Option<LbPolicy>,
 }
 
