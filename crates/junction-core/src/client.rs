@@ -99,12 +99,12 @@ impl Client {
 
         let default_backends = default_backends
             .into_iter()
-            .map(|backend| {
-                let load_balancer = LoadBalancer::from_config(&backend.lb);
+            .map(|config| {
+                let load_balancer = LoadBalancer::from_config(&config.lb);
                 (
-                    backend.attachment.as_cluster_xds_name(),
+                    config.attachment.as_cluster_xds_name(),
                     Arc::new(BackendLb {
-                        backend,
+                        config,
                         load_balancer,
                     }),
                 )
@@ -193,18 +193,18 @@ impl Client {
         let mut backends = vec![];
         let mut defaults: BTreeSet<_> = self.default_backends.keys().collect();
 
-        for b in self.ads.cache.iter_backends() {
-            let b = if b.backend.lb.is_default_policy() {
+        for backend in self.ads.cache.iter_backends() {
+            let backend = if backend.config.lb.is_default_policy() {
                 self.default_backends
-                    .get(&b.backend.attachment.as_cluster_xds_name())
+                    .get(&backend.config.attachment.as_cluster_xds_name())
                     .cloned()
-                    .unwrap_or(b)
+                    .unwrap_or(backend)
             } else {
-                b
+                backend
             };
 
-            defaults.remove(&b.backend.attachment.as_cluster_xds_name());
-            backends.push(b);
+            defaults.remove(&backend.config.attachment.as_cluster_xds_name());
+            backends.push(backend);
         }
 
         for backend_name in defaults {
@@ -299,57 +299,92 @@ impl Client {
             }
             (None, Some(configured_route)) => configured_route,
             (Some(default_route), None) => default_route.clone(),
-            _ => return Err((url, crate::Error::NoRouteMatched)),
+            _ => {
+                return Err((
+                    url,
+                    crate::Error::NoRouteMatched {
+                        routes: vec![key_with_port, key_no_port],
+                    },
+                ))
+            }
         };
 
-        //if we got here, we have resolved to a list of routes
-        let Some(matching_rule) = find_matching_rule(&matching_route, method, &url, headers) else {
-            return Err((url, crate::Error::NoRuleMatched));
+        // if we got here, we have resolved to a list of routes
+        let Some((matching_rule_idx, matching_rule)) =
+            find_matching_rule(&matching_route, method, &url, headers)
+        else {
+            return Err((
+                url,
+                crate::Error::NoRuleMatched {
+                    route: matching_route.attachment.clone(),
+                },
+            ));
         };
 
-        let backend = crate::rand::with_thread_rng(|rng| {
-            matching_rule
-                .backends
-                .choose_weighted(rng, |wc| wc.weight)
-                // TODO: this is really an invalid config error. we should have
-                // caught this earlier. for now, panic here.
-                .expect("tried to sample from an invalid config")
+        // pick a target at random from the list, respecting weights. if the
+        // target has no port, then then we need to fill in the default using
+        // the request URL.
+        //
+        // FIXME: this ignores the request URL if the backend has a port? is
+        // that right?
+        let backend_id = &crate::rand::with_thread_rng(|rng| {
+            matching_rule.backends.choose_weighted(rng, |wc| wc.weight)
         });
-
-        // if backend has no port, then then we need to fill in the default
-        // which is the port of the request
-        let backend_id = match backend.attachment.port() {
-            Some(_) => backend.attachment.clone(),
-            None => backend.attachment.with_port(url.port()),
+        let Ok(backend_id) = backend_id.map(|w| &w.attachment) else {
+            return Err((
+                url,
+                crate::Error::InvalidRoutes {
+                    message: "matched rule has no backends",
+                    attachment: matching_route.attachment.clone(),
+                    rule: matching_rule_idx,
+                },
+            ));
         };
+        let backend_id = match backend_id.port() {
+            Some(_) => backend_id.clone(),
+            None => backend_id.with_port(url.port()),
+        };
+
+        // use the load
         let (backend, endpoints) = match self.ads.get_target(&backend_id) {
-            (Some(backend_lb), Some(endpoints)) => {
-                let lb = if backend_lb.backend.lb.is_default_policy() {
+            (Some(backend), Some(endpoints)) => {
+                let lb = if backend.config.lb.is_default_policy() {
                     self.default_backends
                         .get(&backend_id.as_cluster_xds_name())
                         .cloned()
-                        .unwrap_or(backend_lb)
+                        .unwrap_or(backend)
                 } else {
-                    backend_lb
+                    backend
                 };
                 (lb, endpoints)
             }
             (None, Some(endpoints)) => {
                 let Some(lb) = self.default_backends.get(&backend_id.as_cluster_xds_name()) else {
-                    return Err((url, crate::Error::NoEndpoints));
+                    return Err((
+                        url,
+                        crate::Error::NoBackend {
+                            route: matching_route.attachment.clone(),
+                            rule: matching_rule_idx,
+                            backend: backend_id,
+                        },
+                    ));
                 };
                 (lb.clone(), endpoints)
             }
-            (Some(_), None) => {
+            _ => {
                 // FIXME(DNS): this might be something we want to handle
-                // depending on exactly where DNS lookups get implemented
-                return Err((url, crate::Error::NoEndpoints));
-            }
-            (None, None) => {
-                // FIXME(DNS): in this case, we still need to check client
-                // defaults as its entirly possible its a DNS address that xDS
-                // knows nothing about but we can still route to.
-                return Err((url, crate::Error::NoEndpoints));
+                // depending on exactly where DNS lookups get implemented. we
+                // still need to check client defaults as its entirly possible
+                // its a DNS address that xDS knows nothing about but we can
+                // still route to.
+                return Err((
+                    url,
+                    crate::Error::NoBackend {
+                        route: matching_route.attachment.clone(),
+                        rule: matching_rule_idx,
+                        backend: backend_id,
+                    },
+                ));
             }
         };
 
@@ -360,7 +395,15 @@ impl Client {
             &endpoints,
         ) {
             Some(e) => e,
-            None => return Err((url, crate::Error::NoReachableEndpoints)),
+            None => {
+                return Err((
+                    url,
+                    crate::Error::NoReachableEndpoints {
+                        route: matching_route.attachment.clone(),
+                        backend: backend_id,
+                    },
+                ))
+            }
         };
         let timeouts = matching_rule.timeouts.clone();
         let retry = matching_rule.retry_policy.clone();
@@ -376,16 +419,19 @@ impl Client {
 
 //FIXME(routing): picking between these is way more complicated than finding the
 //first match
-pub fn find_matching_rule<'a>(
+fn find_matching_rule<'a>(
     route: &'a Route,
     method: &http::Method,
     url: &crate::Url,
     headers: &http::HeaderMap,
-) -> Option<&'a RouteRule> {
-    route
+) -> Option<(usize, &'a RouteRule)> {
+    let rule_idx = route
         .rules
         .iter()
-        .find(|rule| is_route_rule_match(rule, method, url, headers))
+        .position(|rule| is_route_rule_match(rule, method, url, headers))?;
+
+    let rule = &route.rules[rule_idx];
+    Some((rule_idx, rule))
 }
 
 pub fn is_route_rule_match(

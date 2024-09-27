@@ -416,7 +416,7 @@ impl Cluster {
         };
 
         let backend_lb = Arc::new(BackendLb {
-            backend,
+            config: backend,
             load_balancer,
         });
         let endpoints = ClusterEndpointData::LoadAssignment {

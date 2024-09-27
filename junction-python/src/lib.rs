@@ -419,8 +419,8 @@ impl Junction {
     fn dump_backends(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut values = vec![];
 
-        for backend_lb in self.core.dump_backends() {
-            values.push(pythonize::pythonize(py, &backend_lb.backend)?);
+        for backend in self.core.dump_backends() {
+            values.push(pythonize::pythonize(py, &backend.config)?);
         }
 
         Ok(values)

@@ -808,7 +808,7 @@ impl Cache {
                         .data()
                         .expect("GC leak: parent Cluster has no data")
                         .backend_lb
-                        .backend
+                        .config
                         .attachment
                         .clone()
                 };

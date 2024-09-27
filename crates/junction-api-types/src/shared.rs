@@ -883,11 +883,24 @@ pub struct DNSAttachment {
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum Attachment {
     DNS(DNSAttachment),
+
     #[serde(untagged)]
     Service(ServiceAttachment),
 }
 
 static KUBE_SERVICE_SUFFIX: &str = ".svc.cluster.local";
+
+impl std::fmt::Display for Attachment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.as_hostname())?;
+
+        if let Some(port) = self.port() {
+            f.write_fmt(format_args!(":{port}"))?;
+        }
+
+        Ok(())
+    }
+}
 
 ///
 ///  FIXME(ports): nothing with ports here will work until we move to xdstp
