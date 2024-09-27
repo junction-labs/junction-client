@@ -1,3 +1,4 @@
+use crate::EndpointAddress;
 use junction_api_types::{
     backend::{LbPolicy, RingHashParams},
     shared::{
@@ -13,8 +14,6 @@ use std::{
     },
 };
 use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
-
-use crate::EndpointAddress;
 
 // FIXME: need a way to produce RequestContext from a route.
 // FIXME: include endpoint weights in EndpointGroup
@@ -218,7 +217,7 @@ impl RingHashLb {
         hash_params: &Vec<SessionAffinityHashParam>,
         endpoint_group: &'e EndpointGroup,
     ) -> Option<&'e EndpointAddress> {
-        let request_hash = hash_request(hash_params, url, headers)?;
+        let request_hash = hash_request(hash_params, url, headers).unwrap_or_else(rand::random);
         let endpoint_idx = self.with_ring(endpoint_group, |r| r.pick(request_hash))?;
         endpoint_group.nth(endpoint_idx)
     }

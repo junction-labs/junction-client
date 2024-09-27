@@ -106,7 +106,7 @@ impl Client {
             .map(|x| (x.attachment.as_cluster_xds_name(), DefaultCluster::new(x)))
             .collect();
 
-        self.subscribe_to_defaults();
+        self.subscribe_to_defaults(&default_routes);
         Client {
             default_routes,
             default_backends,
@@ -121,8 +121,8 @@ impl Client {
         Ok(())
     }
 
-    fn subscribe_to_defaults(&self) {
-        for (route_name, route) in &self.default_routes {
+    fn subscribe_to_defaults(&self, default_routes: &HashMap<String, Route>) {
+        for (route_name, route) in default_routes {
             self.ads
                 .subscribe(xds::ResourceType::Listener, route_name.to_string())
                 .unwrap();
@@ -199,6 +199,19 @@ impl Client {
         self.get_endpoints(method, url, headers)
             .map_err(|(_url, e)| e)
     }
+
+    fn is_simple_forwarding_route(x: &Route) -> bool {
+        x.rules.len() == 1
+            && x.rules[0].backends.len() == 1
+            && x.rules[0].matches.len() == 1
+            && x.rules[0].matches[0].method.is_none()
+            && x.rules[0].matches[0].headers.is_empty()
+            && x.rules[0].matches[0].query_params.is_empty()
+            && x.rules[0].matches[0].path
+                == Some(PathMatch::Prefix {
+                    value: "".to_string(),
+                })
+    }
 }
 
 impl Client {
@@ -217,6 +230,10 @@ impl Client {
         // route coming from XDS. Whereas in reality we likely want to merge the
         // values. However that requires some thinking about what it means at
         // the rule equivalence level and is so left for later.
+        let default = self
+            .default_routes
+            .get(&key_with_port.as_listener_xds_name())
+            .or_else(|| self.default_routes.get(&key_no_port.as_listener_xds_name()));
         let arc_holder;
         let matching_route_xds = self
             .ads
@@ -224,15 +241,14 @@ impl Client {
             .or_else(|| self.ads.get_route(&key_no_port));
         let matching_route = match matching_route_xds {
             Some(x) => {
-                arc_holder = x;
-                arc_holder.as_ref()
+                if Self::is_simple_forwarding_route(&x) {
+                    default.unwrap()
+                } else {
+                    arc_holder = x;
+                    arc_holder.as_ref()
+                }
             }
             None => {
-                let default = self
-                    .default_routes
-                    .get(&key_with_port.as_listener_xds_name())
-                    .or_else(|| self.default_routes.get(&key_no_port.as_listener_xds_name()));
-
                 if default.is_none() {
                     return Err((url, crate::Error::NoRouteMatched));
                 }
@@ -253,7 +269,6 @@ impl Client {
                 // caught this earlier. for now, panic here.
                 .expect("tried to sample from an invalid config")
         });
-
         // if backend has no port, then then we need to fill in the default
         // which is the port of the request
         let backend_id = match backend.attachment.port() {
@@ -267,7 +282,7 @@ impl Client {
                 // a port set to overload
                 match lb.as_ref() {
                     // if the load balancer is unspecified, we allow a default to overload
-                    crate::config::LoadBalancer::Unspecified(_) => {
+                    crate::config::LoadBalancer::RoundRobin(_) => {
                         match self.default_backends.get(&backend_id.as_cluster_xds_name()) {
                             Some(x) => (x.load_balancer.clone(), endpoints),
                             None => (lb, endpoints),
