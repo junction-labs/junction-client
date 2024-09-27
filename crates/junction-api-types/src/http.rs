@@ -9,7 +9,7 @@ use std::str::FromStr;
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
@@ -24,6 +24,23 @@ pub struct Route {
 
     /// The route rules that determine whether any URLs match.
     pub rules: Vec<RouteRule>,
+}
+
+impl Route {
+    // FIXME: impl Default and make sure this passes on it
+    #[doc(hidden)]
+    pub fn is_default_route(&self) -> bool {
+        self.rules.len() == 1
+            && self.rules[0].backends.len() == 1
+            && self.rules[0].matches.len() == 1
+            && self.rules[0].matches[0].method.is_none()
+            && self.rules[0].matches[0].headers.is_empty()
+            && self.rules[0].matches[0].query_params.is_empty()
+            && self.rules[0].matches[0].path
+                == Some(PathMatch::Prefix {
+                    value: "".to_string(),
+                })
+    }
 }
 
 /// Defines semantics for matching an HTTP request based on conditions

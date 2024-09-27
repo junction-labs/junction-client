@@ -21,7 +21,7 @@ async fn main() {
     )
     .await
     .unwrap();
-    tokio::spawn(client.config_server(8009));
+    tokio::spawn(client.csds_server(8009));
 
     let nginx = Attachment::Service(ServiceAttachment {
         name: "nginx".to_string(),

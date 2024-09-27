@@ -111,7 +111,6 @@ impl Locality {
 
 #[derive(Debug)]
 pub enum LoadBalancer {
-    Unspecified(RoundRobinLb),
     RoundRobin(RoundRobinLb),
     RingHash(RingHashLb),
 }
@@ -126,7 +125,6 @@ impl LoadBalancer {
     ) -> Option<&'ep crate::EndpointAddress> {
         match self {
             LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(locality_endpoints),
-            LoadBalancer::Unspecified(lb) => lb.pick_endpoint(locality_endpoints),
             LoadBalancer::RingHash(lb) => {
                 let hash_params;
                 if !lb.config.hash_params.is_empty() {
@@ -151,7 +149,7 @@ impl LoadBalancer {
         match config {
             LbPolicy::RoundRobin => LoadBalancer::RoundRobin(RoundRobinLb::default()),
             LbPolicy::RingHash(x) => LoadBalancer::RingHash(RingHashLb::new(x)),
-            LbPolicy::Unspecified => LoadBalancer::Unspecified(RoundRobinLb::default()),
+            LbPolicy::Unspecified => LoadBalancer::RoundRobin(RoundRobinLb::default()),
         }
     }
 }
@@ -183,7 +181,7 @@ impl RoundRobinLb {
 /// Envoy, this load balancer ignores endpoint weights.
 ///
 #[derive(Debug)]
-pub(crate) struct RingHashLb {
+pub struct RingHashLb {
     config: RingHashParams,
     ring: RwLock<Ring>,
 }

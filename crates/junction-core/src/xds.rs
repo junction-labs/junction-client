@@ -55,10 +55,10 @@ pub use resources::ResourceVersion;
 pub(crate) use resources::{ResourceType, ResourceVec};
 
 pub(crate) mod csds;
+use crate::config::{BackendLb, EndpointGroup};
 
 #[cfg(test)]
 mod test;
-use crate::config;
 
 // FIXME: nonce is global for a conneciton, not per resource type????
 
@@ -121,10 +121,7 @@ impl AdsClient {
     pub fn get_target(
         &self,
         attachment: &Attachment,
-    ) -> (
-        Option<Arc<config::LoadBalancer>>,
-        Option<Arc<config::EndpointGroup>>,
-    ) {
+    ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
         self.cache.get_target(attachment)
     }
 
