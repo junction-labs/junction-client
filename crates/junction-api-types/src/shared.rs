@@ -25,10 +25,10 @@ pub type PortNumber = u16;
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Fraction {
-    pub numberator: i32,
+    pub numerator: i32,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deonomindator: Option<i32>,
+    pub denominator: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
