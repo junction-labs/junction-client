@@ -29,7 +29,7 @@ pub struct Route {
 /// Defines semantics for matching an HTTP request based on conditions
 /// (matches), processing it (filters), and forwarding the request to an API
 /// object (backendRefs).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRule {
@@ -144,7 +144,7 @@ pub struct RouteTimeouts {
 ///   - name: "version"
 ///     value "v1"
 /// ```
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteMatch {

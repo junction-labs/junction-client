@@ -8,13 +8,19 @@ def run(args):
     if args.session == "no-client-config":
         session = junction.requests.Session()
     elif args.session == "client-config":
+        default_backend: junction.config.Attachment = {
+            "name": "jct-http-server",
+            "namespace": "default",
+        }
+        feature_backend: junction.config.Attachment = {
+            "name": "jct-http-server-feature-1",
+            "namespace": "default",
+        }
+
         session = junction.requests.Session(
             default_backends=[
                 {
-                    "attachment": {
-                        "name": "jct-http-server-feature-1",
-                        "namespace": "default",
-                    },
+                    "attachment": default_backend,
                     "lb": {
                         "type": "RingHash",
                         "minRingSize": 1024,
@@ -24,26 +30,25 @@ def run(args):
             ],
             default_routes=[
                 {
-                    "attachment": {"name": "jct-http-server", "namespace": "default"},
+                    "attachment": default_backend,
                     "rules": [
                         {
                             "matches": [{"path": {"value": "/feature-1/index"}}],
                             "backends": [
                                 {
-                                    "name": "jct-http-server",
-                                    "namespace": "default",
+                                    **default_backend,
                                     "weight": 80,
                                 },
                                 {
-                                    "name": "jct-http-server-feature-1",
-                                    "namespace": "default",
+                                    **feature_backend,
                                     "weight": 20,
                                 },
                             ],
                         },
                         {
+                            # an empty set of matches always matches
                             "backends": [
-                                {"name": "jct-http-server", "namespace": "default"}
+                                default_backend,
                             ]
                         },
                     ],

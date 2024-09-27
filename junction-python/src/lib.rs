@@ -312,7 +312,10 @@ fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
     let backends = default_backends(kwargs)?;
     match DEFAULT_CLIENT.as_ref() {
         Ok(default_client) => {
-            let core = default_client.clone().with_defaults(routes, backends);
+            let core = default_client
+                .clone()
+                .with_defaults(routes, backends)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
             Ok(Junction { core })
         }
         Err(e) => Err(PyRuntimeError::new_err(e)),
@@ -333,7 +336,9 @@ impl Junction {
 
         match new_client(ads, node, cluster) {
             Ok(client) => {
-                let core = client.with_defaults(routes, backends);
+                let core = client
+                    .with_defaults(routes, backends)
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
                 Ok(Junction { core })
             }
             Err(e) => Err(PyRuntimeError::new_err(e)),
