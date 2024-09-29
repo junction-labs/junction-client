@@ -68,7 +68,7 @@ class PoolManager(urllib3.PoolManager):
             kw["headers"] = self.headers
 
         # TODO: pass in defaults here - timeouts, routing rules, etc.
-        endpoints = self.junction.resolve_endpoints(
+        endpoints = self.junction.resolve_http(
             method,
             url,
             kw["headers"],

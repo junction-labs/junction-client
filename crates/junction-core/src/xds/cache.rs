@@ -108,7 +108,7 @@ use xds_api::pb::google::protobuf;
 // this is mostly a handful of DFS passes on the graph, but with an
 // early exit if we've already marked a node.
 
-use crate::config::BackendLb;
+use crate::config::{BackendLb, ConfigCache};
 
 use super::resources::{
     ApiListener, ApiListenerRouteConfig, Cluster, ClusterEndpointData, LoadAssignment,
@@ -338,13 +338,10 @@ impl CacheReader {
                 xds_endpoint::ClusterLoadAssignment
             ))
     }
+}
 
-    /// Get the routing table for a hostname.
-    ///
-    /// Will return `None` if the routing table does not yet exist in cache,
-    /// either because it hasn't yet been pulled from the ADS servcer or it
-    /// doesn't exist.
-    pub(crate) fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
+impl ConfigCache for CacheReader {
+    fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
         let listener = self.data.listeners.get(&target.as_listener_xds_name())?;
 
         match &listener.data()?.route_config {
@@ -356,13 +353,7 @@ impl CacheReader {
         }
     }
 
-    /// Get the load balancer config, load balancer, and endpoint group for a
-    /// routing target.
-    ///
-    /// May return no data, or load balancer, or a load balancer and an
-    /// endpoint group if configuration hasn't yet been fetched from the ADS
-    /// server or if the resources don't exist.
-    pub(crate) fn get_target(
+    fn get_backend(
         &self,
         target: &Target,
     ) -> (

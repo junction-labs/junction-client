@@ -1,4 +1,3 @@
-use http::Uri;
 use junction_api_types::{backend::Backend, http::Route};
 use junction_core::ResourceVersion;
 use once_cell::sync::Lazy;
@@ -19,6 +18,7 @@ use xds_api::pb::google::protobuf;
 fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Junction>()?;
     m.add_function(wrap_pyfunction!(default_client, m)?)?;
+    m.add_function(wrap_pyfunction!(check_route, m)?)?;
 
     Ok(())
 }
@@ -323,6 +323,38 @@ fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
     }
 }
 
+/// Check route resolution.
+///
+/// Resolve a request against a routing table. Returns the full route that was
+/// selected based on the URL, the index of the routing rule that matched, and
+/// the target that the rule resolved to.
+///
+/// This function is stateless, and doesn't require connecting to a control
+/// plane. Use it to unit test your routing rules.
+#[pyfunction]
+fn check_route(
+    py: Python<'_>,
+    routes: Bound<'_, PyAny>,
+    method: &str,
+    url: &str,
+    headers: &Bound<PyMapping>,
+) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
+    let url: junction_core::Url = url
+        .parse()
+        .map_err(|e| PyValueError::new_err(format!("{e}")))?;
+    let method = method_from_py(method)?;
+    let headers = headers_from_py(headers)?;
+
+    let routes: Vec<Route> = pythonize::depythonize_bound(routes)?;
+    let (route, rule_idx, backend) = junction_core::check_route(routes, &method, url, &headers)
+        .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
+
+    let route = pythonize::pythonize(py, &route)?;
+    let backend = pythonize::pythonize(py, &backend)?;
+
+    Ok((route, rule_idx, backend))
+}
+
 #[pymethods]
 impl Junction {
     /// Create a new Junction client. The client can be shared and is safe to
@@ -352,31 +384,21 @@ impl Junction {
     /// in to account load balancing and any prior requests. A request should be
     /// sent to all endpoints, and it's up to the caller to decide how to
     /// combine multiple responses.
-    fn resolve_endpoints(
+    fn resolve_http(
         &mut self,
         method: &str,
         url: &str,
         headers: &Bound<PyMapping>,
     ) -> PyResult<Vec<Endpoint>> {
-        let url: Uri = url
-            .parse()
-            .map_err(|e| PyValueError::new_err(format!("invalid url: {e}")))?;
+        let url =
+            junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
 
-        if url.scheme().is_none() {
-            return Err(PyValueError::new_err("url must have a valid scheme"));
-        }
-        if url.host().is_none() {
-            return Err(PyValueError::new_err("url must have a host"));
-        }
-
-        let method = http::Method::from_str(method)
-            .map_err(|_| PyValueError::new_err(format!("invalid HTTP method: {method}")))?;
-
+        let method = method_from_py(method)?;
         let headers = headers_from_py(headers)?;
 
         let endpoints = self
             .core
-            .resolve_endpoints(&method, url, &headers)
+            .resolve_http(&method, url, &headers)
             .map(|endpoints| endpoints.into_iter().map(|e| e.into()).collect())
             .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
@@ -398,10 +420,10 @@ impl Junction {
         Ok(())
     }
 
-    /// Dump the client's route config.
+    /// Dump the client's current route config.
     ///
     /// This is the same merged view of dynamic config and static config that
-    /// the client uses to make its routing decisions.
+    /// the client uses to make routing decisions.
     fn dump_routes(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut values = vec![];
 
@@ -415,8 +437,7 @@ impl Junction {
     /// Dump the client's backend config.
     ///
     /// This is the same merged view of dynamic config and static config that
-    /// the client uses to make its load balancing decisions after a route
-    /// is selected.
+    /// the client uses to make load balancing decisions.
     fn dump_backends(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut values = vec![];
 
@@ -477,6 +498,11 @@ impl From<junction_core::XdsConfig> for XdsConfig {
             error_info,
         }
     }
+}
+
+fn method_from_py(method: &str) -> PyResult<http::Method> {
+    http::Method::from_str(method)
+        .map_err(|_| PyValueError::new_err(format!("invalid HTTP method: '{method}'")))
 }
 
 fn headers_from_py(header_dict: &Bound<PyMapping>) -> PyResult<http::HeaderMap> {

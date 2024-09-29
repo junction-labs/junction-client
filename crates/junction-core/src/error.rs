@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use junction_api_types::shared::Target;
 
 /// A `Result` alias where the `Err` case is `junction_core::Error`.
@@ -6,7 +8,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid url: {0}")]
-    InvalidUrl(&'static str),
+    InvalidUrl(Cow<'static, str>),
 
     #[error("invalid route configuration")]
     InvalidRoutes {
