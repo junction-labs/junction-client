@@ -46,6 +46,7 @@ const MODULE_HEADER: &str = r#"
 /// represent a member field of one of those dicts.
 ///
 /// There are absolutely more types in Python, we simply don't care about them.
+#[derive(Debug)]
 enum PyDef {
     TypedDict(PyDict),
     Union(PyUnion),
@@ -63,7 +64,7 @@ impl PyDef {
     }
 }
 
-#[derive(Template)]
+#[derive(Debug, Clone, Template)]
 #[template(
     source = r#"
 class {{name}}(typing.TypedDict):
@@ -84,14 +85,13 @@ class {{name}}(typing.TypedDict):
     ext = "py",
     escape = "none"
 )]
-#[derive(Debug, Clone)]
 struct PyDict {
     name: &'static str,
     doc: Option<&'static str>,
     fields: Vec<PyDictField>,
 }
 
-#[derive(Template)]
+#[derive(Debug, Template)]
 #[template(
     source = "
 {{name}} =
@@ -187,6 +187,15 @@ enum PyType {
     Object(&'static str),
 }
 
+impl PyType {
+    fn as_literal_str(&self) -> Option<&'static str> {
+        match self {
+            PyType::LiteralStr(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
 impl std::fmt::Display for PyType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -209,7 +218,18 @@ impl std::fmt::Display for PyType {
 
                 write!(f, "]")
             }
-            PyType::Union(name, _types) => write!(f, "{name}"),
+            PyType::Union(name, types) => {
+                if types.iter().all(|t| matches!(t, PyType::LiteralStr(_))) {
+                    let lit_types: Vec<_> = types
+                        .iter()
+                        .map(|t| format!("typing.Literal[\"{}\"]", t.as_literal_str().unwrap()))
+                        .collect();
+
+                    write!(f, "{}", lit_types.join(" | "))
+                } else {
+                    write!(f, "{name}")
+                }
+            }
             PyType::Object(name) => write!(f, "{name}"),
             PyType::TypedDict(d) => write!(f, "{name}", name = d.name),
         }

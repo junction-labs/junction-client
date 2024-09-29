@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use proc_macro2::Span;
 use quote::{quote, quote_spanned};
 use syn::{
     spanned::Spanned, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr, Field, FieldsNamed,
@@ -52,7 +51,7 @@ fn typeinfo(input: &DeriveInput) -> syn::Result<TypeInfo> {
     ctx.check()?;
 
     match data {
-        Data::Struct(data) => struct_typeinfo(name, attrs, data, &container_attrs),
+        Data::Struct(data) => struct_typeinfo(name, attrs, data),
         Data::Enum(data) => enum_typeinfo(name, attrs, &container_attrs, data),
         Data::Union(_) => Err(syn::Error::new_spanned(
             name,
@@ -61,12 +60,7 @@ fn typeinfo(input: &DeriveInput) -> syn::Result<TypeInfo> {
     }
 }
 
-fn struct_typeinfo(
-    name: &Ident,
-    attrs: &[Attribute],
-    data: &DataStruct,
-    container_attrs: &serde_derive_internals::attr::Container,
-) -> syn::Result<TypeInfo> {
+fn struct_typeinfo(name: &Ident, attrs: &[Attribute], data: &DataStruct) -> syn::Result<TypeInfo> {
     let doc = compile_doc(attrs);
 
     match &data.fields {
@@ -74,7 +68,7 @@ fn struct_typeinfo(
             kind: quote! {
                 junction_typeinfo::Kind::Object(stringify!(#name))
             },
-            fields: struct_fields(fields, container_attrs)?,
+            fields: struct_fields(fields, &None)?,
             doc,
         }),
         syn::Fields::Unnamed(fields) if fields.unnamed.is_empty() => Err(syn::Error::new_spanned(
@@ -133,7 +127,7 @@ fn enum_typeinfo(
             // we generally don't support newtype structs anywhere so just return an error
             // if an unnamed field gets mixed in when the enum is internally tagged.
             syn::Fields::Unnamed(fields) => match fields.unnamed.len() {
-                0 => variants.push(unit_variant(&v.ident, v, &internal_tag)),
+                0 => variants.push(unit_variant(name, v, &internal_tag)),
                 1 => {
                     let field = fields.unnamed.first().expect(
                         "junction-typeinfo-derive: proc-macro has a bug: fields has no elements",
@@ -158,7 +152,7 @@ fn enum_typeinfo(
             // A named variant should always be turned into an anonymous object
             syn::Fields::Named(fields) => {
                 let variant_name = &v.ident;
-                let fields = struct_fields(fields, container_attrs)?;
+                let fields = struct_fields(fields, &internal_tag.as_ref().map(|t| (t, v)))?;
                 let doc = compile_doc(&v.attrs);
 
                 variants.push(quote_spanned! {v.span()=>
@@ -195,12 +189,12 @@ fn newtype_variant(
     enum_name: &Ident,
     variant: &Variant,
     field: &Field,
-    internal_tag: &Option<Ident>,
+    tag_field: &Option<Ident>,
 ) -> proc_macro2::TokenStream {
-    if let Some(internal_tag) = internal_tag {
+    if let Some(tag_field) = tag_field {
         let field_type = &field.ty;
         let variant_name = &variant.ident;
-        let tag_field = internal_tag_field(internal_tag);
+        let tag_field = internal_tag_field(tag_field, variant);
 
         quote_spanned! {variant.span()=>
             {
@@ -226,11 +220,11 @@ fn newtype_variant(
 fn unit_variant(
     enum_name: &Ident,
     variant: &Variant,
-    internal_tag: &Option<Ident>,
+    tag_field: &Option<Ident>,
 ) -> proc_macro2::TokenStream {
-    if let Some(internal_tag) = internal_tag {
+    if let Some(tag_field) = tag_field {
         let variant_name = &variant.ident;
-        let tag_field = internal_tag_field(internal_tag);
+        let tag_field = internal_tag_field(tag_field, variant);
         quote_spanned! {variant.span()=>
             junction_typeinfo::Variant::Struct(junction_typeinfo::StructVariant{
                 parent: stringify!(#enum_name),
@@ -250,12 +244,12 @@ fn unit_variant(
 
 fn struct_fields(
     fields: &FieldsNamed,
-    container_attrs: &serde_derive_internals::attr::Container,
+    internal_tag: &Option<(&Ident, &Variant)>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let mut field_stmts = vec![];
 
-    if let serde_derive_internals::attr::TagType::Internal { tag } = container_attrs.tag() {
-        let tag_field = internal_tag_field(&syn::Ident::new(tag, Span::call_site()));
+    if let Some((tag, variant)) = internal_tag {
+        let tag_field = internal_tag_field(tag, variant);
         field_stmts.push(quote! {
             fields.push(#tag_field);
         });
@@ -305,14 +299,28 @@ fn struct_fields(
     })
 }
 
-fn internal_tag_field(tag: &Ident) -> proc_macro2::TokenStream {
+fn internal_tag_field(tag: &Ident, variant: &Variant) -> proc_macro2::TokenStream {
+    let kind = internal_tag_kind(std::iter::once(variant));
     quote! {
         junction_typeinfo::Field {
             name: stringify!(#tag),
             nullable: false,
-            kind: junction_typeinfo::Kind::String,
+            kind: #kind,
             doc: None,
         }
+    }
+}
+fn internal_tag_kind<'a>(variants: impl Iterator<Item = &'a Variant>) -> proc_macro2::TokenStream {
+    let mut literals = vec![];
+    for v in variants {
+        let variant_name = &v.ident;
+        literals.push(quote! {
+            junction_typeinfo::Variant::Literal(stringify!(#variant_name))
+        });
+    }
+
+    quote! {
+        junction_typeinfo::Kind::Union("type", vec![#( #literals, )*])
     }
 }
 

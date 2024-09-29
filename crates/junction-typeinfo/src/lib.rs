@@ -2,6 +2,8 @@
 //! `junction-client`. It does not have a stable public API, and will not be
 //! checked for breaking changes. Use it at your own risk.
 
+use std::collections::BTreeMap;
+
 pub use junction_typeinfo_derive::TypeInfo;
 
 /// A kind of type.
@@ -72,19 +74,28 @@ pub trait TypeInfo {
     /// Any fields defined in Union variants. This must be empty for any types
     /// with a [Kind] that is not [Kind::Union].
     fn variant_fields() -> Vec<Field> {
-        let mut fields = Vec::new();
+        let mut fields: BTreeMap<&str, Vec<_>> = BTreeMap::new();
 
         if let Kind::Union(_, variants) = Self::kind() {
             for variant in variants {
                 if let Variant::Struct(v) = variant {
-                    fields.extend(v.fields);
+                    for field in v.fields {
+                        let fields: &mut Vec<Field> = fields.entry(field.name).or_default();
+
+                        match fields.first_mut() {
+                            Some(f) => {
+                                merge_fields(f, field);
+                            }
+                            _ => fields.push(field),
+                        }
+                    }
                 }
             }
         }
 
+        let mut fields: Vec<_> = fields.into_values().flatten().collect();
         fields.sort_by_key(|f| f.name);
         fields.dedup_by_key(|f| f.name);
-
         fields
     }
 
@@ -97,6 +108,34 @@ pub trait TypeInfo {
             _ => Vec::new(),
         }
     }
+}
+
+fn merge_fields(a: &mut Field, b: Field) {
+    // short-circuit. if the fields are exactly identical, do nothing
+    if a.kind == b.kind {
+        return;
+    }
+
+    // if this field isn't already a Union, make it one. drop the doc for now
+    match &mut a.kind {
+        Kind::Union(_, _) => (),
+        other => {
+            a.doc = None;
+            a.kind = Kind::Union(a.name, vec![Variant::Newtype(other.clone())]);
+        }
+    }
+    // get a mutable ref to the inside of this union type
+    let a_vars = match &mut a.kind {
+        Kind::Union(_, vars) => vars,
+        _ => unreachable!(),
+    };
+    // extend the possibilities
+    let b_vars = match b.kind {
+        Kind::Union(_, vars) => vars,
+        other => vec![Variant::Newtype(other)],
+    };
+    a_vars.extend(b_vars);
+    a_vars.dedup();
 }
 
 /// A type's [Kind], fields, nullability, and documentation.

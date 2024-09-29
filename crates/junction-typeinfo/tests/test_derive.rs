@@ -211,6 +211,7 @@ fn test_serde_flatten_enum() {
     enum Bar {
         One { value: String },
         Two { value: String },
+        Three { other_thing: i32 },
     }
 
     #[allow(unused)]
@@ -234,8 +235,21 @@ fn test_serde_flatten_enum() {
                 doc: None,
             },
             Field {
+                name: "other_thing",
+                kind: Kind::Int,
+                nullable: false,
+                doc: None,
+            },
+            Field {
                 name: "type",
-                kind: Kind::String,
+                kind: Kind::Union(
+                    "type",
+                    vec![
+                        Variant::Literal("One"),
+                        Variant::Literal("Two"),
+                        Variant::Literal("Three"),
+                    ]
+                ),
                 nullable: false,
                 doc: None,
             },
@@ -266,6 +280,45 @@ fn test_serde_tag() {
         Four(Bar),
     }
 
+    fn type_kind(lit: &'static str) -> Kind {
+        Kind::Union("type", vec![Variant::Literal(lit)])
+    }
+
+    assert_eq!(
+        Foo::variant_fields(),
+        vec![
+            Field {
+                name: "bar",
+                kind: Kind::Int,
+                nullable: false,
+                doc: None,
+            },
+            Field {
+                name: "type",
+                kind: Kind::Union(
+                    "type",
+                    vec![
+                        Variant::Literal("One"),
+                        Variant::Literal("Two"),
+                        Variant::Literal("Three"),
+                        Variant::Literal("Four"),
+                    ]
+                ),
+                nullable: false,
+                doc: None,
+            },
+            Field {
+                name: "value",
+                kind: Kind::Union(
+                    "value",
+                    vec![Variant::Newtype(Kind::Int), Variant::Newtype(Kind::String)]
+                ),
+                nullable: false,
+                doc: None,
+            },
+        ]
+    );
+
     assert_eq!(
         Foo::kind(),
         junction_typeinfo::Kind::Union(
@@ -278,7 +331,7 @@ fn test_serde_tag() {
                     fields: vec![Field {
                         name: "type",
                         nullable: false,
-                        kind: Kind::String,
+                        kind: type_kind("One"),
                         doc: None,
                     },],
                 }),
@@ -290,7 +343,7 @@ fn test_serde_tag() {
                         Field {
                             name: "type",
                             nullable: false,
-                            kind: Kind::String,
+                            kind: type_kind("Two"),
                             doc: None,
                         },
                         Field {
@@ -309,7 +362,7 @@ fn test_serde_tag() {
                         Field {
                             name: "type",
                             nullable: false,
-                            kind: Kind::String,
+                            kind: type_kind("Three"),
                             doc: None,
                         },
                         Field {
@@ -328,7 +381,7 @@ fn test_serde_tag() {
                         Field {
                             name: "type",
                             nullable: false,
-                            kind: Kind::String,
+                            kind: type_kind("Four"),
                             doc: None,
                         },
                         Field {
