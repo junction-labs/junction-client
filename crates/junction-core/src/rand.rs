@@ -40,6 +40,13 @@ where
     THREAD_RNG.with_borrow_mut(f)
 }
 
+pub fn random<T>() -> T
+where
+    rand::distributions::Standard: rand::distributions::Distribution<T>,
+{
+    with_thread_rng(|rng| rng.gen())
+}
+
 fn seeded_std_rng() -> StdRng {
     let seed = {
         let mut rng = SEED_RNG.lock().unwrap();

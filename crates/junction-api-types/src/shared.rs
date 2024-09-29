@@ -22,6 +22,7 @@ pub type PreciseHostname = String;
 /// Defines a network port.
 pub type PortNumber = u16;
 
+/// A fraction, expressed as a numerator and a denominator.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Fraction {
@@ -32,13 +33,22 @@ pub struct Fraction {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+#[serde(tag = "type")]
 pub enum StringMatch {
-    #[serde(alias = "regex", alias = "Regex")]
-    RegularExpression { value: Regex },
-    #[serde(untagged)]
-    Exact { value: String },
+    /// Use a regular expression to match this value.
+    #[serde(alias = "regex", alias = "Regex", alias = "regular_expression")]
+    RegularExpression {
+        /// A regular expression.
+        value: Regex,
+    },
+
+    /// Match this value exactly.
+    #[serde(untagged, alias = "exact")]
+    Exact {
+        /// The value to match. Must be a valid utf-8 string.
+        value: String,
+    },
 }
 
 impl StringMatch {
@@ -1060,24 +1070,39 @@ impl WeightedBackend {
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum SessionAffinityHashParamType {
-    Header { name: String },
+    /// Hash the value of a header. If the header has multiple values, they will
+    /// all be used as hash input.
+    #[serde(alias = "header")]
+    Header {
+        /// The name of the header to use as hash input.
+        name: String,
+    },
 }
 
+// FIXME: Ben votes to skip the extra "affinity" naming here as its redundant
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct SessionAffinityHashParam {
+    /// Whether to stop immediately after hashing this value.
+    ///
+    /// This is useful if you want to try to hash a value, and then fall back
+    /// to another as a default if it wasn't set.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terminal: bool,
+
     #[serde(flatten)]
     pub matcher: SessionAffinityHashParamType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct SessionAffinityPolicy {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        alias = "hashParams",
+        alias = "HashParams"
+    )]
     pub hash_params: Vec<SessionAffinityHashParam>,
 }
 
@@ -1125,7 +1150,7 @@ mod test_session_affinity {
     #[test]
     fn parses_session_affinity_policy() {
         let test_json = json!({
-            "hashParams": [
+            "hash_params": [
                 { "type": "Header", "name": "FOO",  "terminal": true },
                 { "type": "Header", "name": "FOO"}
             ]

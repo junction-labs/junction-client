@@ -484,7 +484,7 @@ pub fn is_header_match(rule: &HeaderMatch, headers: &http::HeaderMap) -> bool {
     let Ok(header_val) = header_val.to_str() else {
         return false;
     };
-    rule.value_matcher.is_match(header_val)
+    rule.matches.is_match(header_val)
 }
 
 pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> bool {
@@ -493,7 +493,7 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
     };
     for (param, value) in form_urlencoded::parse(query.as_bytes()) {
         if param == rule.name {
-            return rule.value_matcher.is_match(&value);
+            return rule.matches.is_match(&value);
         }
     }
     false
