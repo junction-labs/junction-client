@@ -33,11 +33,11 @@ class WeightedBackend(typing.TypedDict):
     When being used to lookup a backend after a matched rule,
     if it is not specified then it will use the same port as the incoming request"""
 
-    type: str
+    type: typing.Literal["DNS"] | typing.Literal["Service"]
 
 
 class DNS(typing.TypedDict):
-    type: str
+    type: typing.Literal["DNS"]
     hostname: str
     """The DNS Name to target/attach to"""
 
@@ -53,7 +53,7 @@ class DNS(typing.TypedDict):
 
 
 class Service(typing.TypedDict):
-    type: str
+    type: typing.Literal["Service"]
     name: str
     """The name of the Kubernetes Service"""
 
@@ -77,135 +77,10 @@ class Service(typing.TypedDict):
 Attachment = DNS | Service
 
 
-class DNSAttachment(typing.TypedDict):
-    hostname: str
-    """The DNS Name to target/attach to"""
-
-    port: int
-    """The port number to target/attach to.
-
-    When attaching policies, if it is not specified, the
-    attachment will apply to all connections that don't have a specific
-    port specified.
-
-    When being used to lookup a backend after a matched rule,
-    if it is not specified then it will use the same port as the incoming request"""
-
-
-class ServiceAttachment(typing.TypedDict):
+class SessionAffinityHashParam(typing.TypedDict):
+    terminal: bool
     name: str
-    """The name of the Kubernetes Service"""
-
-    namespace: str
-    """The namespace of the Kubernetes service.
-    FIXME(namespace): what should the semantic be when this is not specified:
-    default, namespace of client, namespace of EZbake?"""
-
-    port: int
-    """The port number of the Kubernetes service to target/
-    attach to.
-
-    When attaching policies, if it is not specified, the
-    attachment will apply to all connections that don't have a specific
-    port specified.
-
-    When being used to lookup a backend after a matched rule,
-    if it is not specified then it will use the same port as the incoming request"""
-
-
-class Prefix(typing.TypedDict):
-    type: str
-    value: str
-
-
-class RegularExpression(typing.TypedDict):
-    type: str
-    value: str
-
-
-class Exact(typing.TypedDict):
-    type: str
-    value: str
-
-
-PathMatch = Prefix | RegularExpression | Exact
-
-
-class QueryParamMatch(typing.TypedDict):
-    """Describes how to select a HTTP route by matching HTTP query parameters."""
-
-    name: str
-    type: str
-    value: str
-
-
-class ReplaceFullPath(typing.TypedDict):
-    """Specifies the value with which to replace the full path of a request
-    during a rewrite or redirect."""
-
-    type: str
-    replace_full_path: str
-
-
-class ReplacePrefixMatch(typing.TypedDict):
-    """Specifies the value with which to replace the prefix match of a request
-    during a rewrite or redirect. For example, a request to "/foo/bar" with
-    a prefix match of "/foo" and a ReplacePrefixMatch of "/xyz" would be
-    modified to "/xyz/bar".
-
-    Note that this matches the behavior of the PathPrefix match type. This
-    matches full path elements. A path element refers to the list of labels
-    in the path split by the `/` separator. When specified, a trailing `/`
-    is ignored. For example, the paths `/abc`, `/abc/`, and `/abc/def` would
-    all match the prefix `/abc`, but the path `/abcd` would not.
-
-    ReplacePrefixMatch is only compatible with a `PathPrefix` route match.
-
-    Request Path | Prefix Match | Replace Prefix | Modified Path
-    -------------|--------------|----------------|----------
-    /foo/bar     | /foo         | /xyz           | /xyz/bar
-    /foo/bar     | /foo         | /xyz/          | /xyz/bar
-    /foo/bar     | /foo/        | /xyz           | /xyz/bar
-    /foo/bar     | /foo/        | /xyz/          | /xyz/bar
-    /foo         | /foo         | /xyz           | /xyz
-    /foo/        | /foo         | /xyz           | /xyz/
-    /foo/bar     | /foo         | <empty string> | /bar
-    /foo/        | /foo         | <empty string> | /
-    /foo         | /foo         | <empty string> | /
-    /foo/        | /foo         | /              | /
-    /foo         | /foo         | /              | /"""
-
-    type: str
-    replace_prefix_match: str
-
-
-PathModifier = ReplaceFullPath | ReplacePrefixMatch
-
-
-class HeaderMatch(typing.TypedDict):
-    """Describes how to select a HTTP route by matching HTTP request headers.
-
-    `name` is the name of the HTTP Header to be matched. Name matching is case
-    insensitive. (See <https://tools.ietf.org/html/rfc7230#section-3.2>).
-
-    If multiple entries specify equivalent header names, only the first entry
-    with an equivalent name WILL be considered for a match. Subsequent entries
-    with an equivalent header name WILL be ignored. Due to the
-    case-insensitivity of header names, "foo" and "Foo" are considered
-    equivalent."""
-
-    name: str
-    type: str
-    value: str
-
-
-class HeaderValue(typing.TypedDict):
-    name: str
-    """The name of the HTTP Header. Note header names are case insensitive.
-    (See <https://tools.ietf.org/html/rfc7230#section-3.2>)."""
-
-    value: str
-    """The value of HTTP Header."""
+    type: typing.Literal["Header"]
 
 
 class RouteTimeouts(typing.TypedDict):
@@ -238,6 +113,69 @@ class RouteTimeouts(typing.TypedDict):
     transaction as possible although an implementation MAY choose to start
     the timeout after the entire request stream has been received instead of
     immediately after the transaction is initiated by the client."""
+
+
+class RouteRetryPolicy(typing.TypedDict):
+    """Specifies a way of configuring client retry policy.
+
+    ( Modelled on the forthcoming Gateway API type
+    https://gateway-api.sigs.k8s.io/geps/gep-1731/ )"""
+
+    codes: typing.List[int]
+    attempts: int
+    backoff: datetime.timedelta
+
+
+class HeaderValue(typing.TypedDict):
+    name: str
+    """The name of the HTTP Header. Note header names are case insensitive.
+    (See <https://tools.ietf.org/html/rfc7230#section-3.2>)."""
+
+    value: str
+    """The value of HTTP Header."""
+
+
+class HeaderMatch(typing.TypedDict):
+    """Describes how to select a HTTP route by matching HTTP request headers.
+
+    `name` is the name of the HTTP Header to be matched. Name matching is case
+    insensitive. (See <https://tools.ietf.org/html/rfc7230#section-3.2>).
+
+    If multiple entries specify equivalent header names, only the first entry
+    with an equivalent name WILL be considered for a match. Subsequent entries
+    with an equivalent header name WILL be ignored. Due to the
+    case-insensitivity of header names, "foo" and "Foo" are considered
+    equivalent."""
+
+    name: str
+    type: typing.Literal["RegularExpression"] | typing.Literal["Exact"]
+    value: str
+
+
+class QueryParamMatch(typing.TypedDict):
+    """Describes how to select a HTTP route by matching HTTP query parameters."""
+
+    name: str
+    type: typing.Literal["RegularExpression"] | typing.Literal["Exact"]
+    value: str
+
+
+class Prefix(typing.TypedDict):
+    type: typing.Literal["Prefix"]
+    value: str
+
+
+class RegularExpression(typing.TypedDict):
+    type: typing.Literal["RegularExpression"]
+    value: str
+
+
+class Exact(typing.TypedDict):
+    type: typing.Literal["Exact"]
+    value: str
+
+
+PathMatch = Prefix | RegularExpression | Exact
 
 
 class RouteMatch(typing.TypedDict):
@@ -274,24 +212,6 @@ class RouteMatch(typing.TypedDict):
     method: str
     """Specifies HTTP method matcher. When specified, this route will be
     matched only if the request has the specified method."""
-
-
-class Header(typing.TypedDict):
-    type: str
-    name: str
-
-
-SessionAffinityHashParamType = Header
-
-
-class SessionAffinityHashParam(typing.TypedDict):
-    terminal: bool
-    name: str
-    type: str
-
-
-class SessionAffinityPolicy(typing.TypedDict):
-    hash_params: typing.List[SessionAffinityHashParam]
 
 
 class RequestHeaderFilter(typing.TypedDict):
@@ -350,6 +270,49 @@ class RequestMirrorFilter(typing.TypedDict):
     specified, 100% of requests will be mirrored."""
 
     backend: Attachment
+
+
+class ReplaceFullPath(typing.TypedDict):
+    """Specifies the value with which to replace the full path of a request
+    during a rewrite or redirect."""
+
+    type: typing.Literal["ReplaceFullPath"]
+    replace_full_path: str
+
+
+class ReplacePrefixMatch(typing.TypedDict):
+    """Specifies the value with which to replace the prefix match of a request
+    during a rewrite or redirect. For example, a request to "/foo/bar" with
+    a prefix match of "/foo" and a ReplacePrefixMatch of "/xyz" would be
+    modified to "/xyz/bar".
+
+    Note that this matches the behavior of the PathPrefix match type. This
+    matches full path elements. A path element refers to the list of labels
+    in the path split by the `/` separator. When specified, a trailing `/`
+    is ignored. For example, the paths `/abc`, `/abc/`, and `/abc/def` would
+    all match the prefix `/abc`, but the path `/abcd` would not.
+
+    ReplacePrefixMatch is only compatible with a `PathPrefix` route match.
+
+    Request Path | Prefix Match | Replace Prefix | Modified Path
+    -------------|--------------|----------------|----------
+    /foo/bar     | /foo         | /xyz           | /xyz/bar
+    /foo/bar     | /foo         | /xyz/          | /xyz/bar
+    /foo/bar     | /foo/        | /xyz           | /xyz/bar
+    /foo/bar     | /foo/        | /xyz/          | /xyz/bar
+    /foo         | /foo         | /xyz           | /xyz
+    /foo/        | /foo         | /xyz           | /xyz/
+    /foo/bar     | /foo         | <empty string> | /bar
+    /foo/        | /foo         | <empty string> | /
+    /foo         | /foo         | <empty string> | /
+    /foo/        | /foo         | /              | /
+    /foo         | /foo         | /              | /"""
+
+    type: typing.Literal["ReplacePrefixMatch"]
+    replace_prefix_match: str
+
+
+PathModifier = ReplaceFullPath | ReplacePrefixMatch
 
 
 class RequestRedirectFilter(typing.TypedDict):
@@ -413,28 +376,17 @@ class UrlRewriteFilter(typing.TypedDict):
     """Defines a path rewrite."""
 
 
-class RouteRetryPolicy(typing.TypedDict):
-    """Specifies a way of configuring client retry policy.
-
-    ( Modelled on the forthcoming Gateway API type
-    https://gateway-api.sigs.k8s.io/geps/gep-1731/ )"""
-
-    codes: typing.List[int]
-    attempts: int
-    backoff: datetime.timedelta
-
-
 class RequestHeaderModifier(typing.TypedDict):
     """Defines a schema for a filter that modifies request headers."""
 
-    type: str
+    type: typing.Literal["RequestHeaderModifier"]
     request_header_modifier: RequestHeaderFilter
 
 
 class ResponseHeaderModifier(typing.TypedDict):
     """Defines a schema for a filter that modifies response headers."""
 
-    type: str
+    type: typing.Literal["ResponseHeaderModifier"]
     response_header_modifier: RequestHeaderFilter
 
 
@@ -447,7 +399,7 @@ class RequestMirror(typing.TypedDict):
     not all implementations will be able to support mirroring to multiple
     backends."""
 
-    type: str
+    type: typing.Literal["RequestMirror"]
     request_mirror: RequestMirrorFilter
 
 
@@ -455,14 +407,14 @@ class RequestRedirect(typing.TypedDict):
     """Defines a schema for a filter that responds to the request with an HTTP
     redirection."""
 
-    type: str
+    type: typing.Literal["RequestRedirect"]
     request_redirect: RequestRedirectFilter
 
 
 class URLRewrite(typing.TypedDict):
     """Defines a schema for a filter that modifies a request during forwarding."""
 
-    type: str
+    type: typing.Literal["URLRewrite"]
     url_rewrite: UrlRewriteFilter
 
 
@@ -473,6 +425,10 @@ RouteFilter = (
     | RequestRedirect
     | URLRewrite
 )
+
+
+class SessionAffinityPolicy(typing.TypedDict):
+    hash_params: typing.List[SessionAffinityHashParam]
 
 
 class RouteRule(typing.TypedDict):
@@ -537,23 +493,18 @@ class Route(typing.TypedDict):
     The route rules that determine whether any URLs match."""
 
 
-class RingHashParams(typing.TypedDict):
-    min_ring_size: int
-    hash_params: typing.List[SessionAffinityHashParam]
-
-
 class RoundRobin(typing.TypedDict):
-    type: str
+    type: typing.Literal["RoundRobin"]
 
 
 class RingHash(typing.TypedDict):
-    type: str
+    type: typing.Literal["RingHash"]
     min_ring_size: int
     hash_params: typing.List[SessionAffinityHashParam]
 
 
 class Unspecified(typing.TypedDict):
-    type: str
+    type: typing.Literal["Unspecified"]
 
 
 LbPolicy = RoundRobin | RingHash | Unspecified
