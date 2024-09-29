@@ -41,7 +41,7 @@ async fn main() {
                 matches: vec![RouteMatch {
                     headers: vec![HeaderMatch {
                         name: "x-demo-staging".to_string(),
-                        value_matcher: StringMatch::RegularExpression {
+                        matches: StringMatch::RegularExpression {
                             value: Regex::from_str(".*").unwrap(),
                         },
                     }],

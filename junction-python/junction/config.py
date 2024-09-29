@@ -5,7 +5,28 @@ import typing
 import datetime
 
 
+class RegularExpression(typing.TypedDict):
+    """Use a regular expression to match this value."""
+
+    type: typing.Literal["RegularExpression"]
+    value: str
+    """A regular expression."""
+
+
+class Exact(typing.TypedDict):
+    """Match this value exactly."""
+
+    type: typing.Literal["Exact"]
+    value: str
+    """The value to match. Must be a valid utf-8 string."""
+
+
+StringMatch = RegularExpression | Exact
+
+
 class Fraction(typing.TypedDict):
+    """A fraction, expressed as a numerator and a denominator."""
+
     numerator: int
     denominator: int
 
@@ -79,7 +100,14 @@ Attachment = DNS | Service
 
 class SessionAffinityHashParam(typing.TypedDict):
     terminal: bool
+    """Whether to stop immediately after hashing this value.
+
+    This is useful if you want to try to hash a value, and then fall back
+    to another as a default if it wasn't set."""
+
     name: str
+    """The name of the header to use as hash input."""
+
     type: typing.Literal["Header"]
 
 
@@ -148,16 +176,14 @@ class HeaderMatch(typing.TypedDict):
     equivalent."""
 
     name: str
-    type: typing.Literal["RegularExpression"] | typing.Literal["Exact"]
-    value: str
+    matches: StringMatch
 
 
 class QueryParamMatch(typing.TypedDict):
     """Describes how to select a HTTP route by matching HTTP query parameters."""
 
     name: str
-    type: typing.Literal["RegularExpression"] | typing.Literal["Exact"]
-    value: str
+    matches: StringMatch
 
 
 class Prefix(typing.TypedDict):
@@ -214,7 +240,7 @@ class RouteMatch(typing.TypedDict):
     matched only if the request has the specified method."""
 
 
-class RequestHeaderFilter(typing.TypedDict):
+class HeaderFilter(typing.TypedDict):
     """Defines configuration for the RequestHeaderModifier filter."""
 
     set: typing.List[HeaderValue]
@@ -278,6 +304,7 @@ class ReplaceFullPath(typing.TypedDict):
 
     type: typing.Literal["ReplaceFullPath"]
     replace_full_path: str
+    """The value to replace the path with."""
 
 
 class ReplacePrefixMatch(typing.TypedDict):
@@ -380,14 +407,16 @@ class RequestHeaderModifier(typing.TypedDict):
     """Defines a schema for a filter that modifies request headers."""
 
     type: typing.Literal["RequestHeaderModifier"]
-    request_header_modifier: RequestHeaderFilter
+    request_header_modifier: HeaderFilter
+    """A Header filter."""
 
 
 class ResponseHeaderModifier(typing.TypedDict):
     """Defines a schema for a filter that modifies response headers."""
 
     type: typing.Literal["ResponseHeaderModifier"]
-    response_header_modifier: RequestHeaderFilter
+    response_header_modifier: HeaderFilter
+    """A Header filter."""
 
 
 class RequestMirror(typing.TypedDict):
@@ -409,6 +438,7 @@ class RequestRedirect(typing.TypedDict):
 
     type: typing.Literal["RequestRedirect"]
     request_redirect: RequestRedirectFilter
+    """A redirect filter."""
 
 
 class URLRewrite(typing.TypedDict):
@@ -416,6 +446,7 @@ class URLRewrite(typing.TypedDict):
 
     type: typing.Literal["URLRewrite"]
     url_rewrite: UrlRewriteFilter
+    """A URL rewrite filter."""
 
 
 RouteFilter = (
@@ -480,17 +511,18 @@ class RouteRule(typing.TypedDict):
     timeouts: RouteTimeouts
     session_affinity: SessionAffinityPolicy
     retry_policy: RouteRetryPolicy
+    """How to retry any requests to this route."""
+
     backends: typing.List[WeightedBackend]
+    """Where the traffic should route if this rule matches."""
 
 
 class Route(typing.TypedDict):
     attachment: Attachment
+    """The target for this route."""
+
     rules: typing.List[RouteRule]
-    """The domains that this applies to. Domains are matched against the
-    incoming authority of any URL.
-    FIXME(gateway): this is needed eventually to support attaching to gateways
-    in the meantime though it just confuses things.
-    The route rules that determine whether any URLs match."""
+    """The route rules that determine whether any URLs match."""
 
 
 class RoundRobin(typing.TypedDict):
@@ -500,7 +532,20 @@ class RoundRobin(typing.TypedDict):
 class RingHash(typing.TypedDict):
     type: typing.Literal["RingHash"]
     min_ring_size: int
+    """The minimum size of the hash ring"""
+
     hash_params: typing.List[SessionAffinityHashParam]
+    """How to hash an outgoing request into the ring.
+
+    Hash parameters are applied in order. If the request is missing an
+    input, it has no effect on the final hash. Hashing stops when only when
+    all polcies have been applied or a `terminal` policy matches part of an
+    incoming request.
+
+    This allows configuring a fallback-style hash, where the value of
+    `HeaderA` gets used, falling back to the value of `HeaderB`.
+
+    If no policies match, a random hash is generated for each request."""
 
 
 class Unspecified(typing.TypedDict):

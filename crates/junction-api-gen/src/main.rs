@@ -8,6 +8,7 @@ use junction_typeinfo::TypeInfo as _;
 /// This is not a general purpose tool.
 fn main() {
     let items = vec![
+        junction_api_types::shared::StringMatch::item(),
         junction_api_types::shared::Fraction::item(),
         junction_api_types::shared::WeightedBackend::item(),
         junction_api_types::shared::Attachment::item(),
@@ -19,7 +20,7 @@ fn main() {
         junction_api_types::http::QueryParamMatch::item(),
         junction_api_types::http::PathMatch::item(),
         junction_api_types::http::RouteMatch::item(),
-        junction_api_types::http::RequestHeaderFilter::item(),
+        junction_api_types::http::HeaderFilter::item(),
         junction_api_types::http::RequestMirrorFilter::item(),
         junction_api_types::http::PathModifier::item(),
         junction_api_types::http::RequestRedirectFilter::item(),

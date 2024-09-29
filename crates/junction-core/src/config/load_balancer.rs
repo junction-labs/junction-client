@@ -126,18 +126,14 @@ impl LoadBalancer {
         match self {
             LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(locality_endpoints),
             LoadBalancer::RingHash(lb) => {
-                let hash_params;
-                if !lb.config.hash_params.is_empty() {
-                    hash_params = &lb.config.hash_params;
-                } else if let Some(route_affinity) = route_affinity {
-                    if !route_affinity.hash_params.is_empty() {
-                        hash_params = &route_affinity.hash_params;
-                    } else {
-                        return None; //FIXME: this should be an error
+                let hash_params = match (&lb.config.hash_params, route_affinity) {
+                    (lb_params, _) if !lb_params.is_empty() => lb_params,
+                    (_, Some(affinity)) if !affinity.hash_params.is_empty() => {
+                        &affinity.hash_params
                     }
-                } else {
-                    return None; //FIXME: this should be an error
-                }
+                    // FIXME: should this be an error?
+                    _ => &Vec::new(),
+                };
                 lb.pick_endpoint(url, headers, hash_params, locality_endpoints)
             }
         }
@@ -198,12 +194,7 @@ impl RingHashLb {
             config: config.clone(),
             ring: RwLock::new(Ring {
                 endpoint_group_hash: 0,
-                entries: Vec::with_capacity(
-                    config
-                        .min_ring_size
-                        .map(|x| x.try_into().unwrap())
-                        .expect("config not verified"),
-                ),
+                entries: Vec::with_capacity(config.min_ring_size as usize),
             }),
         }
     }
@@ -215,7 +206,9 @@ impl RingHashLb {
         hash_params: &Vec<SessionAffinityHashParam>,
         endpoint_group: &'e EndpointGroup,
     ) -> Option<&'e EndpointAddress> {
-        let request_hash = hash_request(hash_params, url, headers).unwrap_or_else(rand::random);
+        let request_hash =
+            hash_request(hash_params, url, headers).unwrap_or_else(crate::rand::random);
+
         let endpoint_idx = self.with_ring(endpoint_group, |r| r.pick(request_hash))?;
         endpoint_group.nth(endpoint_idx)
     }
@@ -236,13 +229,7 @@ impl RingHashLb {
 
         std::mem::drop(ring);
         let mut ring = self.ring.write().unwrap();
-        ring.rebuild(
-            self.config
-                .min_ring_size
-                .map(|x| x.try_into().unwrap())
-                .expect("config not verified"),
-            endpoint_group,
-        );
+        ring.rebuild(self.config.min_ring_size as usize, endpoint_group);
         cb(&ring)
     }
 }

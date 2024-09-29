@@ -10,17 +10,17 @@ use std::str::FromStr;
 use junction_typeinfo::TypeInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
-    pub attachment: Attachment,
-
-    /// The domains that this applies to. Domains are matched against the
-    /// incoming authority of any URL.
-    /// FIXME(gateway): this is needed eventually to support attaching to gateways
-    /// in the meantime though it just confuses things.
+    // FIXME(gateway): this is needed eventually to support attaching to gateways
+    // in the meantime though it just confuses things.
+    // The domains that this applies to. Domains are matched against the
+    // incoming authority of any URL.
     //#[serde(default, skip_serializing_if = "Vec::is_empty")]
     //pub hostnames: Vec<String>,
+    /// The target for this route.
+    pub attachment: Attachment,
 
     /// The route rules that determine whether any URLs match.
     pub rules: Vec<RouteRule>,
@@ -47,7 +47,7 @@ impl Route {
 /// (matches), processing it (filters), and forwarding the request to an API
 /// object (backendRefs).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRule {
     /// Defines conditions used for matching the rule against incoming HTTP
@@ -97,23 +97,34 @@ pub struct RouteRule {
     //#[serde(default, skip_serializing_if = "Option::is_none")]
     // pub session_persistence: Option<SessionPersistence>,
 
-    // Timeouts defines the timeouts that can be configured for an HTTP request.
+    // The timeouts set on any request that matches route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeouts: Option<RouteTimeouts>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[doc(hidden)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "sessionAffinity"
+    )]
     pub session_affinity: Option<SessionAffinityPolicy>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// How to retry any requests to this route.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "retryPolicy"
+    )]
     pub retry_policy: Option<RouteRetryPolicy>,
 
+    /// Where the traffic should route if this rule matches.
     pub backends: Vec<WeightedBackend>,
 }
 
 /// Defines timeouts that can be configured for a http Route. Specifying a zero
 /// value such as "0s" is interpreted as no timeout.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteTimeouts {
     /// Specifies a timeout for an individual request from the gateway to a
@@ -127,7 +138,11 @@ pub struct RouteTimeouts {
     ///
     /// Because the Request timeout encompasses the BackendRequest timeout, the
     /// value of BackendRequest must be <= the value of Request timeout.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "backendRequest"
+    )]
     pub backend_request: Option<Duration>,
 
     /// Specifies the maximum duration for a gateway to respond to an HTTP
@@ -162,7 +177,7 @@ pub struct RouteTimeouts {
 ///     value "v1"
 /// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteMatch {
     /// Specifies a HTTP request path matcher. If this field is not specified, a
@@ -179,7 +194,7 @@ pub struct RouteMatch {
     /// Specifies HTTP query parameter matchers. Multiple match values are ANDed
     /// together, meaning, a request must match all the specified query
     /// parameters to select the route.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "queryParams")]
     pub query_params: Vec<QueryParamMatch>,
 
     /// Specifies HTTP method matcher. When specified, this route will be
@@ -204,16 +219,14 @@ pub struct RouteMatch {
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum PathMatch {
-    Prefix {
-        value: String,
-    },
-    RegularExpression {
-        value: Regex,
-    },
+    #[serde(alias = "prefix")]
+    Prefix { value: String },
+
+    #[serde(alias = "regularExpression", alias = "regular_expression")]
+    RegularExpression { value: Regex },
+
     #[serde(untagged)]
-    Exact {
-        value: String,
-    },
+    Exact { value: String },
 }
 
 /// The name of an HTTP header.
@@ -241,22 +254,21 @@ pub type HeaderName = String;
 /// case-insensitivity of header names, "foo" and "Foo" are considered
 /// equivalent.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+#[serde(deny_unknown_fields)]
 pub struct HeaderMatch {
     pub name: HeaderName,
-    #[serde(flatten)]
-    pub value_matcher: StringMatch,
+
+    pub matches: StringMatch,
 }
 
 /// Describes how to select a HTTP route by matching HTTP query parameters.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct QueryParamMatch {
     pub name: String,
-    #[serde(flatten)]
-    pub value_matcher: StringMatch,
+    pub matches: StringMatch,
 }
 
 /// Describes how to select a HTTP route by matching the HTTP method as defined
@@ -267,20 +279,25 @@ pub type Method = String;
 
 /// Defines processing steps that must be completed during the request or
 /// response lifecycle.
+//
+// TODO: This feels very gateway-ey and redundant to type out in config. Should
+// we switch to untagged here? Something else?
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "type", rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(tag = "type", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum RouteFilter {
     /// Defines a schema for a filter that modifies request headers.
-    #[serde(rename_all = "camelCase")]
     RequestHeaderModifier {
-        request_header_modifier: RequestHeaderFilter,
+        /// A Header filter.
+        #[serde(alias = "requestHeaderModifier")]
+        request_header_modifier: HeaderFilter,
     },
 
     ///  Defines a schema for a filter that modifies response headers.
-    #[serde(rename_all = "camelCase")]
     ResponseHeaderModifier {
-        response_header_modifier: RequestHeaderFilter,
+        /// A Header filter.
+        #[serde(alias = "responseHeaderModifier")]
+        response_header_modifier: HeaderFilter,
     },
 
     /// Defines a schema for a filter that mirrors requests. Requests are sent
@@ -290,26 +307,32 @@ pub enum RouteFilter {
     /// This filter can be used multiple times within the same rule. Note that
     /// not all implementations will be able to support mirroring to multiple
     /// backends.
-    #[serde(rename_all = "camelCase")]
-    RequestMirror { request_mirror: RequestMirrorFilter },
+    RequestMirror {
+        #[serde(alias = "requestMirror")]
+        request_mirror: RequestMirrorFilter,
+    },
 
     /// Defines a schema for a filter that responds to the request with an HTTP
     /// redirection.
-    #[serde(rename_all = "camelCase")]
     RequestRedirect {
+        #[serde(alias = "requestRedirect")]
+        /// A redirect filter.
         request_redirect: RequestRedirectFilter,
     },
 
     /// Defines a schema for a filter that modifies a request during forwarding.
-    #[serde(rename_all = "camelCase")]
-    URLRewrite { url_rewrite: UrlRewriteFilter },
+    URLRewrite {
+        /// A URL rewrite filter.
+        #[serde(alias = "urlRewrite")]
+        url_rewrite: UrlRewriteFilter,
+    },
 }
 
 /// Defines configuration for the RequestHeaderModifier filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct RequestHeaderFilter {
+pub struct HeaderFilter {
     /// Overwrites the request with the given header (name, value) before the
     /// action. Note that the header names are case-insensitive (see
     /// <https://datatracker.ietf.org/doc/html/rfc2616#section-4.2>).
@@ -351,7 +374,7 @@ pub struct RequestHeaderFilter {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct HeaderValue {
     /// The name of the HTTP Header. Note header names are case insensitive.
@@ -364,13 +387,16 @@ pub struct HeaderValue {
 
 /// Defines configuration for path modifiers.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "type", rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(tag = "type", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum PathModifier {
     /// Specifies the value with which to replace the full path of a request
     /// during a rewrite or redirect.
-    #[serde(rename_all = "camelCase")]
-    ReplaceFullPath { replace_full_path: String },
+    ReplaceFullPath {
+        /// The value to replace the path with.
+        #[serde(alias = "replaceFullPath")]
+        replace_full_path: String,
+    },
 
     /// Specifies the value with which to replace the prefix match of a request
     /// during a rewrite or redirect. For example, a request to "/foo/bar" with
@@ -398,14 +424,16 @@ pub enum PathModifier {
     /// /foo         | /foo         | <empty string> | /
     /// /foo/        | /foo         | /              | /
     /// /foo         | /foo         | /              | /
-    #[serde(rename_all = "camelCase")]
-    ReplacePrefixMatch { replace_prefix_match: String },
+    ReplacePrefixMatch {
+        #[serde(alias = "replacePrefixMatch")]
+        replace_prefix_match: String,
+    },
 }
 
 /// Defines a filter that redirects a request. This filter MUST not be used on
 /// the same Route rule as a URL Rewrite filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RequestRedirectFilter {
     /// The scheme to be used in the value of the `Location` header in the
@@ -454,7 +482,7 @@ pub struct RequestRedirectFilter {
     pub port: Option<PortNumber>,
 
     /// The HTTP status code to be used in response.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "statusCode")]
     pub status_code: Option<u16>,
 }
 
@@ -462,7 +490,7 @@ pub struct RequestRedirectFilter {
 /// these filters may be used on a Route rule. This may not be used on the same
 /// Route rule as a RequestRedirect filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct UrlRewriteFilter {
     /// The value to be used to replace the Host header value during forwarding.
@@ -476,7 +504,7 @@ pub struct UrlRewriteFilter {
 
 /// Defines configuration for the RequestMirror filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RequestMirrorFilter {
     /// Represents the percentage of requests that should be mirrored to
@@ -499,7 +527,7 @@ pub struct RequestMirrorFilter {
 /// ( Modelled on the forthcoming Gateway API type
 /// https://gateway-api.sigs.k8s.io/geps/gep-1731/ )
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRetryPolicy {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -612,7 +640,7 @@ impl RouteMatch {
             .filter({
                 |header| {
                     if header.name == ":method" {
-                        match &header.value_matcher {
+                        match &header.matches {
                             StringMatch::Exact { value } => method = Some(value.clone()),
                             _ => {
                                 //fixme: we are throwing away config
@@ -674,7 +702,7 @@ impl QueryParamMatch {
         let name = matcher.name.clone();
         Some(QueryParamMatch {
             name,
-            value_matcher,
+            matches: value_matcher,
         })
     }
 }
@@ -682,7 +710,7 @@ impl QueryParamMatch {
 impl HeaderMatch {
     fn from_xds(header_matcher: &xds_route::HeaderMatcher) -> Option<Self> {
         let name = header_matcher.name.clone();
-        let value_matcher = match header_matcher.header_match_specifier.as_ref()? {
+        let matches = match header_matcher.header_match_specifier.as_ref()? {
             xds_route::header_matcher::HeaderMatchSpecifier::ExactMatch(s) => {
                 StringMatch::Exact { value: s.clone() }
             }
@@ -697,10 +725,7 @@ impl HeaderMatch {
             }
         };
 
-        Some(HeaderMatch {
-            name,
-            value_matcher,
-        })
+        Some(HeaderMatch { name, matches })
     }
 }
 
@@ -761,8 +786,8 @@ mod tests {
     #[test]
     fn test_header_matcher() {
         let test_json = json!([
-            { "name":"bar", "type" : "RegularExpression", "value": ".*foo" },
-            { "name":"bar", "value": "a literal" },
+            { "name":"bar", "matches": {"type" : "RegularExpression", "value": ".*foo" }},
+            { "name":"bar", "matches": {"value": "a literal" }},
         ]);
         let obj: Vec<HeaderMatch> = serde_json::from_value(test_json.clone()).unwrap();
 
@@ -771,13 +796,13 @@ mod tests {
             vec![
                 HeaderMatch {
                     name: "bar".to_string(),
-                    value_matcher: crate::shared::StringMatch::RegularExpression {
+                    matches: crate::shared::StringMatch::RegularExpression {
                         value: Regex::from_str(".*foo").unwrap()
                     },
                 },
                 HeaderMatch {
                     name: "bar".to_string(),
-                    value_matcher: crate::shared::StringMatch::Exact {
+                    matches: crate::shared::StringMatch::Exact {
                         value: "a literal".to_string()
                     },
                 }
@@ -808,22 +833,22 @@ mod tests {
                     "method": "GET",
                     "path": { "value": "foo" },
                     "headers": [
-                        { "name":"ian", "value": "foo" },
-                        { "type":"RegularExpression", "name":"bar", "value": ".*foo" }
+                        {"name":"ian", "matches": {"value": "foo"}},
+                        {"name": "bar", "matches": {"type":"RegularExpression", "value": ".*foo"}}
                     ]
                 },
                 {
-                    "queryParams": [
-                        { "name":"ian","value": "foo" },
-                        { "type":"RegularExpression", "name":"bar", "value": ".*foo" }
+                    "query_params": [
+                        {"name":"ian", "matches": {"value": "foo"}},
+                        {"name": "bar", "matches": {"type":"RegularExpression", "value": ".*foo"}}
                     ]
                 }
             ],
             "filters":[{
-                "type":"URLRewrite",
-                "urlRewrite":{
+                "type": "URLRewrite",
+                "url_rewrite":{
                     "hostname":"ian.com",
-                    "path":{ "type":"ReplacePrefixMatch", "replacePrefixMatch":"/" }
+                    "path": {"type":"ReplacePrefixMatch", "replace_prefix_match":"/"}
                 }
             }],
             "backends":[

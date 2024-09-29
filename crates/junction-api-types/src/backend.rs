@@ -7,17 +7,33 @@ use serde::{Deserialize, Serialize};
 use xds_api::pb::envoy::config::cluster::v3 as xds_cluster;
 use xds_api::pb::envoy::config::cluster::v3::cluster::ring_hash_lb_config::HashFunction;
 
+/// Policy for configuring a ketama-style consistent hashing algorithm.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RingHashParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_ring_size: Option<u32>,
+    /// The minimum size of the hash ring
+    #[serde(default = "default_min_ring_size", alias = "minRingSize")]
+    pub min_ring_size: u32,
 
-    // FIXME: Ben votes to skip the extra "affinity" naming here as its redundant
-    // that is fine, big question is still how to fill this field over xDS
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// How to hash an outgoing request into the ring.
+    ///
+    /// Hash parameters are applied in order. If the request is missing an
+    /// input, it has no effect on the final hash. Hashing stops when only when
+    /// all polcies have been applied or a `terminal` policy matches part of an
+    /// incoming request.
+    ///
+    /// This allows configuring a fallback-style hash, where the value of
+    /// `HeaderA` gets used, falling back to the value of `HeaderB`.
+    ///
+    /// If no policies match, a random hash is generated for each request.
+    // FIXME: big question is still how to fill this field over xDS
+    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "hashParams")]
     pub hash_params: Vec<SessionAffinityHashParam>,
+}
+
+fn default_min_ring_size() -> u32 {
+    1024
 }
 
 // TODO: figure out how we want to support the
@@ -34,9 +50,15 @@ pub struct RingHashParams {
 #[serde(tag = "type", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum LbPolicy {
+    /// A simple round robin load balancing policy. Endpoints are picked in
+    /// sequential order, but that order may vary client to client.
     #[default]
     RoundRobin,
+
+    /// Use a ketama-style consistent hashing algorithm to route this request.
     RingHash(RingHashParams),
+
+    /// No load balancing algorithm was specified.
     Unspecified,
 }
 
@@ -81,8 +103,8 @@ impl LbPolicy {
                     .ok()?;
 
                 let policy = RingHashParams {
-                    min_ring_size: Some(min_ring_size),
-                    hash_params: vec![], //FIXME(affinity): have to work out how ro tunnel this over typed_extension_protocol_options
+                    min_ring_size,
+                    hash_params: vec![], //FIXME(affinity): have to work out how to tunnel this over typed_extension_protocol_options
                 };
                 Some(LbPolicy::RingHash(policy))
             }
@@ -91,17 +113,17 @@ impl LbPolicy {
     }
 }
 
+//FIXME(persistence) enable session persistence as per the gateway API
+// #[serde(default, skip_serializing_if = "Option::is_none")]
+// pub session_persistence: Option<SessionPersistence>,
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Backend {
     pub attachment: Attachment,
 
     /// The route rules that determine whether any URLs match.
     pub lb: LbPolicy,
-    //FIXME(persistence) enable session persistence as per the gateway API
-    // #[serde(default, skip_serializing_if = "Option::is_none")]
-    // pub session_persistence: Option<SessionPersistence>,
 }
 
 impl Backend {
@@ -125,7 +147,7 @@ impl Backend {
 mod tests {
     use serde_json::json;
 
-    use crate::backend::{Backend, LbPolicy};
+    use super::*;
 
     #[test]
     fn parses_lb_policy() {
@@ -134,8 +156,19 @@ mod tests {
             "minRingSize": 100
         });
         let obj: LbPolicy = serde_json::from_value(test_json.clone()).unwrap();
-        let output_json = serde_json::to_value(obj).unwrap();
-        assert_eq!(test_json, output_json);
+
+        assert_eq!(
+            obj,
+            LbPolicy::RingHash(RingHashParams {
+                min_ring_size: 100,
+                hash_params: vec![]
+            })
+        );
+
+        assert_eq!(
+            json!({"type": "RingHash", "min_ring_size": 100}),
+            serde_json::to_value(obj).unwrap(),
+        );
     }
 
     #[test]
