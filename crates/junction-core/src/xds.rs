@@ -30,8 +30,7 @@ use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::TryStreamExt;
-use junction_api_types::{http::Route, shared::Target};
-use std::{io::ErrorKind, sync::Arc, time::Duration};
+use std::{io::ErrorKind, time::Duration};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Endpoint;
@@ -55,7 +54,6 @@ pub use resources::ResourceVersion;
 pub(crate) use resources::{ResourceType, ResourceVec};
 
 pub(crate) mod csds;
-use crate::config::{BackendLb, EndpointGroup};
 
 #[cfg(test)]
 mod test;
@@ -112,17 +110,6 @@ impl AdsClient {
         };
 
         Ok((client, task))
-    }
-
-    pub fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
-        self.cache.get_route(target)
-    }
-
-    pub fn get_target(
-        &self,
-        target: &Target,
-    ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
-        self.cache.get_target(target)
     }
 
     pub fn subscribe(&self, resource_type: ResourceType, name: String) -> Result<(), ()> {

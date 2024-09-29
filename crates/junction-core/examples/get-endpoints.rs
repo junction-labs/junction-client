@@ -5,7 +5,7 @@ use junction_api_types::{
     shared::{Regex, ServiceTarget, Target, WeightedTarget},
 };
 use junction_core::Client;
-use std::{str::FromStr, time::Duration};
+use std::{env, str::FromStr, time::Duration};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -14,8 +14,11 @@ async fn main() {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
+    let server_addr =
+        env::var("JUNCTION_ADS_SERVER").unwrap_or("http://127.0.0.1:8008".to_string());
+
     let client = Client::build(
-        "http://127.0.0.1:8008".to_string(),
+        server_addr,
         "example-client".to_string(),
         "example-cluster".to_string(),
     )
@@ -74,7 +77,7 @@ async fn main() {
         .with_defaults(default_routes, default_backends)
         .unwrap();
 
-    let url: http::Uri = "https://nginx.default.svc.cluster.local".parse().unwrap();
+    let url: junction_core::Url = "https://nginx.default.svc.cluster.local".parse().unwrap();
     let prod_headers = http::HeaderMap::new();
     let staging_headers = {
         let mut headers = http::HeaderMap::new();
@@ -83,10 +86,9 @@ async fn main() {
     };
 
     loop {
-        let prod_endpoints =
-            client.resolve_endpoints(&http::Method::GET, url.clone(), &prod_headers);
+        let prod_endpoints = client.resolve_http(&http::Method::GET, url.clone(), &prod_headers);
         let staging_endpoints =
-            client.resolve_endpoints(&http::Method::GET, url.clone(), &staging_headers);
+            client.resolve_http(&http::Method::GET, url.clone(), &staging_headers);
 
         let mut error = false;
         if let Err(e) = &prod_endpoints {

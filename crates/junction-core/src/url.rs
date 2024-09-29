@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use http::uri::{Authority, PathAndQuery, Scheme};
 
 use crate::{Error, Result};
@@ -19,7 +21,7 @@ use crate::{Error, Result};
 ///
 /// There are no extra restrictions on the path or query components of a valid
 /// `Url`.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Url {
     scheme: Scheme,
     authority: Authority,
@@ -50,18 +52,18 @@ impl Url {
         let uri = uri.into_parts();
 
         let Some(authority) = uri.authority else {
-            return Err(Error::InvalidUrl("missing hostname"));
+            return Err(Error::InvalidUrl("missing hostname".into()));
         };
         if !authority.as_str().starts_with(authority.host()) {
             return Err(Error::InvalidUrl(
-                "url must not contain a username or password",
+                "url must not contain a username or password".into(),
             ));
         }
 
         let scheme = match uri.scheme.as_ref().map(|s| s.as_str()) {
             Some("http") | Some("https") => uri.scheme.unwrap(),
-            Some(_) => return Err(Error::InvalidUrl("unknown scheme")),
-            _ => return Err(Error::InvalidUrl("missing scheme")),
+            Some(_) => return Err(Error::InvalidUrl("unknown scheme".into())),
+            _ => return Err(Error::InvalidUrl("missing scheme".into())),
         };
         let path_and_query = uri
             .path_and_query
@@ -72,6 +74,19 @@ impl Url {
             authority,
             path_and_query,
         })
+    }
+}
+
+impl FromStr for Url {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let uri = http::Uri::from_str(s).map_err(|e| {
+            let message = e.to_string().into();
+            crate::Error::InvalidUrl(message)
+        })?;
+
+        Self::new(uri)
     }
 }
 

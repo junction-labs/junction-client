@@ -59,6 +59,10 @@ pub enum LbPolicy {
 }
 
 impl LbPolicy {
+    pub fn is_unspecified(&self) -> bool {
+        matches!(self, Self::Unspecified)
+    }
+
     pub(crate) fn from_xds(cluster: &xds_cluster::Cluster) -> Option<Self> {
         match cluster.lb_policy() {
             // for ROUND_ROBIN, ignore the slow_start_config entirely and return a brand new

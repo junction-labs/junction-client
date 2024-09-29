@@ -4,6 +4,11 @@ use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpo
 
 // FIXME: do we need to to support returning filters/rewrites? does supporting
 //        header filters mean adding headers to Endpoint?
+//
+// FIXME: Vec<Endpoints> is probably the wrong thing to return from all our
+// resolve methods. We probably need a struct that has something like a list
+// of primary endpoints to cycle through on retries, and a seprate list of
+// endpoints to mirror traffic to. Figure that out once we support mirroring.
 
 /// An HTTP endpoint to make a request to.
 ///

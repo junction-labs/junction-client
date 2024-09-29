@@ -1,5 +1,5 @@
 import typing
-from junction.junction import Junction, default_client
+from junction.junction import Junction, default_client, check_route
 
 from . import config, requests, urllib3
 
@@ -28,4 +28,4 @@ def _get_client(
     return default_client(**client_kwargs)
 
 
-__all__ = (Junction, config, urllib3, requests, default_client)
+__all__ = (Junction, config, urllib3, requests, check_route, default_client)
