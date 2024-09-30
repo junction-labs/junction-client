@@ -19,12 +19,15 @@ fn main() {
         junction_api_types::http::QueryParamMatch::item(),
         junction_api_types::http::PathMatch::item(),
         junction_api_types::http::RouteMatch::item(),
-        junction_api_types::http::HeaderFilter::item(),
-        junction_api_types::http::RequestMirrorFilter::item(),
-        junction_api_types::http::PathModifier::item(),
-        junction_api_types::http::RequestRedirectFilter::item(),
-        junction_api_types::http::UrlRewriteFilter::item(),
-        junction_api_types::http::RouteFilter::item(),
+        // NOTE: filters are currently hidden from the docs, don't generate
+        //       typing info for them.
+        //
+        // junction_api_types::http::HeaderFilter::item(),
+        // junction_api_types::http::RequestMirrorFilter::item(),
+        // junction_api_types::http::PathModifier::item(),
+        // junction_api_types::http::RequestRedirectFilter::item(),
+        // junction_api_types::http::UrlRewriteFilter::item(),
+        // junction_api_types::http::RouteFilter::item(),
         junction_api_types::shared::SessionAffinityPolicy::item(),
         junction_api_types::http::RouteRule::item(),
         junction_api_types::http::Route::item(),

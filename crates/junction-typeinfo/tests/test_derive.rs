@@ -49,6 +49,42 @@ fn test_struct() {
 }
 
 #[test]
+fn test_struct_doc_hidden() {
+    /// This struct has docs.
+    #[allow(unused)]
+    #[derive(TypeInfo)]
+    struct Foo {
+        /// One doc.
+        one: i32,
+        /** two doc */
+        two: String,
+        #[doc(hidden)]
+        three: bool,
+    }
+
+    assert_eq!(Foo::kind(), junction_typeinfo::Kind::Object("Foo"));
+    assert!(!Foo::nullable());
+    assert_eq!(Foo::doc(), Some("This struct has docs."));
+    assert_eq!(
+        Foo::fields(),
+        vec![
+            Field {
+                name: "one",
+                nullable: false,
+                kind: Kind::Int,
+                doc: Some("One doc."),
+            },
+            Field {
+                name: "two",
+                nullable: false,
+                kind: Kind::String,
+                doc: Some("two doc"),
+            },
+        ]
+    );
+}
+
+#[test]
 fn test_tuple_struct() {
     /// This is a tuple struct.
     #[allow(unused)]

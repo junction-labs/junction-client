@@ -91,6 +91,7 @@ pub struct RouteRule {
     /// All filters are compatible with each other except for the URLRewrite and
     /// RequestRedirect filters, which may not be combined.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[doc(hidden)]
     pub filters: Vec<RouteFilter>,
 
     //FIXME(persistence): enable session persistence as per the Gateway API
