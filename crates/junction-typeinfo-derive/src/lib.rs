@@ -318,7 +318,6 @@ fn is_hidden(field: &Field) -> syn::Result<bool> {
         // wasn't doc(hidden) if it was an error.
         let _ = attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("hidden") {
-                eprintln!("hidden field: {:?}", field.ident);
                 hidden = true;
             }
             Ok(())
