@@ -680,7 +680,7 @@ impl RouteMatch {
         let mut method: Option<Method> = None;
         let mut headers = vec![];
         for header in &r.headers {
-            let Some(header_match) = HeaderMatch::from_xds(&header) else {
+            let Some(header_match) = HeaderMatch::from_xds(header) else {
                 continue;
             };
 
@@ -732,12 +732,12 @@ impl QueryParamMatch {
                 }),
                 Some(_) | None => {
                     //fixme: raise an error that config is being thrown away
-                    return None;
+                    None
                 }
             },
             _ => {
                 // FIXME: log/record that we are throwing away config
-                return None;
+                None
             }
         }
     }
