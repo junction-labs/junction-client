@@ -73,10 +73,10 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
     --role=roles/trafficdirector.client
 
 # build and acquire the image's hash
+pushd junction-python/samples/grpc_simple_split
 docker buildx build --platform linux/arm64/v8,linux/amd64 -t us-east1-docker.pkg.dev/$PROJECT_ID/ar1/xds-td --push .
 docker pull us-east1-docker.pkg.dev/$PROJECT_ID/ar1/xds-td
 export IMAGE=`docker inspect us-east1-docker.pkg.dev/$PROJECT_ID/ar1/xds-td | jq -r '.[].RepoDigests[0]'`
-echo $IMAGE
 ```
 
 ### Server
@@ -158,7 +158,7 @@ EOF
 Run it
 
 ```bash
- gcloud compute instances create xds-client      --image-family=debian-11  \
+gcloud compute instances create xds-client      --image-family=debian-11  \
       --network $NETWORK   --machine-type=e2-standard-2 \
       --image-project=debian-cloud    \
       --scopes=https://www.googleapis.com/auth/cloud-platform  --zone=us-east1-b \
@@ -168,7 +168,7 @@ Run it
 in my case the instances we have now are
 
 ```bash
-$ gcloud compute instances list
+gcloud compute instances list
     NAME           ZONE           MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP    EXTERNAL_IP  STATUS
     grpc-ig-856t   us-east1-a  g1-small                    10.128.15.194               RUNNING
     grpc-ig-wk6m   us-east1-a  g1-small                    10.128.15.195               RUNNING
@@ -198,7 +198,7 @@ git clone https://github.com/GoogleCloudPlatform/traffic-director-grpc-bootstrap
 cd traffic-director-grpc-bootstrap/
 go build .
 export PROJECT_NUMBER=`curl -s "http://metadata.google.internal/computeMetadata/v1/project/numeric-project-id" -H "Metadata-Flavor: Google"`
-./td-grpc-bootstrap --config-mesh-experimental --gcp-project-number=$PROJECT_NUMBER  --output=xds_bootstrap.json
+./td-grpc-bootstrap --config-mesh grpc-mesh --gcp-project-number=$PROJECT_NUMBER  --output=xds_bootstrap.json
 export GRPC_XDS_BOOTSTRAP=`pwd`/xds_bootstrap.json
 cd
 
@@ -227,15 +227,17 @@ go install -v github.com/grpc-ecosystem/grpcdebug@latest
 ```bash
 
 # tear down backend and mesh
-gcloud network-services grpc-routes delete helloworld-grpc-route
-gcloud network-services meshes delete grpc-mesh
+gcloud network-services grpc-routes delete helloworld-grpc-route --location=global -q
+gcloud network-services meshes delete grpc-mesh -q --location=global
 gcloud compute backend-services delete  grpc-echo-service --global -q
+
 
 # tear down instances
 gcloud compute instance-groups managed delete grpc-ig-central --zone=us-east1-b -q
 gcloud compute instance-templates delete grpc-td  -q
-gcloud compute firewall-rules delete grpc-vm-allow-health-checks -q
+gcloud compute firewall-rules delete grpc-vm-allow-health-checks -q --global
 gcloud compute health-checks delete echoserverhc -q
+
 
 # tear down NAT
 gcloud compute routers nats delete nat-all --router=router --region=us-east1 -q

@@ -33,4 +33,3 @@ spec:
   ports:
     - port: 8008
       targetPort: 8008
-
