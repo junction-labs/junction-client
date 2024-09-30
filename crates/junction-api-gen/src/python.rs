@@ -159,9 +159,14 @@ fn into_pydefs(item: junction_typeinfo::Item) -> Vec<PyDef> {
 
 impl From<junction_typeinfo::StructVariant> for PyDict {
     fn from(item: junction_typeinfo::StructVariant) -> Self {
+        let name = format!(
+            "{parent_name}{item_name}",
+            parent_name = item.parent,
+            item_name = item.name
+        );
         let fields = item.fields.into_iter().map(|f| f.into()).collect();
         PyDict {
-            name: item.name,
+            name: name.leak(),
             doc: item.doc,
             fields,
         }

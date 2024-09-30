@@ -38,7 +38,7 @@ class WeightedBackend(typing.TypedDict):
     type: typing.Literal["DNS"] | typing.Literal["Service"]
 
 
-class DNS(typing.TypedDict):
+class AttachmentDNS(typing.TypedDict):
     type: typing.Literal["DNS"]
     hostname: str
     """The DNS Name to target/attach to"""
@@ -54,7 +54,7 @@ class DNS(typing.TypedDict):
     if it is not specified then it will use the same port as the incoming request"""
 
 
-class Service(typing.TypedDict):
+class AttachmentService(typing.TypedDict):
     type: typing.Literal["Service"]
     name: str
     """The name of the Kubernetes Service"""
@@ -76,7 +76,7 @@ class Service(typing.TypedDict):
     if it is not specified then it will use the same port as the incoming request"""
 
 
-Attachment = DNS | Service
+Attachment = AttachmentDNS | AttachmentService
 
 
 class SessionAffinityHashParam(typing.TypedDict):
@@ -144,52 +144,52 @@ class HeaderValue(typing.TypedDict):
     """The value of HTTP Header."""
 
 
-class RegularExpression(typing.TypedDict):
+class HeaderMatchRegularExpression(typing.TypedDict):
     type: typing.Literal["RegularExpression"]
     name: str
     value: str
 
 
-class Exact(typing.TypedDict):
+class HeaderMatchExact(typing.TypedDict):
     type: typing.Literal["Exact"]
     name: str
     value: str
 
 
-HeaderMatch = RegularExpression | Exact
+HeaderMatch = HeaderMatchRegularExpression | HeaderMatchExact
 
 
-class RegularExpression(typing.TypedDict):
+class QueryParamMatchRegularExpression(typing.TypedDict):
     type: typing.Literal["RegularExpression"]
     name: str
     value: str
 
 
-class Exact(typing.TypedDict):
+class QueryParamMatchExact(typing.TypedDict):
     type: typing.Literal["Exact"]
     name: str
     value: str
 
 
-QueryParamMatch = RegularExpression | Exact
+QueryParamMatch = QueryParamMatchRegularExpression | QueryParamMatchExact
 
 
-class Prefix(typing.TypedDict):
+class PathMatchPrefix(typing.TypedDict):
     type: typing.Literal["Prefix"]
     value: str
 
 
-class RegularExpression(typing.TypedDict):
+class PathMatchRegularExpression(typing.TypedDict):
     type: typing.Literal["RegularExpression"]
     value: str
 
 
-class Exact(typing.TypedDict):
+class PathMatchExact(typing.TypedDict):
     type: typing.Literal["Exact"]
     value: str
 
 
-PathMatch = Prefix | RegularExpression | Exact
+PathMatch = PathMatchPrefix | PathMatchRegularExpression | PathMatchExact
 
 
 class RouteMatch(typing.TypedDict):
@@ -286,7 +286,7 @@ class RequestMirrorFilter(typing.TypedDict):
     backend: Attachment
 
 
-class ReplaceFullPath(typing.TypedDict):
+class PathModifierReplaceFullPath(typing.TypedDict):
     """Specifies the value with which to replace the full path of a request
     during a rewrite or redirect."""
 
@@ -295,7 +295,7 @@ class ReplaceFullPath(typing.TypedDict):
     """The value to replace the path with."""
 
 
-class ReplacePrefixMatch(typing.TypedDict):
+class PathModifierReplacePrefixMatch(typing.TypedDict):
     """Specifies the value with which to replace the prefix match of a request
     during a rewrite or redirect. For example, a request to "/foo/bar" with
     a prefix match of "/foo" and a ReplacePrefixMatch of "/xyz" would be
@@ -327,7 +327,7 @@ class ReplacePrefixMatch(typing.TypedDict):
     replace_prefix_match: str
 
 
-PathModifier = ReplaceFullPath | ReplacePrefixMatch
+PathModifier = PathModifierReplaceFullPath | PathModifierReplacePrefixMatch
 
 
 class RequestRedirectFilter(typing.TypedDict):
@@ -391,7 +391,7 @@ class UrlRewriteFilter(typing.TypedDict):
     """Defines a path rewrite."""
 
 
-class RequestHeaderModifier(typing.TypedDict):
+class RouteFilterRequestHeaderModifier(typing.TypedDict):
     """Defines a schema for a filter that modifies request headers."""
 
     type: typing.Literal["RequestHeaderModifier"]
@@ -399,7 +399,7 @@ class RequestHeaderModifier(typing.TypedDict):
     """A Header filter."""
 
 
-class ResponseHeaderModifier(typing.TypedDict):
+class RouteFilterResponseHeaderModifier(typing.TypedDict):
     """Defines a schema for a filter that modifies response headers."""
 
     type: typing.Literal["ResponseHeaderModifier"]
@@ -407,7 +407,7 @@ class ResponseHeaderModifier(typing.TypedDict):
     """A Header filter."""
 
 
-class RequestMirror(typing.TypedDict):
+class RouteFilterRequestMirror(typing.TypedDict):
     """Defines a schema for a filter that mirrors requests. Requests are sent
     to the specified destination, but responses from that destination are
     ignored.
@@ -420,7 +420,7 @@ class RequestMirror(typing.TypedDict):
     request_mirror: RequestMirrorFilter
 
 
-class RequestRedirect(typing.TypedDict):
+class RouteFilterRequestRedirect(typing.TypedDict):
     """Defines a schema for a filter that responds to the request with an HTTP
     redirection."""
 
@@ -429,7 +429,7 @@ class RequestRedirect(typing.TypedDict):
     """A redirect filter."""
 
 
-class URLRewrite(typing.TypedDict):
+class RouteFilterURLRewrite(typing.TypedDict):
     """Defines a schema for a filter that modifies a request during forwarding."""
 
     type: typing.Literal["URLRewrite"]
@@ -438,11 +438,11 @@ class URLRewrite(typing.TypedDict):
 
 
 RouteFilter = (
-    RequestHeaderModifier
-    | ResponseHeaderModifier
-    | RequestMirror
-    | RequestRedirect
-    | URLRewrite
+    RouteFilterRequestHeaderModifier
+    | RouteFilterResponseHeaderModifier
+    | RouteFilterRequestMirror
+    | RouteFilterRequestRedirect
+    | RouteFilterURLRewrite
 )
 
 
@@ -513,11 +513,11 @@ class Route(typing.TypedDict):
     """The route rules that determine whether any URLs match."""
 
 
-class RoundRobin(typing.TypedDict):
+class LbPolicyRoundRobin(typing.TypedDict):
     type: typing.Literal["RoundRobin"]
 
 
-class RingHash(typing.TypedDict):
+class LbPolicyRingHash(typing.TypedDict):
     type: typing.Literal["RingHash"]
     min_ring_size: int
     """The minimum size of the hash ring"""
@@ -536,11 +536,11 @@ class RingHash(typing.TypedDict):
     If no policies match, a random hash is generated for each request."""
 
 
-class Unspecified(typing.TypedDict):
+class LbPolicyUnspecified(typing.TypedDict):
     type: typing.Literal["Unspecified"]
 
 
-LbPolicy = RoundRobin | RingHash | Unspecified
+LbPolicy = LbPolicyRoundRobin | LbPolicyRingHash | LbPolicyUnspecified
 
 
 class Backend(typing.TypedDict):
