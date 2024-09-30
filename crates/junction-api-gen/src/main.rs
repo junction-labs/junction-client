@@ -8,7 +8,6 @@ use junction_typeinfo::TypeInfo as _;
 /// This is not a general purpose tool.
 fn main() {
     let items = vec![
-        junction_api_types::shared::StringMatch::item(),
         junction_api_types::shared::Fraction::item(),
         junction_api_types::shared::WeightedBackend::item(),
         junction_api_types::shared::Attachment::item(),

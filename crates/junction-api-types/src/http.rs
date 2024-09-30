@@ -1,6 +1,6 @@
 use crate::shared::{
     Attachment, Duration, Fraction, PortNumber, PreciseHostname, Regex, SessionAffinityPolicy,
-    StringMatch, WeightedBackend,
+    WeightedBackend,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -255,20 +255,65 @@ pub type HeaderName = String;
 /// equivalent.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-#[serde(deny_unknown_fields)]
-pub struct HeaderMatch {
-    pub name: HeaderName,
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum HeaderMatch {
+    #[serde(
+        alias = "regex",
+        alias = "regular_expression",
+        alias = "regularExpression"
+    )]
+    RegularExpression { name: String, value: Regex },
 
-    pub matches: StringMatch,
+    #[serde(untagged)]
+    Exact { name: String, value: String },
+}
+
+impl HeaderMatch {
+    pub fn name(&self) -> &str {
+        match self {
+            HeaderMatch::RegularExpression { name, .. } => name,
+            HeaderMatch::Exact { name, .. } => name,
+        }
+    }
+
+    pub fn is_match(&self, header_value: &str) -> bool {
+        match self {
+            HeaderMatch::RegularExpression { value, .. } => value.is_match(header_value),
+            HeaderMatch::Exact { value, .. } => value == header_value,
+        }
+    }
 }
 
 /// Describes how to select a HTTP route by matching HTTP query parameters.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct QueryParamMatch {
-    pub name: String,
-    pub matches: StringMatch,
+pub enum QueryParamMatch {
+    #[serde(
+        alias = "regex",
+        alias = "regular_expression",
+        alias = "regularExpression"
+    )]
+    RegularExpression { name: String, value: Regex },
+
+    #[serde(untagged)]
+    Exact { name: String, value: String },
+}
+
+impl QueryParamMatch {
+    pub fn name(&self) -> &str {
+        match self {
+            QueryParamMatch::RegularExpression { name, .. } => name,
+            QueryParamMatch::Exact { name, .. } => name,
+        }
+    }
+
+    pub fn is_match(&self, param_value: &str) -> bool {
+        match self {
+            QueryParamMatch::RegularExpression { value, .. } => value.is_match(param_value),
+            QueryParamMatch::Exact { value, .. } => value == param_value,
+        }
+    }
 }
 
 /// Describes how to select a HTTP route by matching the HTTP method as defined
@@ -633,26 +678,21 @@ impl RouteMatch {
         // otherwise. to keep the "before and after" xDS as similar as possible
         // then we pull this out of the headers list if it exists
         let mut method: Option<Method> = None;
-        let headers = r
-            .headers
-            .iter()
-            .filter_map(HeaderMatch::from_xds)
-            .filter({
-                |header| {
-                    if header.name == ":method" {
-                        match &header.matches {
-                            StringMatch::Exact { value } => method = Some(value.clone()),
-                            _ => {
-                                //fixme: we are throwing away config
-                            }
-                        }
-                        true
-                    } else {
-                        false
-                    }
+        let mut headers = vec![];
+        for header in &r.headers {
+            let Some(header_match) = HeaderMatch::from_xds(&header) else {
+                continue;
+            };
+
+            match header_match {
+                HeaderMatch::Exact { name, value } if name == ":method" => {
+                    method = Some(value);
                 }
-            })
-            .collect();
+                _ => {
+                    headers.push(header_match);
+                }
+            }
+        }
 
         let query_params = r
             .query_parameters
@@ -679,16 +719,17 @@ fn parse_xds_regex(p: &xds_api::pb::envoy::r#type::matcher::v3::RegexMatcher) ->
 
 impl QueryParamMatch {
     pub fn from_xds(matcher: &xds_route::QueryParameterMatcher) -> Option<Self> {
-        let value_matcher = match matcher.query_parameter_match_specifier.as_ref()? {
+        let name = matcher.name.clone();
+        match matcher.query_parameter_match_specifier.as_ref()? {
             QueryParameterMatchSpecifier::StringMatch(s) => match s.match_pattern.as_ref() {
-                Some(MatchPattern::Exact(s)) => {
-                    //FIXME: if case insensitive is set, should convert to a
-                    //regex or maybe just throw an error
-                    StringMatch::Exact { value: s.clone() }
-                }
-                Some(MatchPattern::SafeRegex(pfx)) => StringMatch::RegularExpression {
+                Some(MatchPattern::Exact(s)) => Some(QueryParamMatch::Exact {
+                    name,
+                    value: s.clone(),
+                }),
+                Some(MatchPattern::SafeRegex(pfx)) => Some(QueryParamMatch::RegularExpression {
+                    name,
                     value: parse_xds_regex(pfx)?,
-                },
+                }),
                 Some(_) | None => {
                     //fixme: raise an error that config is being thrown away
                     return None;
@@ -698,34 +739,31 @@ impl QueryParamMatch {
                 // FIXME: log/record that we are throwing away config
                 return None;
             }
-        };
-        let name = matcher.name.clone();
-        Some(QueryParamMatch {
-            name,
-            matches: value_matcher,
-        })
+        }
     }
 }
 
 impl HeaderMatch {
     fn from_xds(header_matcher: &xds_route::HeaderMatcher) -> Option<Self> {
         let name = header_matcher.name.clone();
-        let matches = match header_matcher.header_match_specifier.as_ref()? {
-            xds_route::header_matcher::HeaderMatchSpecifier::ExactMatch(s) => {
-                StringMatch::Exact { value: s.clone() }
+        match header_matcher.header_match_specifier.as_ref()? {
+            xds_route::header_matcher::HeaderMatchSpecifier::ExactMatch(value) => {
+                Some(HeaderMatch::Exact {
+                    name,
+                    value: value.clone(),
+                })
             }
-            xds_route::header_matcher::HeaderMatchSpecifier::SafeRegexMatch(pfx) => {
-                StringMatch::RegularExpression {
-                    value: parse_xds_regex(pfx)?,
-                }
+            xds_route::header_matcher::HeaderMatchSpecifier::SafeRegexMatch(regex) => {
+                Some(HeaderMatch::RegularExpression {
+                    name,
+                    value: parse_xds_regex(regex)?,
+                })
             }
             _ => {
                 // FIXME: log/record that we are throwing away config
-                return None;
+                None
             }
-        };
-
-        Some(HeaderMatch { name, matches })
+        }
     }
 }
 
@@ -786,25 +824,21 @@ mod tests {
     #[test]
     fn test_header_matcher() {
         let test_json = json!([
-            { "name":"bar", "matches": {"type" : "RegularExpression", "value": ".*foo" }},
-            { "name":"bar", "matches": {"value": "a literal" }},
+            { "name":"bar", "type" : "RegularExpression", "value": ".*foo"},
+            { "name":"bar", "value": "a literal"},
         ]);
         let obj: Vec<HeaderMatch> = serde_json::from_value(test_json.clone()).unwrap();
 
         assert_eq!(
             obj,
             vec![
-                HeaderMatch {
+                HeaderMatch::RegularExpression {
                     name: "bar".to_string(),
-                    matches: crate::shared::StringMatch::RegularExpression {
-                        value: Regex::from_str(".*foo").unwrap()
-                    },
+                    value: Regex::from_str(".*foo").unwrap(),
                 },
-                HeaderMatch {
+                HeaderMatch::Exact {
                     name: "bar".to_string(),
-                    matches: crate::shared::StringMatch::Exact {
-                        value: "a literal".to_string()
-                    },
+                    value: "a literal".to_string(),
                 }
             ]
         );
@@ -833,14 +867,14 @@ mod tests {
                     "method": "GET",
                     "path": { "value": "foo" },
                     "headers": [
-                        {"name":"ian", "matches": {"value": "foo"}},
-                        {"name": "bar", "matches": {"type":"RegularExpression", "value": ".*foo"}}
+                        {"name":"ian", "value": "foo"},
+                        {"name": "bar", "type":"RegularExpression", "value": ".*foo"}
                     ]
                 },
                 {
                     "query_params": [
-                        {"name":"ian", "matches": {"value": "foo"}},
-                        {"name": "bar", "matches": {"type":"RegularExpression", "value": ".*foo"}}
+                        {"name":"ian", "value": "foo"},
+                        {"name": "bar", "type":"RegularExpression", "value": ".*foo"}
                     ]
                 }
             ],

@@ -5,25 +5,6 @@ import typing
 import datetime
 
 
-class RegularExpression(typing.TypedDict):
-    """Use a regular expression to match this value."""
-
-    type: typing.Literal["RegularExpression"]
-    value: str
-    """A regular expression."""
-
-
-class Exact(typing.TypedDict):
-    """Match this value exactly."""
-
-    type: typing.Literal["Exact"]
-    value: str
-    """The value to match. Must be a valid utf-8 string."""
-
-
-StringMatch = RegularExpression | Exact
-
-
 class Fraction(typing.TypedDict):
     """A fraction, expressed as a numerator and a denominator."""
 
@@ -163,27 +144,34 @@ class HeaderValue(typing.TypedDict):
     """The value of HTTP Header."""
 
 
-class HeaderMatch(typing.TypedDict):
-    """Describes how to select a HTTP route by matching HTTP request headers.
-
-    `name` is the name of the HTTP Header to be matched. Name matching is case
-    insensitive. (See <https://tools.ietf.org/html/rfc7230#section-3.2>).
-
-    If multiple entries specify equivalent header names, only the first entry
-    with an equivalent name WILL be considered for a match. Subsequent entries
-    with an equivalent header name WILL be ignored. Due to the
-    case-insensitivity of header names, "foo" and "Foo" are considered
-    equivalent."""
-
+class RegularExpression(typing.TypedDict):
+    type: typing.Literal["RegularExpression"]
     name: str
-    matches: StringMatch
+    value: str
 
 
-class QueryParamMatch(typing.TypedDict):
-    """Describes how to select a HTTP route by matching HTTP query parameters."""
-
+class Exact(typing.TypedDict):
+    type: typing.Literal["Exact"]
     name: str
-    matches: StringMatch
+    value: str
+
+
+HeaderMatch = RegularExpression | Exact
+
+
+class RegularExpression(typing.TypedDict):
+    type: typing.Literal["RegularExpression"]
+    name: str
+    value: str
+
+
+class Exact(typing.TypedDict):
+    type: typing.Literal["Exact"]
+    name: str
+    value: str
+
+
+QueryParamMatch = RegularExpression | Exact
 
 
 class Prefix(typing.TypedDict):
