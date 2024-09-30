@@ -2,7 +2,7 @@ use http::HeaderValue;
 use junction_api_types::{
     backend::{Backend, LbPolicy},
     http::*,
-    shared::{Attachment, Regex, ServiceAttachment, StringMatch, WeightedBackend},
+    shared::{Attachment, Regex, ServiceAttachment, WeightedBackend},
 };
 use junction_core::Client;
 use std::{str::FromStr, time::Duration};
@@ -39,11 +39,9 @@ async fn main() {
         rules: vec![
             RouteRule {
                 matches: vec![RouteMatch {
-                    headers: vec![HeaderMatch {
+                    headers: vec![HeaderMatch::RegularExpression {
                         name: "x-demo-staging".to_string(),
-                        matches: StringMatch::RegularExpression {
-                            value: Regex::from_str(".*").unwrap(),
-                        },
+                        value: Regex::from_str(".*").unwrap(),
                     }],
                     ..Default::default()
                 }],

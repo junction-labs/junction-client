@@ -32,34 +32,6 @@ pub struct Fraction {
     pub denominator: Option<i32>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-#[serde(tag = "type")]
-pub enum StringMatch {
-    /// Use a regular expression to match this value.
-    #[serde(alias = "regex", alias = "Regex", alias = "regular_expression")]
-    RegularExpression {
-        /// A regular expression.
-        value: Regex,
-    },
-
-    /// Match this value exactly.
-    #[serde(untagged, alias = "exact")]
-    Exact {
-        /// The value to match. Must be a valid utf-8 string.
-        value: String,
-    },
-}
-
-impl StringMatch {
-    pub fn is_match(&self, s: &str) -> bool {
-        match self {
-            StringMatch::Exact { value } => value == s,
-            StringMatch::RegularExpression { value } => value.is_match(s),
-        }
-    }
-}
-
 /// A regular expression that will be processed by Rust's standard library
 /// (https://docs.rs/regex/latest/regex/)
 #[derive(Clone)]
@@ -144,38 +116,6 @@ impl FromStr for Regex {
             Ok(e) => Ok(Self(e)),
             Err(e) => Err(e.to_string()),
         }
-    }
-}
-
-#[cfg(test)]
-mod test_string_matcher {
-    use super::*;
-
-    #[test]
-    fn test_from_json() {
-        let literal_match = serde_json::json!({
-            "value": "literally this"
-        });
-
-        assert_eq!(
-            serde_json::from_value::<StringMatch>(literal_match).unwrap(),
-            StringMatch::Exact {
-                value: "literally this".to_string()
-            }
-        );
-
-        let regex_match = serde_json::json!({
-            "type": "regex",
-            "value": "foo.*bar",
-
-        });
-
-        assert_eq!(
-            serde_json::from_value::<StringMatch>(regex_match).unwrap(),
-            StringMatch::RegularExpression {
-                value: Regex::from_str("foo.*bar").unwrap(),
-            }
-        );
     }
 }
 
