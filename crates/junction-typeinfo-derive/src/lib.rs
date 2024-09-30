@@ -256,6 +256,10 @@ fn struct_fields(
     }
 
     for (i, f) in fields.named.iter().enumerate() {
+        if is_hidden(f)? {
+            continue;
+        }
+
         let ctx = serde_derive_internals::Ctxt::new();
         let field_attrs = serde_derive_internals::attr::Field::from_ast(
             &ctx,
@@ -297,6 +301,35 @@ fn struct_fields(
             fields
         }
     })
+}
+
+fn is_hidden(field: &Field) -> syn::Result<bool> {
+    for attr in &field.attrs {
+        if !attr.path().is_ident("doc") {
+            continue;
+        }
+
+        let mut hidden = false;
+        // try to parse doc(hidden). this errors out on regular rustdoc, because
+        // it turns into #[doc = "your rustdoc"] attributes which is an unexpected
+        // structure for this parser.
+        //
+        // just full steam ahead and parse, ignoring the error if we get one. it
+        // wasn't doc(hidden) if it was an error.
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("hidden") {
+                eprintln!("hidden field: {:?}", field.ident);
+                hidden = true;
+            }
+            Ok(())
+        });
+
+        if hidden {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn internal_tag_field(tag: &Ident, variant: &Variant) -> proc_macro2::TokenStream {
