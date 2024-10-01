@@ -15,7 +15,7 @@ Proxy features supported are:
 * Timeouts
 * Retries
 * Splitting: weight based splitting between backend groups
-* Load balancing: stateless Round Robin, and Staeful RingHash, both in line with
+* Load balancing: stateless Round Robin, and Stateful RingHash, both in line with
   the gRPC implementations.
 
 Beyond the proxy features, a major focus of the Junction client is ensuring
