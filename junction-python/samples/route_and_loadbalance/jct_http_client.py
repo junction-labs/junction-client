@@ -5,9 +5,7 @@ import requests
 
 
 def run(args):
-    if args.session == "no-client-config":
-        session = junction.requests.Session()
-    elif args.session == "client-config":
+    if args.session == "junction":
         default_backend: junction.config.Attachment = {
             "name": "jct-http-server",
             "namespace": "default",
@@ -20,7 +18,7 @@ def run(args):
         session = junction.requests.Session(
             default_backends=[
                 {
-                    "attachment": default_backend,
+                    "attachment": feature_backend,
                     "lb": {
                         "type": "RingHash",
                         "minRingSize": 1024,
@@ -37,11 +35,11 @@ def run(args):
                             "backends": [
                                 {
                                     **default_backend,
-                                    "weight": 80,
+                                    "weight": 50,
                                 },
                                 {
                                     **feature_backend,
-                                    "weight": 20,
+                                    "weight": 50,
                                 },
                             ],
                         },
@@ -59,16 +57,13 @@ def run(args):
         session = requests.Session()
 
     for path in ["/index", "/feature-1/index"]:
-        for header_opt in ["without_header", "with_header"]:
+        for header_opt in [{}, {"USER": "inowland"}]:
             counters = defaultdict(int)
             for _ in range(100):
-                headers = {}
-                if header_opt == "with_header":
-                    headers = {"USER": "inowland"}
-                resp = session.get(f"{args.base_url}{path}", headers=headers)
+                resp = session.get(f"{args.base_url}{path}", headers=header_opt)
                 resp.raise_for_status()
                 counters[resp.text] += 1
-            print(f"*** {path} {header_opt} ***")
+            print(f"***** Responses for Path: '{path}', Headers: '{header_opt}' *****")
             myKeys = list(counters.keys())
             myKeys.sort()
             for key in myKeys:
@@ -84,8 +79,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--session",
-        default="client-config",
-        choices={"client-config", "no-client-config", "dns"},
+        default="junction",
+        choices={"junction", "dns"},
         help="the way to set up requests session",
     )
     args = parser.parse_args()
