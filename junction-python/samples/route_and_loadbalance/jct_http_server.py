@@ -8,18 +8,18 @@ server_id = randint(1, 100)
 
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def _set_headers(self):
-        self.send_response(200)
+    def _set_headers(self, code):
+        self.send_response(code)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
 
     def do_HEAD(self):
         logging.warning("header request recieved")
-        self._set_headers()
+        self._set_headers(200)
 
     def do_GET(self):
         logging.warning("get request recieved")
-        self._set_headers()
+        self._set_headers(200)
         self.wfile.write(str.encode(f"version:{version}, server_id:{server_id}"))
 
 
