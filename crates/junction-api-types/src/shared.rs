@@ -783,8 +783,7 @@ pub struct ServiceAttachment {
     /// FIXME(namespace): what should the semantic be when this is not specified:
     /// default, namespace of client, namespace of EZbake?
     ///
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
+    pub namespace: String,
 
     ///
     /// The port number of the Kubernetes service to target/
@@ -871,10 +870,7 @@ impl Attachment {
     pub fn as_hostname(&self) -> String {
         match self {
             Attachment::DNS(c) => c.hostname.clone(),
-            Attachment::Service(c) => match &c.namespace {
-                Some(x) => format!("{}.{}{}", c.name, x, KUBE_SERVICE_SUFFIX),
-                None => format!("{}{}", c.name, KUBE_SERVICE_SUFFIX), //as per above discusstion, this is not right
-            },
+            Attachment::Service(c) => format!("{}.{}{}", c.name, c.namespace, KUBE_SERVICE_SUFFIX),
         }
     }
 
@@ -882,7 +878,7 @@ impl Attachment {
         if hostname.ends_with(KUBE_SERVICE_SUFFIX) {
             let mut parts = hostname.split('.');
             let name = parts.next().unwrap().to_string();
-            let namespace = parts.next().map(|x| x.to_string());
+            let namespace = parts.next().unwrap().to_string();
             Attachment::Service(ServiceAttachment {
                 name,
                 namespace,
@@ -903,7 +899,7 @@ impl Attachment {
         if parts.len() == 3 && parts[2].eq("cluster") {
             Ok(Attachment::Service(ServiceAttachment {
                 name: parts[1].to_string(),
-                namespace: Some(parts[0].to_string()),
+                namespace: parts[0].to_string(),
                 port: None,
             }))
         } else {
@@ -918,10 +914,7 @@ impl Attachment {
     pub fn as_cluster_xds_name(&self) -> String {
         match self {
             Attachment::DNS(c) => c.hostname.clone(),
-            Attachment::Service(c) => match &c.namespace {
-                Some(x) => format!("{}/{}/cluster", x, c.name),
-                None => format!("{}/cluster", c.name),
-            },
+            Attachment::Service(c) => format!("{}/{}/cluster", c.namespace, c.name),
         }
     }
 
