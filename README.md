@@ -1,28 +1,42 @@
 # junction-client
 
-The Junction service discovery clients. The Junction clients enable the full
+The Junction service discovery client libraries. These libraries enable the full
 capabilities of a rich HTTP proxy, implemented via a common `junction-core`
-library, with wrappers on a per language and library basis, so that almost no
-code needs to be changed to use its capabilities. 
+Rust library, with wrappers on a per language and client library basis, so that 
+very little code needs to be changed to use its capabilities. 
 
-At the moment Junction only supports Kubernetes services meaning you must have
+At the moment Junction only supports Kubernetes services, meaning you must have
 [ezbake][ezbake] installed. In the future we will add support for arbitrary DNS
-names.
+services.
 
-Current supported languages and their clients are:
-* Python - the [Requests][requests] library
+Proxy features supported are:
+* Routing: Matching on method, path, headers, and query parameters, in line with the
+  [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/).
+* Timeouts
+* Retries
+* Splitting: weight based splitting between backend groups
+* Load balancing: stateless Round Robin, and Staeful RingHash, both in line with
+  the gRPC implementations.
+
+Beyond the proxy features, a major focus of the Junction client is ensuring
+first class support for configuring it in each language, particularly
+around unit testing, integrating with gitops, and debugging in production.
+
+Supported languages and their clients are:
+* [Python](#python) - the [Requests][requests] library
 
 [ezbake]: https://github.com/junction-labs/ezbake
 [requests]: https://pypi.org/project/requests/
+[gatewayapi]: https://gateway-api.sigs.k8s.io/
 
 ## Using Junction client
 
-You must have [ezbake][https://github.com/junction-labs/ezbake] installed in
-your targeted k8s cluster.
+### Python
+
+You must have [ezbake](https://github.com/junction-labs/ezbake) installed in
+your targeted k8s cluster. 
 
 Make sure you set up your `JUNCTION_ADS_SERVER` environment variable!
-
-### Python
 
 To build and install in `~/.venv`:
 ```bash 
