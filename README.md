@@ -46,8 +46,8 @@ source .venv/bin/activate
 
 Then in Python, to use it to do a request:
 ```python
-import junction.requests
-session = junction.requests.Session()
+import junction.requests as requests
+session = requests.Session()
 resp = session.get("http://jct-http-server.default.svc.cluster.local")
 resp.raise_for_status()
 ```
