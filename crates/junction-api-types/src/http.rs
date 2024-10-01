@@ -887,7 +887,7 @@ mod tests {
                 }
             }],
             "backends":[
-                { "weight": 1, "name": "timeout-svc" }
+                { "weight": 1, "name": "timeout-svc", "namespace": "foo" }
             ],
             "timeouts": {
                 "request": "1s"
@@ -902,16 +902,17 @@ mod tests {
     fn minimal_route() {
         assert_deserialize(
             json!({
-                "attachment": { "name": "foobar" },
+                "attachment": { "name": "foo", "namespace": "bar" },
                 "rules": [
                     {
-                        "backends": [ { "name": "foobar" } ],
+                        "backends": [ { "name": "foo", "namespace": "bar" } ],
                     }
                 ]
             }),
             Route {
                 attachment: Attachment::Service(ServiceAttachment {
-                    name: "foobar".to_string(),
+                    name: "foo".to_string(),
+                    namespace: "bar".to_string(),
                     ..Default::default()
                 }),
                 rules: vec![RouteRule {
@@ -922,7 +923,8 @@ mod tests {
                     retry_policy: None,
                     backends: vec![WeightedBackend {
                         attachment: Attachment::Service(ServiceAttachment {
-                            name: "foobar".to_string(),
+                            name: "foo".to_string(),
+                            namespace: "bar".to_string(),
                             ..Default::default()
                         }),
                         weight: 1,

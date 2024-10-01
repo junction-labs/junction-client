@@ -25,12 +25,12 @@ async fn main() {
 
     let nginx = Attachment::Service(ServiceAttachment {
         name: "nginx".to_string(),
-        namespace: Some("default".to_string()),
+        namespace: "default".to_string(),
         port: Some(80),
     });
     let nginx_staging = Attachment::Service(ServiceAttachment {
         name: "nginx-staging".to_string(),
-        namespace: Some("default".to_string()),
+        namespace: "default".to_string(),
         port: Some(80),
     });
 
