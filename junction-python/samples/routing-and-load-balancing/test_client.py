@@ -5,13 +5,13 @@ import urllib3
 import junction.requests
 
 
-def print_test_header(name):
-    print(f"***** Beginning Test of {name} *****")
+def print_header(name):
+    print(f"***** Beginning sample of {name} *****")
 
 
 # we get a little clever here, and use the same query_param we use to tell the
-# server to send fail codes to also do a route, so we test that too
-def test_retries(args):
+# server to send fail codes to also do the route, so we demonstrate that too
+def retry_sample(args):
     default_backend: junction.config.Attachment = {
         "name": "jct-http-server",
         "namespace": "default",
@@ -51,7 +51,7 @@ def test_retries(args):
     default_backends: List[junction.config.Backend] = []
     session = junction.requests.Session(default_routes, default_backends)
 
-    print_test_header("Retries")
+    print_header("Retries")
     for code in [501, 502]:
         session.get(f"{args.base_url}/?fail_match={code}&fail_match_set_counter=2")
         counters = defaultdict(int)
@@ -65,7 +65,7 @@ def test_retries(args):
     print("")
 
 
-def test_path_match(args):
+def path_match_sample(args):
     default_backend: junction.config.Attachment = {
         "name": "jct-http-server",
         "namespace": "default",
@@ -103,7 +103,7 @@ def test_path_match(args):
     default_backends: List[junction.config.Backend] = []
     session = junction.requests.Session(default_routes, default_backends)
 
-    print_test_header("Header Match")
+    print_header("Header Match")
     for path in ["/index", "/feature-1/index"]:
         counters = defaultdict(int)
         for _ in range(200):
@@ -118,7 +118,7 @@ def test_path_match(args):
     print("")
 
 
-def test_ring_hash(args):
+def ring_hash_sample(args):
     default_backend: junction.config.Attachment = {
         "name": "jct-http-server",
         "namespace": "default",
@@ -136,7 +136,7 @@ def test_ring_hash(args):
     ]
     session = junction.requests.Session(default_routes, default_backends)
 
-    print_test_header("RingHash")
+    print_header("RingHash")
     for headers in [{}, {"USER": "inowland"}]:
         counters = defaultdict(int)
         for _ in range(200):
@@ -151,7 +151,7 @@ def test_ring_hash(args):
     print("")
 
 
-def test_timeouts(args):
+def timeouts_sample(args):
     default_backend: junction.config.Attachment = {
         "name": "jct-http-server",
         "namespace": "default",
@@ -173,7 +173,7 @@ def test_timeouts(args):
     default_backends: List[junction.config.Backend] = []
     session = junction.requests.Session(default_routes, default_backends)
 
-    print_test_header("Timeouts")
+    print_header("Timeouts")
     for sleep_ms in [0, 100]:
         counters = defaultdict(int)
         try:
@@ -197,7 +197,7 @@ def test_timeouts(args):
 ## Interestingly if you restart jct_http_server after EZBake is already running, the repro
 ## goes away
 ##
-def test_bad_xds(args):
+def bad_xds_sample(args):
     default_backend: junction.config.Attachment = {
         "name": "jct-http-server",
         "namespace": "default",
@@ -219,7 +219,7 @@ def test_bad_xds(args):
         }
     ]
     default_backends: List[junction.config.Backend] = []
-    print_test_header("Bad xDS Match")
+    print_header("Bad xDS Match")
     session = junction.requests.Session(default_routes, default_backends)
     resp = session.get(f"{args.base_url}")
     resp.raise_for_status()
@@ -248,24 +248,24 @@ def test_bad_xds(args):
     resp.raise_for_status()
 
 
-def test_all(args):
-    test_retries(args)
-    test_path_match(args)
-    test_ring_hash(args)
-    test_timeouts(args)
+def all_samples(args):
+    retry_sample(args)
+    path_match_sample(args)
+    ring_hash_sample(args)
+    timeouts_sample(args)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Test Junction")
+    parser = argparse.ArgumentParser(description="Samples for Junction")
     parser.add_argument(
         "--base-url",
         default="http://jct-http-server.default.svc.cluster.local",
         help="The base url to send requests to",
     )
     parser.add_argument(
-        "--test",
-        default="test_all",
-        help="specific test to run",
+        "--sample",
+        default="all_samples",
+        help="specific sample to run",
     )
 
     args = parser.parse_args()
