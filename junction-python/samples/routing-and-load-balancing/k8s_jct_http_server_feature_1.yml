@@ -5,7 +5,7 @@ metadata:
   labels:
     app: jct-http-server-feature-1
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: jct-http-server-feature-1

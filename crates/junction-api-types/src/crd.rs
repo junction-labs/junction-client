@@ -1,4 +1,4 @@
-use crate::{backend::LbPolicy, http::RouteRetryPolicy, shared::SessionAffinityPolicy};
+use crate::{backend::LbPolicy, http::RouteRetry, shared::SessionAffinity};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -47,10 +47,10 @@ pub struct JctHTTPRoutePolicySpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JctHTTPRoutePolicyConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_affinity: Option<SessionAffinityPolicy>,
+    pub session_affinity: Option<SessionAffinity>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry: Option<RouteRetryPolicy>,
+    pub retry: Option<RouteRetry>,
 }
 
 ///

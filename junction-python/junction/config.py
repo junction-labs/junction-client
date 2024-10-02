@@ -12,7 +12,7 @@ class Fraction(typing.TypedDict):
     denominator: int
 
 
-class WeightedBackend(typing.TypedDict):
+class WeightedAttachment(typing.TypedDict):
     weight: int
     hostname: str
     """The DNS Name to target/attach to"""
@@ -93,38 +93,33 @@ class SessionAffinityHashParam(typing.TypedDict):
 
 
 class RouteTimeouts(typing.TypedDict):
-    """Defines timeouts that can be configured for a http Route. Specifying a zero
-    value such as "0s" is interpreted as no timeout."""
-
-    backend_request: datetime.timedelta
-    """Specifies a timeout for an individual request from the gateway to a
-    backend. This covers the time from when the request first starts being
-    sent from the gateway to when the full response has been received from
-    the backend.
-
-    An entire client HTTP transaction with a gateway, covered by the Request
-    timeout, may result in more than one call from the gateway to the
-    destination backend, for example, if automatic retries are supported.
-
-    Because the Request timeout encompasses the BackendRequest timeout, the
-    value of BackendRequest must be <= the value of Request timeout."""
+    """Defines timeouts that can be configured for a HTTP Route."""
 
     request: datetime.timedelta
-    """Specifies the maximum duration for a gateway to respond to an HTTP
-    request. If the gateway has not been able to respond before this
-    deadline is met, the gateway MUST return a timeout error.
+    """Specifies the maximum duration for a HTTP request. This timeout is
+    intended to cover as close to the whole request-response transaction as
+    possible.
 
-    For example, setting the `rules.timeouts.request` field to the value
-    `10s` will cause a timeout if a client request is taking longer than 10
-    seconds to complete.
+    An entire client HTTP transaction may result in more than one call to
+    destination backends, for example, if automatic retries are supported.
 
-    This timeout is intended to cover as close to the whole request-response
-    transaction as possible although an implementation MAY choose to start
-    the timeout after the entire request stream has been received instead of
-    immediately after the transaction is initiated by the client."""
+    Specifying a zero value such as "0s" is interpreted as no timeout."""
+
+    backend_request: datetime.timedelta
+    """Specifies a timeout for an individual request to a backend. This covers
+    the time from when the request first starts being sent to when the full
+    response has been received from the backend.
+
+    An entire client HTTP transaction may result in more than one call to
+    the destination backend, for example, if retries are configured.
+
+    Because the Request timeout encompasses the BackendRequest timeout, the
+    value of BackendRequest must be <= the value of Request timeout.
+
+    Specifying a zero value such as "0s" is interpreted as no timeout."""
 
 
-class RouteRetryPolicy(typing.TypedDict):
+class RouteRetry(typing.TypedDict):
     """Specifies a way of configuring client retry policy.
 
     ( Modelled on the forthcoming Gateway API type
@@ -228,7 +223,7 @@ class RouteMatch(typing.TypedDict):
     matched only if the request has the specified method."""
 
 
-class SessionAffinityPolicy(typing.TypedDict):
+class SessionAffinity(typing.TypedDict):
     hash_params: typing.List[SessionAffinityHashParam]
 
 
@@ -268,10 +263,10 @@ class RouteRule(typing.TypedDict):
     which has the effect of matching every HTTP request."""
 
     timeouts: RouteTimeouts
-    retry_policy: RouteRetryPolicy
+    retry: RouteRetry
     """How to retry any requests to this route."""
 
-    backends: typing.List[WeightedBackend]
+    backends: typing.List[WeightedAttachment]
     """Where the traffic should route if this rule matches."""
 
 

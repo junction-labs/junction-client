@@ -161,8 +161,8 @@ impl RetryPolicy {
     }
 }
 
-impl From<junction_api_types::http::RouteRetryPolicy> for RetryPolicy {
-    fn from(value: junction_api_types::http::RouteRetryPolicy) -> Self {
+impl From<junction_api_types::http::RouteRetry> for RetryPolicy {
+    fn from(value: junction_api_types::http::RouteRetry) -> Self {
         Self {
             codes: value.codes,
             attempts: value.attempts.unwrap_or(1),
@@ -238,11 +238,14 @@ fn new_client(
 }
 
 fn default_ads_server(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
-    let addr = kwarg_string("ads_server", kwargs)?
-        .or(env::var("JUNCTION_ADS_SERVER").ok())
-        .unwrap_or_else(|| "grpc://junction".to_string());
-
-    Ok(addr)
+    let addr = kwarg_string("ads_server", kwargs)?.or(env::var("JUNCTION_ADS_SERVER").ok());
+    if addr.is_some() {
+        Ok(addr.unwrap())
+    } else {
+        Err(PyRuntimeError::new_err(
+            "Could not contact ADS server as neither ads_server option was passed nor JUNCTION_ADS_SERVER environment variable was set",
+        ))
+    }
 }
 
 fn default_node_info(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<(String, String)> {
