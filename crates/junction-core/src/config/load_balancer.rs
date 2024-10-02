@@ -1,7 +1,7 @@
 use crate::EndpointAddress;
 use junction_api_types::{
     backend::{LbPolicy, RingHashParams},
-    shared::{Target, SessionAffinity, SessionAffinityHashParam, SessionAffinityHashParamType},
+    shared::{SessionAffinity, SessionAffinityHashParam, SessionAffinityHashParamType, Target},
 };
 use std::{
     collections::BTreeMap,

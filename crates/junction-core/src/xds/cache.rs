@@ -345,10 +345,7 @@ impl CacheReader {
     /// either because it hasn't yet been pulled from the ADS servcer or it
     /// doesn't exist.
     pub(crate) fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
-        let listener = self
-            .data
-            .listeners
-            .get(&target.as_listener_xds_name())?;
+        let listener = self.data.listeners.get(&target.as_listener_xds_name())?;
 
         match &listener.data()?.route_config {
             ApiListenerRouteConfig::RouteConfig { name } => {
