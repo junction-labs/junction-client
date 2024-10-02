@@ -570,10 +570,7 @@ impl Route {
                 rules.push(RouteRule::from_xds(route)?);
             }
         }
-        Ok(Route {
-            target: target,
-            rules,
-        })
+        Ok(Route { target, rules })
     }
 }
 
