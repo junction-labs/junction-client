@@ -1,7 +1,7 @@
 use crate::EndpointAddress;
 use junction_api_types::{
     backend::{LbPolicy, RingHashParams},
-    shared::{Attachment, SessionAffinity, SessionAffinityHashParam, SessionAffinityHashParamType},
+    shared::{SessionAffinity, SessionAffinityHashParam, SessionAffinityHashParamType, Target},
 };
 use std::{
     collections::BTreeMap,
@@ -24,12 +24,12 @@ pub(crate) struct EndpointGroup {
 
 impl EndpointGroup {
     pub(crate) fn from_xds(
-        attachment: &Attachment,
+        target: &Target,
         cla: &xds_endpoint::ClusterLoadAssignment,
     ) -> Option<Self> {
-        let make_address = match attachment {
-            Attachment::DNS(_) => EndpointAddress::from_socket_addr,
-            Attachment::Service(_) => EndpointAddress::from_dns_name,
+        let make_address = match target {
+            Target::DNS(_) => EndpointAddress::from_socket_addr,
+            Target::Service(_) => EndpointAddress::from_dns_name,
         };
 
         let mut endpoints = BTreeMap::new();

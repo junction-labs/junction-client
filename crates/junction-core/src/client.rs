@@ -5,7 +5,7 @@ use crate::{
 use junction_api_types::{
     backend::Backend,
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
-    shared::Attachment,
+    shared::Target,
 };
 use std::time::Duration;
 use std::{collections::BTreeSet, sync::Arc};
@@ -94,7 +94,7 @@ impl Client {
 
         let default_routes = default_routes
             .into_iter()
-            .map(|x| (x.attachment.as_listener_xds_name(), Arc::new(x)))
+            .map(|x| (x.target.as_listener_xds_name(), Arc::new(x)))
             .collect();
 
         let default_backends = default_backends
@@ -102,7 +102,7 @@ impl Client {
             .map(|config| {
                 let load_balancer = LoadBalancer::from_config(&config.lb);
                 (
-                    config.attachment.as_cluster_xds_name(),
+                    config.target.as_cluster_xds_name(),
                     Arc::new(BackendLb {
                         config,
                         load_balancer,
@@ -131,7 +131,7 @@ impl Client {
                     self.ads
                         .subscribe(
                             xds::ResourceType::Cluster,
-                            backend.attachment.as_cluster_xds_name(),
+                            backend.target.as_cluster_xds_name(),
                         )
                         .unwrap();
                 }
@@ -168,13 +168,13 @@ impl Client {
         for route in self.ads.cache.iter_routes() {
             let route = if route.is_default_route() {
                 self.default_routes
-                    .get(&route.attachment.as_listener_xds_name())
+                    .get(&route.target.as_listener_xds_name())
                     .cloned()
                     .unwrap_or(route)
             } else {
                 route
             };
-            defaults.remove(&route.attachment.as_listener_xds_name());
+            defaults.remove(&route.target.as_listener_xds_name());
             routes.push(route);
         }
 
@@ -196,14 +196,14 @@ impl Client {
         for backend in self.ads.cache.iter_backends() {
             let backend = if backend.config.lb.is_default_policy() {
                 self.default_backends
-                    .get(&backend.config.attachment.as_cluster_xds_name())
+                    .get(&backend.config.target.as_cluster_xds_name())
                     .cloned()
                     .unwrap_or(backend)
             } else {
                 backend
             };
 
-            defaults.remove(&backend.config.attachment.as_cluster_xds_name());
+            defaults.remove(&backend.config.target.as_cluster_xds_name());
             backends.push(backend);
         }
 
@@ -273,8 +273,8 @@ impl Client {
     ) -> Result<Vec<crate::Endpoint>, (crate::Url, crate::Error)> {
         use rand::seq::SliceRandom;
 
-        let key_with_port = Attachment::from_hostname(url.hostname(), Some(url.port()));
-        let key_no_port = Attachment::from_hostname(url.hostname(), None);
+        let key_with_port = Target::from_hostname(url.hostname(), Some(url.port()));
+        let key_no_port = Target::from_hostname(url.hostname(), None);
 
         // FIXME: for now, the default routes are only looked up if there is no
         // route coming from XDS. Whereas in reality we likely want to merge the
@@ -316,7 +316,7 @@ impl Client {
             return Err((
                 url,
                 crate::Error::NoRuleMatched {
-                    route: matching_route.attachment.clone(),
+                    route: matching_route.target.clone(),
                 },
             ));
         };
@@ -330,12 +330,12 @@ impl Client {
         let backend_id = &crate::rand::with_thread_rng(|rng| {
             matching_rule.backends.choose_weighted(rng, |wc| wc.weight)
         });
-        let Ok(backend_id) = backend_id.map(|w| &w.attachment) else {
+        let Ok(backend_id) = backend_id.map(|w| &w.target) else {
             return Err((
                 url,
                 crate::Error::InvalidRoutes {
                     message: "matched rule has no backends",
-                    attachment: matching_route.attachment.clone(),
+                    target: matching_route.target.clone(),
                     rule: matching_rule_idx,
                 },
             ));
@@ -363,7 +363,7 @@ impl Client {
                     return Err((
                         url,
                         crate::Error::NoBackend {
-                            route: matching_route.attachment.clone(),
+                            route: matching_route.target.clone(),
                             rule: matching_rule_idx,
                             backend: backend_id,
                         },
@@ -380,7 +380,7 @@ impl Client {
                 return Err((
                     url,
                     crate::Error::NoBackend {
-                        route: matching_route.attachment.clone(),
+                        route: matching_route.target.clone(),
                         rule: matching_rule_idx,
                         backend: backend_id,
                     },
@@ -399,7 +399,7 @@ impl Client {
                 return Err((
                     url,
                     crate::Error::NoReachableEndpoints {
-                        route: matching_route.attachment.clone(),
+                        route: matching_route.target.clone(),
                         backend: backend_id,
                     },
                 ))

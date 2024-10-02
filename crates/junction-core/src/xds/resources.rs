@@ -4,7 +4,7 @@ use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 use enum_map::EnumMap;
 use junction_api_types::backend::Backend;
 use junction_api_types::http::Route;
-use junction_api_types::shared::Attachment;
+use junction_api_types::shared::Target;
 use smol_str::SmolStr;
 use xds_api::pb::google::protobuf;
 use xds_api::{
@@ -450,10 +450,10 @@ pub(crate) struct LoadAssignment {
 
 impl LoadAssignment {
     pub(crate) fn from_xds(
-        attachment: Attachment,
+        target: Target,
         xds: xds_endpoint::ClusterLoadAssignment,
     ) -> Result<Self, junction_api_types::xds::Error> {
-        match crate::config::load_balancer::EndpointGroup::from_xds(&attachment, &xds) {
+        match crate::config::load_balancer::EndpointGroup::from_xds(&target, &xds) {
             Some(endpoint_group) => {
                 let endpoint_group = Arc::new(endpoint_group);
                 Ok(Self {

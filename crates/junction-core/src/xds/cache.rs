@@ -77,7 +77,7 @@
 use crossbeam_skiplist::SkipMap;
 use enum_map::EnumMap;
 use junction_api_types::http::Route;
-use junction_api_types::shared::Attachment;
+use junction_api_types::shared::Target;
 use petgraph::{
     graph::{DiGraph, NodeIndex},
     visit::{self, Visitable},
@@ -344,11 +344,8 @@ impl CacheReader {
     /// Will return `None` if the routing table does not yet exist in cache,
     /// either because it hasn't yet been pulled from the ADS servcer or it
     /// doesn't exist.
-    pub(crate) fn get_route(&self, attachment: &Attachment) -> Option<Arc<Route>> {
-        let listener = self
-            .data
-            .listeners
-            .get(&attachment.as_listener_xds_name())?;
+    pub(crate) fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
+        let listener = self.data.listeners.get(&target.as_listener_xds_name())?;
 
         match &listener.data()?.route_config {
             ApiListenerRouteConfig::RouteConfig { name } => {
@@ -367,7 +364,7 @@ impl CacheReader {
     /// server or if the resources don't exist.
     pub(crate) fn get_target(
         &self,
-        attachment: &Attachment,
+        target: &Target,
     ) -> (
         Option<Arc<BackendLb>>,
         Option<Arc<crate::config::EndpointGroup>>,
@@ -381,7 +378,7 @@ impl CacheReader {
             };
         }
 
-        let cluster = tri!(self.data.clusters.get(&attachment.as_cluster_xds_name()));
+        let cluster = tri!(self.data.clusters.get(&target.as_cluster_xds_name()));
         let cluster_data = tri!(cluster.data());
 
         let backend_and_lb = Some(cluster_data.backend_lb.clone());
@@ -793,7 +790,7 @@ impl Cache {
                 // the xdstp:// scheme the name of a Cluster and a
                 // ClusterLoadAssignment may not be the same, so using the
                 // GC graph is necessary.
-                let attachment = {
+                let target = {
                     let cluster_node = self
                         .refs
                         .neighbors_directed(cla_node, Direction::Incoming)
@@ -809,12 +806,12 @@ impl Cache {
                         .expect("GC leak: parent Cluster has no data")
                         .backend_lb
                         .config
-                        .attachment
+                        .target
                         .clone()
                 };
 
                 let load_assignment_name = load_assignment.cluster_name.clone();
-                let load_assignment = match LoadAssignment::from_xds(attachment, load_assignment) {
+                let load_assignment = match LoadAssignment::from_xds(target, load_assignment) {
                     Ok(l) => l,
                     Err(e) => {
                         self.data.load_assignments.insert_error(

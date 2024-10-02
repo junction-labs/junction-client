@@ -30,7 +30,7 @@ use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::TryStreamExt;
-use junction_api_types::{http::Route, shared::Attachment};
+use junction_api_types::{http::Route, shared::Target};
 use std::{io::ErrorKind, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -114,15 +114,15 @@ impl AdsClient {
         Ok((client, task))
     }
 
-    pub fn get_route(&self, attachment: &Attachment) -> Option<Arc<Route>> {
-        self.cache.get_route(attachment)
+    pub fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
+        self.cache.get_route(target)
     }
 
     pub fn get_target(
         &self,
-        attachment: &Attachment,
+        target: &Target,
     ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
-        self.cache.get_target(attachment)
+        self.cache.get_target(target)
     }
 
     pub fn subscribe(&self, resource_type: ResourceType, name: String) -> Result<(), ()> {

@@ -2,7 +2,7 @@ use http::HeaderValue;
 use junction_api_types::{
     backend::{Backend, LbPolicy},
     http::*,
-    shared::{Attachment, Regex, ServiceAttachment, WeightedAttachment},
+    shared::{Regex, ServiceTarget, Target, WeightedTarget},
 };
 use junction_core::Client;
 use std::{str::FromStr, time::Duration};
@@ -23,19 +23,19 @@ async fn main() {
     .unwrap();
     tokio::spawn(client.csds_server(8009));
 
-    let nginx = Attachment::Service(ServiceAttachment {
+    let nginx = Target::Service(ServiceTarget {
         name: "nginx".to_string(),
         namespace: "default".to_string(),
         port: Some(80),
     });
-    let nginx_staging = Attachment::Service(ServiceAttachment {
+    let nginx_staging = Target::Service(ServiceTarget {
         name: "nginx-staging".to_string(),
         namespace: "default".to_string(),
         port: Some(80),
     });
 
     let default_routes = vec![Route {
-        attachment: nginx.clone(),
+        target: nginx.clone(),
         rules: vec![
             RouteRule {
                 matches: vec![RouteMatch {
@@ -45,15 +45,15 @@ async fn main() {
                     }],
                     ..Default::default()
                 }],
-                backends: vec![WeightedAttachment {
-                    attachment: nginx_staging.clone(),
+                backends: vec![WeightedTarget {
+                    target: nginx_staging.clone(),
                     weight: 1,
                 }],
                 ..Default::default()
             },
             RouteRule {
-                backends: vec![WeightedAttachment {
-                    attachment: nginx.clone(),
+                backends: vec![WeightedTarget {
+                    target: nginx.clone(),
                     weight: 1,
                 }],
                 ..Default::default()
@@ -62,11 +62,11 @@ async fn main() {
     }];
     let default_backends = vec![
         Backend {
-            attachment: nginx,
+            target: nginx,
             lb: LbPolicy::Unspecified,
         },
         Backend {
-            attachment: nginx_staging,
+            target: nginx_staging,
             lb: LbPolicy::Unspecified,
         },
     ];

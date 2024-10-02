@@ -9,8 +9,8 @@ use junction_typeinfo::TypeInfo as _;
 fn main() {
     let items = vec![
         junction_api_types::shared::Fraction::item(),
-        junction_api_types::shared::WeightedAttachment::item(),
-        junction_api_types::shared::Attachment::item(),
+        junction_api_types::shared::WeightedTarget::item(),
+        junction_api_types::shared::Target::item(),
         junction_api_types::shared::SessionAffinityHashParam::item(),
         junction_api_types::http::RouteTimeouts::item(),
         junction_api_types::http::RouteRetry::item(),
