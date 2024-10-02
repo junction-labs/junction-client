@@ -238,14 +238,12 @@ fn new_client(
 }
 
 fn default_ads_server(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
-    let addr = kwarg_string("ads_server", kwargs)?.or(env::var("JUNCTION_ADS_SERVER").ok());
-    if addr.is_some() {
-        Ok(addr.unwrap())
-    } else {
-        Err(PyRuntimeError::new_err(
-            "Could not contact ADS server as neither ads_server option was passed nor JUNCTION_ADS_SERVER environment variable was set",
-        ))
-    }
+    kwarg_string("ads_server", kwargs)?
+        .or(env::var("JUNCTION_ADS_SERVER").ok())
+        .ok_or(
+            PyRuntimeError::new_err(
+                "Could not contact ADS server as neither ads_server option was passed nor JUNCTION_ADS_SERVER environment variable was set",
+            ))
 }
 
 fn default_node_info(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<(String, String)> {
