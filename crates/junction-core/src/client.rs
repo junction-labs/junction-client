@@ -406,7 +406,7 @@ impl Client {
             }
         };
         let timeouts = matching_rule.timeouts.clone();
-        let retry = matching_rule.retry_policy.clone();
+        let retry = matching_rule.retry.clone();
 
         Ok(vec![crate::Endpoint {
             url,

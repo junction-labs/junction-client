@@ -1,4 +1,4 @@
-use junction_api_types::http::{RouteRetryPolicy, RouteTimeouts};
+use junction_api_types::http::{RouteRetry, RouteTimeouts};
 use std::net::SocketAddr;
 use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
 
@@ -15,7 +15,7 @@ use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpo
 pub struct Endpoint {
     pub url: crate::Url,
     pub timeouts: Option<RouteTimeouts>,
-    pub retry: Option<RouteRetryPolicy>,
+    pub retry: Option<RouteRetry>,
     pub address: EndpointAddress,
 }
 

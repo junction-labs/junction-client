@@ -97,11 +97,19 @@ class PoolManager(urllib3.PoolManager):
                     status_forcelist=endpoint.retry_policy.codes,
                 )
 
-            if endpoint.timeout_policy:
-                kw["timeouts"] = urllib3.Timeout(
+            # TODO: similarly we likely should not override a per-request
+            # value here
+            if endpoint.timeout_policy and endpoint.timeout_policy.backend_request != 0:
+                kw["timeout"] = urllib3.Timeout(
                     total=endpoint.timeout_policy.backend_request
                 )
-            # TODO: how do we implement endpoint.timeout_policy.request?
+            elif endpoint.timeout_policy and endpoint.timeout_policy.request != 0:
+                kw["timeout"] = urllib3.Timeout(
+                    ## FIXME: this is obviously not right, but urllib3 does not
+                    ## give us more options. To implement properly, we would
+                    ## have to implement retries ourselves.
+                    total=endpoint.timeout_policy.request
+                )
 
             conn = self.connection_from_endpoint(endpoint, **jct_tls_args)
             return conn.urlopen(

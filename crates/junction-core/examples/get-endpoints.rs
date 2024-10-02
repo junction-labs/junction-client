@@ -2,7 +2,7 @@ use http::HeaderValue;
 use junction_api_types::{
     backend::{Backend, LbPolicy},
     http::*,
-    shared::{Attachment, Regex, ServiceAttachment, WeightedBackend},
+    shared::{Attachment, Regex, ServiceAttachment, WeightedAttachment},
 };
 use junction_core::Client;
 use std::{str::FromStr, time::Duration};
@@ -45,14 +45,14 @@ async fn main() {
                     }],
                     ..Default::default()
                 }],
-                backends: vec![WeightedBackend {
+                backends: vec![WeightedAttachment {
                     attachment: nginx_staging.clone(),
                     weight: 1,
                 }],
                 ..Default::default()
             },
             RouteRule {
-                backends: vec![WeightedBackend {
+                backends: vec![WeightedAttachment {
                     attachment: nginx.clone(),
                     weight: 1,
                 }],

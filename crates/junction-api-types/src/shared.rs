@@ -959,7 +959,7 @@ fn weight_default() -> u32 {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct WeightedBackend {
+pub struct WeightedAttachment {
     #[serde(default = "weight_default")]
     pub weight: u32,
 
@@ -969,7 +969,7 @@ pub struct WeightedBackend {
     // we need to decide whether this is one where its simpler just to drop it.
 }
 
-impl WeightedBackend {
+impl WeightedAttachment {
     pub(crate) fn from_xds(
         xds: Option<&xds_route::route_action::ClusterSpecifier>,
     ) -> Result<Vec<Self>, crate::xds::Error> {
@@ -1029,7 +1029,7 @@ pub struct SessionAffinityHashParam {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct SessionAffinityPolicy {
+pub struct SessionAffinity {
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
@@ -1059,7 +1059,7 @@ impl SessionAffinityHashParam {
     }
 }
 
-impl SessionAffinityPolicy {
+impl SessionAffinity {
     //only returns session affinity
     pub fn from_xds(hash_policy: &[xds_route::route_action::HashPolicy]) -> Option<Self> {
         let hash_params: Vec<_> = hash_policy
@@ -1070,14 +1070,14 @@ impl SessionAffinityPolicy {
         if hash_params.is_empty() {
             None
         } else {
-            Some(SessionAffinityPolicy { hash_params })
+            Some(SessionAffinity { hash_params })
         }
     }
 }
 
 #[cfg(test)]
 mod test_session_affinity {
-    use crate::shared::SessionAffinityPolicy;
+    use crate::shared::SessionAffinity;
     use serde_json::json;
 
     #[test]
@@ -1088,7 +1088,7 @@ mod test_session_affinity {
                 { "type": "Header", "name": "FOO"}
             ]
         });
-        let obj: SessionAffinityPolicy = serde_json::from_value(test_json.clone()).unwrap();
+        let obj: SessionAffinity = serde_json::from_value(test_json.clone()).unwrap();
         let output_json = serde_json::to_value(obj).unwrap();
         assert_eq!(test_json, output_json);
     }

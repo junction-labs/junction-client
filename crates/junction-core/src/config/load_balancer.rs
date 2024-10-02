@@ -1,9 +1,7 @@
 use crate::EndpointAddress;
 use junction_api_types::{
     backend::{LbPolicy, RingHashParams},
-    shared::{
-        Attachment, SessionAffinityHashParam, SessionAffinityHashParamType, SessionAffinityPolicy,
-    },
+    shared::{Attachment, SessionAffinity, SessionAffinityHashParam, SessionAffinityHashParamType},
 };
 use std::{
     collections::BTreeMap,
@@ -120,7 +118,7 @@ impl LoadBalancer {
         &self,
         url: &crate::Url,
         headers: &http::HeaderMap,
-        route_affinity: &Option<SessionAffinityPolicy>,
+        route_affinity: &Option<SessionAffinity>,
         locality_endpoints: &'ep EndpointGroup,
     ) -> Option<&'ep crate::EndpointAddress> {
         match self {

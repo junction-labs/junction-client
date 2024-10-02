@@ -55,5 +55,5 @@ resp.raise_for_status()
 To see more on how to configure, samples are in
 [junction-python/samples](./junction-python/samples/):
 
-* [route_and_loadbalance](./junction-python/samples/route_and_loadbalance/README.md) -
+* [routing-and-load-balancing](./junction-python/samples/routing-and-load-balancing/README.md) -
   Traffic split and load balancing, including with dynamic configuration.

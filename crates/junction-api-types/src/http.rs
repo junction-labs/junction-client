@@ -1,6 +1,6 @@
 use crate::shared::{
-    Attachment, Duration, Fraction, PortNumber, PreciseHostname, Regex, SessionAffinityPolicy,
-    WeightedBackend,
+    Attachment, Duration, Fraction, PortNumber, PreciseHostname, Regex, SessionAffinity,
+    WeightedAttachment,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,12 +13,11 @@ use junction_typeinfo::TypeInfo;
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
-    // FIXME(gateway): this is needed eventually to support attaching to gateways
-    // in the meantime though it just confuses things.
-    // The domains that this applies to. Domains are matched against the
-    // incoming authority of any URL.
-    //#[serde(default, skip_serializing_if = "Vec::is_empty")]
-    //pub hostnames: Vec<String>,
+    // FIXME(gateway): this is needed eventually to support attaching to
+    // gateways in the meantime though it just confuses things. The domains that
+    // this applies to. Domains are matched against the incoming authority of
+    // any URL. #[serde(default, skip_serializing_if = "Vec::is_empty")] pub
+    //hostnames: Vec<String>,
     /// The target for this route.
     pub attachment: Attachment,
 
@@ -95,8 +94,8 @@ pub struct RouteRule {
     pub filters: Vec<RouteFilter>,
 
     //FIXME(persistence): enable session persistence as per the Gateway API
-    //#[serde(default, skip_serializing_if = "Option::is_none")]
-    // pub session_persistence: Option<SessionPersistence>,
+    //#[serde(default, skip_serializing_if = "Option::is_none")] pub
+    // session_persistence: Option<SessionPersistence>,
 
     // The timeouts set on any request that matches route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -108,58 +107,49 @@ pub struct RouteRule {
         skip_serializing_if = "Option::is_none",
         alias = "sessionAffinity"
     )]
-    pub session_affinity: Option<SessionAffinityPolicy>,
+    pub session_affinity: Option<SessionAffinity>,
 
     /// How to retry any requests to this route.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "retryPolicy"
-    )]
-    pub retry_policy: Option<RouteRetryPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RouteRetry>,
 
     /// Where the traffic should route if this rule matches.
-    pub backends: Vec<WeightedBackend>,
+    pub backends: Vec<WeightedAttachment>,
 }
 
-/// Defines timeouts that can be configured for a http Route. Specifying a zero
-/// value such as "0s" is interpreted as no timeout.
+/// Defines timeouts that can be configured for a HTTP Route.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteTimeouts {
-    /// Specifies a timeout for an individual request from the gateway to a
-    /// backend. This covers the time from when the request first starts being
-    /// sent from the gateway to when the full response has been received from
-    /// the backend.
+    /// Specifies the maximum duration for a HTTP request. This timeout is
+    /// intended to cover as close to the whole request-response transaction as
+    /// possible.
     ///
-    /// An entire client HTTP transaction with a gateway, covered by the Request
-    /// timeout, may result in more than one call from the gateway to the
-    /// destination backend, for example, if automatic retries are supported.
+    /// An entire client HTTP transaction may result in more than one call to
+    /// destination backends, for example, if automatic retries are supported.
+    ///
+    /// Specifying a zero value such as "0s" is interpreted as no timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<Duration>,
+
+    /// Specifies a timeout for an individual request to a backend. This covers
+    /// the time from when the request first starts being sent to when the full
+    /// response has been received from the backend.
+    ///
+    /// An entire client HTTP transaction may result in more than one call to
+    /// the destination backend, for example, if retries are configured.
     ///
     /// Because the Request timeout encompasses the BackendRequest timeout, the
     /// value of BackendRequest must be <= the value of Request timeout.
+    ///
+    /// Specifying a zero value such as "0s" is interpreted as no timeout.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         alias = "backendRequest"
     )]
     pub backend_request: Option<Duration>,
-
-    /// Specifies the maximum duration for a gateway to respond to an HTTP
-    /// request. If the gateway has not been able to respond before this
-    /// deadline is met, the gateway MUST return a timeout error.
-    ///
-    /// For example, setting the `rules.timeouts.request` field to the value
-    /// `10s` will cause a timeout if a client request is taking longer than 10
-    /// seconds to complete.
-    ///
-    /// This timeout is intended to cover as close to the whole request-response
-    /// transaction as possible although an implementation MAY choose to start
-    /// the timeout after the entire request stream has been received instead of
-    /// immediately after the transaction is initiated by the client.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request: Option<Duration>,
 }
 
 /// Defines the predicate used to match requests to a given action. Multiple
@@ -575,7 +565,7 @@ pub struct RequestMirrorFilter {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct RouteRetryPolicy {
+pub struct RouteRetry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codes: Vec<u32>,
 
@@ -605,9 +595,10 @@ impl Route {
         };
         let mut rules = Vec::new();
         for virtual_host in &xds.virtual_hosts {
-            // todo: as you see, at the moment we totally quash virtual_host and its domains.
-            // When we bring them back for gateways it means is we will need
-            // to return a vector of routes, as the rules are within them
+            // todo: as you see, at the moment we totally quash virtual_host and
+            // its domains. When we bring them back for gateways it means is we
+            // will need to return a vector of routes, as the rules are within
+            // them
             for route in &virtual_host.routes {
                 rules.push(RouteRule::from_xds(route)?);
             }
@@ -635,15 +626,15 @@ impl RouteRule {
 
         let timeouts: Option<RouteTimeouts> = RouteTimeouts::from_xds(action);
 
-        let retry_policy = action.retry_policy.as_ref().map(RouteRetryPolicy::from_xds);
+        let retry = action.retry_policy.as_ref().map(RouteRetry::from_xds);
 
-        let session_affinity = SessionAffinityPolicy::from_xds(&action.hash_policy);
+        let session_affinity = SessionAffinity::from_xds(&action.hash_policy);
 
-        let backends = WeightedBackend::from_xds(action.cluster_specifier.as_ref())?;
+        let backends = WeightedAttachment::from_xds(action.cluster_specifier.as_ref())?;
 
         Ok(RouteRule {
             matches: vec![matches],
-            retry_policy,
+            retry,
             filters: vec![],
             session_affinity,
             timeouts,
@@ -790,7 +781,7 @@ impl PathMatch {
     }
 }
 
-impl RouteRetryPolicy {
+impl RouteRetry {
     pub fn from_xds(r: &xds_route::RetryPolicy) -> Self {
         let codes = r.retriable_status_codes.clone();
         let attempts = Some(1 + r.num_retries.clone().map_or(0, |v| v.into()));
@@ -813,12 +804,12 @@ mod tests {
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
-    use super::{Route, RouteRetryPolicy};
+    use super::{Route, RouteRetry};
     use crate::{
-        http::{HeaderMatch, RouteRule, SessionAffinityPolicy},
+        http::{HeaderMatch, RouteRule, SessionAffinity},
         shared::{
             Attachment, Regex, ServiceAttachment, SessionAffinityHashParam,
-            SessionAffinityHashParamType, WeightedBackend,
+            SessionAffinityHashParamType, WeightedAttachment,
         },
     };
 
@@ -855,7 +846,7 @@ mod tests {
             "attempts": 3,
             "backoff": "1m"
         });
-        let obj: RouteRetryPolicy = serde_json::from_value(test_json.clone()).unwrap();
+        let obj: RouteRetry = serde_json::from_value(test_json.clone()).unwrap();
         let output_json = serde_json::to_value(obj).unwrap();
         assert_eq!(test_json, output_json);
     }
@@ -920,8 +911,8 @@ mod tests {
                     filters: vec![],
                     timeouts: None,
                     session_affinity: None,
-                    retry_policy: None,
-                    backends: vec![WeightedBackend {
+                    retry: None,
+                    backends: vec![WeightedAttachment {
                         attachment: Attachment::Service(ServiceAttachment {
                             name: "foo".to_string(),
                             namespace: "bar".to_string(),
@@ -955,7 +946,7 @@ mod tests {
                     {"type": "Header", "name": "x-foo2", "terminal": true}
                     ],
             }),
-            SessionAffinityPolicy {
+            SessionAffinity {
                 hash_params: vec![
                     SessionAffinityHashParam {
                         matcher: SessionAffinityHashParamType::Header {
