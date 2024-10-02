@@ -19,7 +19,7 @@ spec:
         image: jct_http_server:latest
         imagePullPolicy: IfNotPresent
         env:
-          - name: VERSION
+          - name: TARGET
             value: "jct-http-server-feature-1"
 ---
 apiVersion: v1

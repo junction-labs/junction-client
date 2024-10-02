@@ -1,6 +1,5 @@
 use crate::shared::{
-    Attachment, Duration, Fraction, PortNumber, PreciseHostname, Regex, SessionAffinity,
-    WeightedAttachment,
+    Duration, Fraction, PortNumber, PreciseHostname, Regex, SessionAffinity, Target, WeightedTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,13 +12,8 @@ use junction_typeinfo::TypeInfo;
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
-    // FIXME(gateway): this is needed eventually to support attaching to
-    // gateways in the meantime though it just confuses things. The domains that
-    // this applies to. Domains are matched against the incoming authority of
-    // any URL. #[serde(default, skip_serializing_if = "Vec::is_empty")] pub
-    //hostnames: Vec<String>,
     /// The target for this route.
-    pub attachment: Attachment,
+    pub target: Target,
 
     /// The route rules that determine whether any URLs match.
     pub rules: Vec<RouteRule>,
@@ -42,16 +36,14 @@ impl Route {
     }
 }
 
-/// Defines semantics for matching an HTTP request based on conditions
-/// (matches), processing it (filters), and forwarding the request to an API
-/// object (backendRefs).
+/// Defines semantics for matching an HTTP request based on conditions (matches), processing it
+/// (filters), and forwarding the request to an API object (backendRefs).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRule {
-    /// Defines conditions used for matching the rule against incoming HTTP
-    /// requests. Each match is independent, i.e. this rule will be matched if
-    /// **any** one of the matches is satisfied.
+    /// Defines conditions used for matching the rule against incoming HTTP requests. Each match is
+    /// independent, i.e. this rule will be matched if **any** one of the matches is satisfied.
     ///
     /// For example, take the following matches configuration:
     ///
@@ -66,17 +58,17 @@ pub struct RouteRule {
     ///     value: "/v2/foo"
     /// ```
     ///
-    /// For a request to match against this rule, a request must satisfy EITHER
-    /// of the two conditions:
+    /// For a request to match against this rule, a request must satisfy EITHER of the two
+    /// conditions:
     ///
     /// - path prefixed with `/foo` AND contains the header `version: v2`
     /// - path prefix of `/v2/foo`
     ///
-    /// See the documentation for RouteMatch on how to specify multiple match
-    /// conditions that should be ANDed together.
+    /// See the documentation for RouteMatch on how to specify multiple match conditions that should
+    /// be ANDed together.
     ///
-    /// If no matches are specified, the default is a prefix path match on "/",
-    /// which has the effect of matching every HTTP request.
+    /// If no matches are specified, the default is a prefix path match on "/", which has the effect
+    /// of matching every HTTP request.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matches: Vec<RouteMatch>,
 
@@ -84,18 +76,17 @@ pub struct RouteRule {
     ///
     /// The effects of ordering of multiple behaviors are currently unspecified.
     ///
-    /// Specifying the same filter multiple times is not supported unless
-    /// explicitly indicated in the filter.
+    /// Specifying the same filter multiple times is not supported unless explicitly indicated in
+    /// the filter.
     ///
-    /// All filters are compatible with each other except for the URLRewrite and
-    /// RequestRedirect filters, which may not be combined.
+    /// All filters are compatible with each other except for the URLRewrite and RequestRedirect
+    /// filters, which may not be combined.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[doc(hidden)]
     pub filters: Vec<RouteFilter>,
 
-    //FIXME(persistence): enable session persistence as per the Gateway API
-    //#[serde(default, skip_serializing_if = "Option::is_none")] pub
-    // session_persistence: Option<SessionPersistence>,
+    //FIXME(persistence): enable session persistence as per the Gateway API #[serde(default,
+    //skip_serializing_if = "Option::is_none")] pub session_persistence: Option<SessionPersistence>,
 
     // The timeouts set on any request that matches route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,7 +105,7 @@ pub struct RouteRule {
     pub retry: Option<RouteRetry>,
 
     /// Where the traffic should route if this rule matches.
-    pub backends: Vec<WeightedAttachment>,
+    pub backends: Vec<WeightedTarget>,
 }
 
 /// Defines timeouts that can be configured for a HTTP Route.
@@ -122,26 +113,25 @@ pub struct RouteRule {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteTimeouts {
-    /// Specifies the maximum duration for a HTTP request. This timeout is
-    /// intended to cover as close to the whole request-response transaction as
-    /// possible.
+    /// Specifies the maximum duration for a HTTP request. This timeout is intended to cover as
+    /// close to the whole request-response transaction as possible.
     ///
-    /// An entire client HTTP transaction may result in more than one call to
-    /// destination backends, for example, if automatic retries are supported.
+    /// An entire client HTTP transaction may result in more than one call to destination backends,
+    /// for example, if automatic retries are supported.
     ///
     /// Specifying a zero value such as "0s" is interpreted as no timeout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<Duration>,
 
-    /// Specifies a timeout for an individual request to a backend. This covers
-    /// the time from when the request first starts being sent to when the full
-    /// response has been received from the backend.
+    /// Specifies a timeout for an individual request to a backend. This covers the time from when
+    /// the request first starts being sent to when the full response has been received from the
+    /// backend.
     ///
-    /// An entire client HTTP transaction may result in more than one call to
-    /// the destination backend, for example, if retries are configured.
+    /// An entire client HTTP transaction may result in more than one call to the destination
+    /// backend, for example, if retries are configured.
     ///
-    /// Because the Request timeout encompasses the BackendRequest timeout, the
-    /// value of BackendRequest must be <= the value of Request timeout.
+    /// Because the Request timeout encompasses the BackendRequest timeout, the value of
+    /// BackendRequest must be <= the value of Request timeout.
     ///
     /// Specifying a zero value such as "0s" is interpreted as no timeout.
     #[serde(
@@ -152,12 +142,11 @@ pub struct RouteTimeouts {
     pub backend_request: Option<Duration>,
 }
 
-/// Defines the predicate used to match requests to a given action. Multiple
-/// match types are ANDed together, i.e. the match will evaluate to true only if
-/// all conditions are satisfied.
+/// Defines the predicate used to match requests to a given action. Multiple match types are ANDed
+/// together, i.e. the match will evaluate to true only if all conditions are satisfied.
 ///
-/// For example, the match below will match a HTTP request only if its path
-/// starts with `/foo` AND it contains the `version: v1` header:
+/// For example, the match below will match a HTTP request only if its path starts with `/foo` AND
+/// it contains the `version: v1` header:
 ///
 /// ```yaml
 /// match:
@@ -171,33 +160,31 @@ pub struct RouteTimeouts {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteMatch {
-    /// Specifies a HTTP request path matcher. If this field is not specified, a
-    /// default prefix match on the "/" path is provided.
+    /// Specifies a HTTP request path matcher. If this field is not specified, a default prefix
+    /// match on the "/" path is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathMatch>,
 
-    /// Specifies HTTP request header matchers. Multiple match values are ANDed
-    /// together, meaning, a request must match all the specified headers to
-    /// select the route.
+    /// Specifies HTTP request header matchers. Multiple match values are ANDed together, meaning, a
+    /// request must match all the specified headers to select the route.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<HeaderMatch>,
 
-    /// Specifies HTTP query parameter matchers. Multiple match values are ANDed
-    /// together, meaning, a request must match all the specified query
-    /// parameters to select the route.
+    /// Specifies HTTP query parameter matchers. Multiple match values are ANDed together, meaning,
+    /// a request must match all the specified query parameters to select the route.
     #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "queryParams")]
     pub query_params: Vec<QueryParamMatch>,
 
-    /// Specifies HTTP method matcher. When specified, this route will be
-    /// matched only if the request has the specified method.
+    /// Specifies HTTP method matcher. When specified, this route will be matched only if the
+    /// request has the specified method.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<Method>,
 }
 
 /// Describes how to select a HTTP route by matching the HTTP request path.
 ///
-/// The `type` specifies the semantics of how HTTP paths should be compared.
-/// Valid PathMatchType values are:
+/// The `type` specifies the semantics of how HTTP paths should be compared. Valid PathMatchType
+/// values are:
 ///
 /// * "Exact"
 /// * "PathPrefix"
@@ -229,20 +216,19 @@ pub enum PathMatch {
 ///
 /// Invalid values include:
 ///
-/// * ":method" - ":" is an invalid character. This means that HTTP/2 pseudo
-///   headers are not currently supported by this type.
+/// * ":method" - ":" is an invalid character. This means that HTTP/2 pseudo headers are not
+///   currently supported by this type.
 /// * "/invalid" - "/" is an invalid character
 pub type HeaderName = String;
 
 /// Describes how to select a HTTP route by matching HTTP request headers.
 ///
-/// `name` is the name of the HTTP Header to be matched. Name matching is case
-/// insensitive. (See <https://tools.ietf.org/html/rfc7230#section-3.2>).
+/// `name` is the name of the HTTP Header to be matched. Name matching is case insensitive. (See
+/// <https://tools.ietf.org/html/rfc7230#section-3.2>).
 ///
-/// If multiple entries specify equivalent header names, only the first entry
-/// with an equivalent name WILL be considered for a match. Subsequent entries
-/// with an equivalent header name WILL be ignored. Due to the
-/// case-insensitivity of header names, "foo" and "Foo" are considered
+/// If multiple entries specify equivalent header names, only the first entry with an equivalent
+/// name WILL be considered for a match. Subsequent entries with an equivalent header name WILL be
+/// ignored. Due to the case-insensitivity of header names, "foo" and "Foo" are considered
 /// equivalent.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
@@ -307,17 +293,16 @@ impl QueryParamMatch {
     }
 }
 
-/// Describes how to select a HTTP route by matching the HTTP method as defined
-/// by [RFC 7231](https://datatracker.ietf.org/doc/html/rfc7231#section-4) and
-/// [RFC 5789](https://datatracker.ietf.org/doc/html/rfc5789#section-2). The
-/// value is expected in upper case.
+/// Describes how to select a HTTP route by matching the HTTP method as defined by [RFC
+/// 7231](https://datatracker.ietf.org/doc/html/rfc7231#section-4) and [RFC
+/// 5789](https://datatracker.ietf.org/doc/html/rfc5789#section-2). The value is expected in upper
+/// case.
 pub type Method = String;
 
-/// Defines processing steps that must be completed during the request or
-/// response lifecycle.
+/// Defines processing steps that must be completed during the request or response lifecycle.
 //
-// TODO: This feels very gateway-ey and redundant to type out in config. Should
-// we switch to untagged here? Something else?
+// TODO: This feels very gateway-ey and redundant to type out in config. Should we switch to
+// untagged here? Something else?
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
@@ -336,20 +321,17 @@ pub enum RouteFilter {
         response_header_modifier: HeaderFilter,
     },
 
-    /// Defines a schema for a filter that mirrors requests. Requests are sent
-    /// to the specified destination, but responses from that destination are
-    /// ignored.
+    /// Defines a schema for a filter that mirrors requests. Requests are sent to the specified
+    /// destination, but responses from that destination are ignored.
     ///
-    /// This filter can be used multiple times within the same rule. Note that
-    /// not all implementations will be able to support mirroring to multiple
-    /// backends.
+    /// This filter can be used multiple times within the same rule. Note that not all
+    /// implementations will be able to support mirroring to multiple backends.
     RequestMirror {
         #[serde(alias = "requestMirror")]
         request_mirror: RequestMirrorFilter,
     },
 
-    /// Defines a schema for a filter that responds to the request with an HTTP
-    /// redirection.
+    /// Defines a schema for a filter that responds to the request with an HTTP redirection.
     RequestRedirect {
         #[serde(alias = "requestRedirect")]
         /// A redirect filter.
@@ -369,8 +351,8 @@ pub enum RouteFilter {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct HeaderFilter {
-    /// Overwrites the request with the given header (name, value) before the
-    /// action. Note that the header names are case-insensitive (see
+    /// Overwrites the request with the given header (name, value) before the action. Note that the
+    /// header names are case-insensitive (see
     /// <https://datatracker.ietf.org/doc/html/rfc2616#section-4.2>).
     ///
     /// Input: GET /foo HTTP/1.1 my-header: foo
@@ -382,9 +364,8 @@ pub struct HeaderFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub set: Vec<HeaderValue>,
 
-    /// Add adds the given header(s) (name, value) to the request before the
-    /// action. It appends to any existing values associated with the header
-    /// name.
+    /// Add adds the given header(s) (name, value) to the request before the action. It appends to
+    /// any existing values associated with the header name.
     ///
     /// Input: GET /foo HTTP/1.1 my-header: foo
     ///
@@ -395,9 +376,8 @@ pub struct HeaderFilter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub add: Vec<HeaderValue>,
 
-    /// Remove the given header(s) from the HTTP request before the action. The
-    /// value of Remove is a list of HTTP header names. Note that the header
-    /// names are case-insensitive (see
+    /// Remove the given header(s) from the HTTP request before the action. The value of Remove is a
+    /// list of HTTP header names. Note that the header names are case-insensitive (see
     /// <https://datatracker.ietf.org/doc/html/rfc2616#section-4.2>).
     ///
     /// Input: GET /foo HTTP/1.1 my-header1: foo my-header2: bar my-header3: baz
@@ -413,8 +393,8 @@ pub struct HeaderFilter {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct HeaderValue {
-    /// The name of the HTTP Header. Note header names are case insensitive.
-    /// (See <https://tools.ietf.org/html/rfc7230#section-3.2>).
+    /// The name of the HTTP Header. Note header names are case insensitive. (See
+    /// <https://tools.ietf.org/html/rfc7230#section-3.2>).
     pub name: HeaderName,
 
     /// The value of HTTP Header.
@@ -426,24 +406,22 @@ pub struct HeaderValue {
 #[serde(tag = "type", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum PathModifier {
-    /// Specifies the value with which to replace the full path of a request
-    /// during a rewrite or redirect.
+    /// Specifies the value with which to replace the full path of a request during a rewrite or
+    /// redirect.
     ReplaceFullPath {
         /// The value to replace the path with.
         #[serde(alias = "replaceFullPath")]
         replace_full_path: String,
     },
 
-    /// Specifies the value with which to replace the prefix match of a request
-    /// during a rewrite or redirect. For example, a request to "/foo/bar" with
-    /// a prefix match of "/foo" and a ReplacePrefixMatch of "/xyz" would be
-    /// modified to "/xyz/bar".
+    /// Specifies the value with which to replace the prefix match of a request during a rewrite or
+    /// redirect. For example, a request to "/foo/bar" with a prefix match of "/foo" and a
+    /// ReplacePrefixMatch of "/xyz" would be modified to "/xyz/bar".
     ///
-    /// Note that this matches the behavior of the PathPrefix match type. This
-    /// matches full path elements. A path element refers to the list of labels
-    /// in the path split by the `/` separator. When specified, a trailing `/`
-    /// is ignored. For example, the paths `/abc`, `/abc/`, and `/abc/def` would
-    /// all match the prefix `/abc`, but the path `/abcd` would not.
+    /// Note that this matches the behavior of the PathPrefix match type. This matches full path
+    /// elements. A path element refers to the list of labels in the path split by the `/`
+    /// separator. When specified, a trailing `/` is ignored. For example, the paths `/abc`,
+    /// `/abc/`, and `/abc/def` would all match the prefix `/abc`, but the path `/abcd` would not.
     ///
     /// ReplacePrefixMatch is only compatible with a `PathPrefix` route match.
     ///
@@ -466,54 +444,46 @@ pub enum PathModifier {
     },
 }
 
-/// Defines a filter that redirects a request. This filter MUST not be used on
-/// the same Route rule as a URL Rewrite filter.
+/// Defines a filter that redirects a request. This filter MUST not be used on the same Route rule
+/// as a URL Rewrite filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RequestRedirectFilter {
-    /// The scheme to be used in the value of the `Location` header in the
-    /// response. When empty, the scheme of the request is used.
+    /// The scheme to be used in the value of the `Location` header in the response. When empty, the
+    /// scheme of the request is used.
     ///
-    /// Scheme redirects can affect the port of the redirect, for more
-    /// information, refer to the documentation for the port field of this
-    /// filter.
+    /// Scheme redirects can affect the port of the redirect, for more information, refer to the
+    /// documentation for the port field of this filter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheme: Option<String>,
 
-    /// The hostname to be used in the value of the `Location` header in the
-    /// response. When empty, the hostname in the `Host` header of the request
-    /// is used.
+    /// The hostname to be used in the value of the `Location` header in the response. When empty,
+    /// the hostname in the `Host` header of the request is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostname: Option<PreciseHostname>,
 
-    /// Defines parameters used to modify the path of the incoming request. The
-    /// modified path is then used to construct the `Location` header. When
-    /// empty, the request path is used as-is.
+    /// Defines parameters used to modify the path of the incoming request. The modified path is
+    /// then used to construct the `Location` header. When empty, the request path is used as-is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathModifier>,
 
-    /// The port to be used in the value of the `Location` header in the
-    /// response.
+    /// The port to be used in the value of the `Location` header in the response.
     ///
-    /// If no port is specified, the redirect port MUST be derived using the
-    /// following rules:
+    /// If no port is specified, the redirect port MUST be derived using the following rules:
     ///
-    /// * If redirect scheme is not-empty, the redirect port MUST be the
-    ///   well-known port associated with the redirect scheme. Specifically
-    ///   "http" to port 80 and "https" to port 443. If the redirect scheme does
-    ///   not have a well-known port, the listener port of the Gateway SHOULD be
-    ///   used.
-    /// * If redirect scheme is empty, the redirect port MUST be the Gateway
-    ///   Listener port.
+    /// * If redirect scheme is not-empty, the redirect port MUST be the well-known port associated
+    ///   with the redirect scheme. Specifically "http" to port 80 and "https" to port 443. If the
+    ///   redirect scheme does not have a well-known port, the listener port of the Gateway SHOULD
+    ///   be used.
+    /// * If redirect scheme is empty, the redirect port MUST be the Gateway Listener port.
     ///
-    /// Will not add the port number in the 'Location' header in the following
-    /// cases:
+    /// Will not add the port number in the 'Location' header in the following cases:
     ///
-    /// * A Location header that will use HTTP (whether that is determined via
-    ///   the Listener protocol or the Scheme field) _and_ use port 80.
-    /// * A Location header that will use HTTPS (whether that is determined via
-    ///   the Listener protocol or the Scheme field) _and_ use port 443.
+    /// * A Location header that will use HTTP (whether that is determined via the Listener protocol
+    ///   or the Scheme field) _and_ use port 80.
+    /// * A Location header that will use HTTPS (whether that is determined via the Listener
+    ///   protocol or the Scheme field) _and_ use port 443.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<PortNumber>,
 
@@ -522,9 +492,8 @@ pub struct RequestRedirectFilter {
     pub status_code: Option<u16>,
 }
 
-/// Defines a filter that modifies a request during forwarding. At most one of
-/// these filters may be used on a Route rule. This may not be used on the same
-/// Route rule as a RequestRedirect filter.
+/// Defines a filter that modifies a request during forwarding. At most one of these filters may be
+/// used on a Route rule. This may not be used on the same Route rule as a RequestRedirect filter.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
@@ -543,25 +512,24 @@ pub struct UrlRewriteFilter {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RequestMirrorFilter {
-    /// Represents the percentage of requests that should be mirrored to
-    /// BackendRef. Its minimum value is 0 (indicating 0% of requests) and its
-    /// maximum value is 100 (indicating 100% of requests).
+    /// Represents the percentage of requests that should be mirrored to BackendRef. Its minimum
+    /// value is 0 (indicating 0% of requests) and its maximum value is 100 (indicating 100% of
+    /// requests).
     ///
-    /// Only one of Fraction or Percent may be specified. If neither field is
-    /// specified, 100% of requests will be mirrored.
+    /// Only one of Fraction or Percent may be specified. If neither field is specified, 100% of
+    /// requests will be mirrored.
     pub percent: Option<i32>,
 
-    /// Only one of Fraction or Percent may be specified. If neither field is
-    /// specified, 100% of requests will be mirrored.
+    /// Only one of Fraction or Percent may be specified. If neither field is specified, 100% of
+    /// requests will be mirrored.
     pub fraction: Option<Fraction>,
 
-    pub backend: Attachment,
+    pub backend: Target,
 }
 
 /// Specifies a way of configuring client retry policy.
 ///
-/// ( Modelled on the forthcoming Gateway API type
-/// https://gateway-api.sigs.k8s.io/geps/gep-1731/ )
+/// ( Modelled on the forthcoming Gateway API type https://gateway-api.sigs.k8s.io/geps/gep-1731/ )
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
@@ -586,7 +554,7 @@ use xds_api::pb::envoy::{
 
 impl Route {
     pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, crate::xds::Error> {
-        let Some(attachment) = Attachment::from_listener_xds_name(&xds.name) else {
+        let Some(target) = Target::from_listener_xds_name(&xds.name) else {
             return Err(crate::xds::Error::InvalidXds {
                 resource_type: "Listener",
                 resource_name: xds.name.clone(),
@@ -595,15 +563,17 @@ impl Route {
         };
         let mut rules = Vec::new();
         for virtual_host in &xds.virtual_hosts {
-            // todo: as you see, at the moment we totally quash virtual_host and
-            // its domains. When we bring them back for gateways it means is we
-            // will need to return a vector of routes, as the rules are within
-            // them
+            // todo: as you see, at the moment we totally quash virtual_host and its domains. When
+            // we bring them back for gateways it means is we will need to return a vector of
+            // routes, as the rules are within them
             for route in &virtual_host.routes {
                 rules.push(RouteRule::from_xds(route)?);
             }
         }
-        Ok(Route { attachment, rules })
+        Ok(Route {
+            target: target,
+            rules,
+        })
     }
 }
 
@@ -630,7 +600,7 @@ impl RouteRule {
 
         let session_affinity = SessionAffinity::from_xds(&action.hash_policy);
 
-        let backends = WeightedAttachment::from_xds(action.cluster_specifier.as_ref())?;
+        let backends = WeightedTarget::from_xds(action.cluster_specifier.as_ref())?;
 
         Ok(RouteRule {
             matches: vec![matches],
@@ -665,10 +635,9 @@ impl RouteMatch {
     pub fn from_xds(r: &xds_route::RouteMatch) -> Option<Self> {
         let path = r.path_specifier.as_ref().and_then(PathMatch::from_xds);
 
-        // with xds, any method match is converted into a match on a ":method"
-        // header. it does not have a way of specifying a method match
-        // otherwise. to keep the "before and after" xDS as similar as possible
-        // then we pull this out of the headers list if it exists
+        // with xds, any method match is converted into a match on a ":method" header. it does not
+        // have a way of specifying a method match otherwise. to keep the "before and after" xDS as
+        // similar as possible then we pull this out of the headers list if it exists
         let mut method: Option<Method> = None;
         let mut headers = vec![];
         for header in &r.headers {
@@ -808,8 +777,8 @@ mod tests {
     use crate::{
         http::{HeaderMatch, RouteRule, SessionAffinity},
         shared::{
-            Attachment, Regex, ServiceAttachment, SessionAffinityHashParam,
-            SessionAffinityHashParamType, WeightedAttachment,
+            Regex, ServiceTarget, SessionAffinityHashParam, SessionAffinityHashParamType, Target,
+            WeightedTarget,
         },
     };
 
@@ -893,7 +862,7 @@ mod tests {
     fn minimal_route() {
         assert_deserialize(
             json!({
-                "attachment": { "name": "foo", "namespace": "bar" },
+                "target": { "name": "foo", "namespace": "bar" },
                 "rules": [
                     {
                         "backends": [ { "name": "foo", "namespace": "bar" } ],
@@ -901,7 +870,7 @@ mod tests {
                 ]
             }),
             Route {
-                attachment: Attachment::Service(ServiceAttachment {
+                target: Target::Service(ServiceTarget {
                     name: "foo".to_string(),
                     namespace: "bar".to_string(),
                     ..Default::default()
@@ -912,8 +881,8 @@ mod tests {
                     timeouts: None,
                     session_affinity: None,
                     retry: None,
-                    backends: vec![WeightedAttachment {
-                        attachment: Attachment::Service(ServiceAttachment {
+                    backends: vec![WeightedTarget {
+                        target: Target::Service(ServiceTarget {
                             name: "foo".to_string(),
                             namespace: "bar".to_string(),
                             ..Default::default()

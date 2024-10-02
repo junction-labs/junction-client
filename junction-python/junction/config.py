@@ -12,7 +12,7 @@ class Fraction(typing.TypedDict):
     denominator: int
 
 
-class WeightedAttachment(typing.TypedDict):
+class WeightedTarget(typing.TypedDict):
     weight: int
     hostname: str
     """The DNS Name to target/attach to"""
@@ -29,7 +29,7 @@ class WeightedAttachment(typing.TypedDict):
     """The port number to target/attach to.
 
     When attaching policies, if it is not specified, the
-    attachment will apply to all connections that don't have a specific
+    target will apply to all connections that don't have a specific
     port specified.
 
     When being used to lookup a backend after a matched rule,
@@ -38,7 +38,7 @@ class WeightedAttachment(typing.TypedDict):
     type: typing.Literal["DNS"] | typing.Literal["Service"]
 
 
-class AttachmentDNS(typing.TypedDict):
+class TargetDNS(typing.TypedDict):
     type: typing.Literal["DNS"]
     hostname: str
     """The DNS Name to target/attach to"""
@@ -47,14 +47,14 @@ class AttachmentDNS(typing.TypedDict):
     """The port number to target/attach to.
 
     When attaching policies, if it is not specified, the
-    attachment will apply to all connections that don't have a specific
+    target will apply to all connections that don't have a specific
     port specified.
 
     When being used to lookup a backend after a matched rule,
     if it is not specified then it will use the same port as the incoming request"""
 
 
-class AttachmentService(typing.TypedDict):
+class TargetService(typing.TypedDict):
     type: typing.Literal["Service"]
     name: str
     """The name of the Kubernetes Service"""
@@ -69,14 +69,14 @@ class AttachmentService(typing.TypedDict):
     attach to.
 
     When attaching policies, if it is not specified, the
-    attachment will apply to all connections that don't have a specific
+    target will apply to all connections that don't have a specific
     port specified.
 
     When being used to lookup a backend after a matched rule,
     if it is not specified then it will use the same port as the incoming request"""
 
 
-Attachment = AttachmentDNS | AttachmentService
+Target = TargetDNS | TargetService
 
 
 class SessionAffinityHashParam(typing.TypedDict):
@@ -266,12 +266,12 @@ class RouteRule(typing.TypedDict):
     retry: RouteRetry
     """How to retry any requests to this route."""
 
-    backends: typing.List[WeightedAttachment]
+    backends: typing.List[WeightedTarget]
     """Where the traffic should route if this rule matches."""
 
 
 class Route(typing.TypedDict):
-    attachment: Attachment
+    target: Target
     """The target for this route."""
 
     rules: typing.List[RouteRule]
@@ -292,7 +292,7 @@ class LbPolicyRingHash(typing.TypedDict):
 
     Hash parameters are applied in order. If the request is missing an
     input, it has no effect on the final hash. Hashing stops when only when
-    all polcies have been applied or a `terminal` policy matches part of an
+    all polices have been applied or a `terminal` policy matches part of an
     incoming request.
 
     This allows configuring a fallback-style hash, where the value of
@@ -309,6 +309,6 @@ LbPolicy = LbPolicyRoundRobin | LbPolicyRingHash | LbPolicyUnspecified
 
 
 class Backend(typing.TypedDict):
-    attachment: Attachment
+    target: Target
     lb: LbPolicy
     """The route rules that determine whether any URLs match."""

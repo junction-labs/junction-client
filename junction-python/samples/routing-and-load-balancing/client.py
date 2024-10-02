@@ -6,24 +6,29 @@ import junction.requests
 
 
 def print_header(name):
-    print(f"***** Beginning sample of {name} *****")
+    print("***** ")
+    print(f"***** {name}")
+    print("***** ")
 
 
-# we get a little clever here, and use the same query_param we use to tell the
-# server to send fail codes to also do the route, so we demonstrate that too
+# we get a little clever here, and use the same query_param we use to tell the server to send fail
+# codes to also do the route, so we demonstrate that too
 def retry_sample(args):
-    default_backend: junction.config.Attachment = {
+    print_header(
+        "Retry Test - 502's have retries configured and will succeed, 501s do not"
+    )
+
+    default_backend: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
-    feature_backend: junction.config.Attachment = {
+    feature_backend: junction.config.Target = {
         "name": "jct-http-server-feature-1",
         "namespace": "default",
     }
-
     default_routes: List[junction.config.Route] = [
         {
-            "attachment": default_backend,
+            "target": default_backend,
             "rules": [
                 {
                     "matches": [
@@ -51,33 +56,35 @@ def retry_sample(args):
     default_backends: List[junction.config.Backend] = []
     session = junction.requests.Session(default_routes, default_backends)
 
-    print_header("Retries")
     for code in [501, 502]:
         session.get(f"{args.base_url}/?fail_match={code}&fail_match_set_counter=2")
         counters = defaultdict(int)
         resp = session.get(f"{args.base_url}/?fail_match={code}")
         counters[resp.status_code] += 1
-        print(f"Error code '{code}' causes eventual response - ")
+        print(f"For initial error code '{code}' actual response code counts are - ")
         myKeys = list(counters.keys())
         myKeys.sort()
         for key in myKeys:
-            print(f"  {key}: {counters[key]}")
+            print(f"  {key} = {counters[key]}")
     print("")
 
 
 def path_match_sample(args):
-    default_backend: junction.config.Attachment = {
+    print_header(
+        "Header Match - 50% of /feature-1/index sent to a different backend target"
+    )
+
+    default_backend: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
-    feature_backend: junction.config.Attachment = {
+    feature_backend: junction.config.Target = {
         "name": "jct-http-server-feature-1",
         "namespace": "default",
     }
-
     default_routes: List[junction.config.Route] = [
         {
-            "attachment": default_backend,
+            "target": default_backend,
             "rules": [
                 {
                     "matches": [{"path": {"value": "/feature-1/index"}}],
@@ -103,30 +110,32 @@ def path_match_sample(args):
     default_backends: List[junction.config.Backend] = []
     session = junction.requests.Session(default_routes, default_backends)
 
-    print_header("Header Match")
     for path in ["/index", "/feature-1/index"]:
         counters = defaultdict(int)
         for _ in range(200):
             resp = session.get(f"{args.base_url}{path}")
             resp.raise_for_status()
             counters[resp.text] += 1
-        print(f"For path '{path}' counters are - ")
+        print(f"For path '{path}' response body counts are - ")
         myKeys = list(counters.keys())
         myKeys.sort()
         for key in myKeys:
-            print(f"  {key}: {counters[key]}")
+            print(f"  {key} = {counters[key]}")
     print("")
 
 
 def ring_hash_sample(args):
-    default_backend: junction.config.Attachment = {
+    print_header(
+        "RingHash - header USER is hashed so requests with fixed value go to one backend server"
+    )
+    default_backend: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
     default_routes: List[junction.config.Route] = []
     default_backends: List[junction.config.Backend] = [
         {
-            "attachment": default_backend,
+            "target": default_backend,
             "lb": {
                 "type": "RingHash",
                 "minRingSize": 1024,
@@ -136,30 +145,32 @@ def ring_hash_sample(args):
     ]
     session = junction.requests.Session(default_routes, default_backends)
 
-    print_header("RingHash")
-    for headers in [{}, {"USER": "inowland"}]:
+    for headers in [{}, {"USER": "user"}]:
         counters = defaultdict(int)
         for _ in range(200):
             resp = session.get(f"{args.base_url}", headers=headers)
             resp.raise_for_status()
             counters[resp.text] += 1
-        print(f"With headers '{headers}' counters are - ")
+        print(f"With headers '{headers}' response body counts are - ")
         myKeys = list(counters.keys())
         myKeys.sort()
         for key in myKeys:
-            print(f"  {key}: {counters[key]}")
+            print(f"  {key} = {counters[key]}")
     print("")
 
 
 def timeouts_sample(args):
-    default_backend: junction.config.Attachment = {
+    print_header(
+        "Timeouts - timeout is 50ms, so if the server takes longer, request should throw"
+    )
+
+    default_backend: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
-
     default_routes: List[junction.config.Route] = [
         {
-            "attachment": default_backend,
+            "target": default_backend,
             "rules": [
                 {
                     "backends": [
@@ -173,7 +184,6 @@ def timeouts_sample(args):
     default_backends: List[junction.config.Backend] = []
     session = junction.requests.Session(default_routes, default_backends)
 
-    print_header("Timeouts")
     for sleep_ms in [0, 100]:
         counters = defaultdict(int)
         try:
@@ -181,71 +191,12 @@ def timeouts_sample(args):
             counters["success"] += 1
         except urllib3.exceptions.ReadTimeoutError:
             counters["exception"] += 1
-        print(f"With server sleep time '{sleep_ms}'ms got response - ")
+        print(f"With server sleep time '{sleep_ms}'ms call result counts are - ")
         myKeys = list(counters.keys())
         myKeys.sort()
         for key in myKeys:
-            print(f"  {key}: {counters[key]}")
+            print(f"  {key} = {counters[key]}")
     print("")
-
-
-##
-## to repro this, first deploy jct_http_server, then deploy ezbake
-## should get a wierd failure "failed to resolve: jct-http-server.default.svc.cluster.local: backend not found: jct-http-server-feature-1.default.svc.cluster.local:80"
-## which is something to do with the LoadAssignments not getting sent by EZBake.
-##
-## Interestingly if you restart jct_http_server after EZBake is already running, the repro
-## goes away
-##
-def bad_xds_sample(args):
-    default_backend: junction.config.Attachment = {
-        "name": "jct-http-server",
-        "namespace": "default",
-    }
-    feature_backend: junction.config.Attachment = {
-        "name": "jct-http-server-feature-1",
-        "namespace": "default",
-    }
-    default_routes: List[junction.config.Route] = [
-        {
-            "attachment": default_backend,
-            "rules": [
-                {
-                    "backends": [
-                        default_backend,
-                    ]
-                },
-            ],
-        }
-    ]
-    default_backends: List[junction.config.Backend] = []
-    print_header("Bad xDS Match")
-    session = junction.requests.Session(default_routes, default_backends)
-    resp = session.get(f"{args.base_url}")
-    resp.raise_for_status()
-
-    default_routes: List[junction.config.Route] = [
-        {
-            "attachment": default_backend,
-            "rules": [
-                {
-                    "matches": [{"path": {"value": "/feature-1/index"}}],
-                    "backends": [
-                        {**feature_backend},
-                    ],
-                },
-                {
-                    "backends": [
-                        default_backend,
-                    ]
-                },
-            ],
-        }
-    ]
-    default_backends: List[junction.config.Backend] = []
-    session = junction.requests.Session(default_routes, default_backends)
-    resp = session.get(f"{args.base_url}/feature-1/index")
-    resp.raise_for_status()
 
 
 def all_samples(args):
@@ -269,4 +220,4 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    globals()[args.test](args)
+    globals()[args.sample](args)

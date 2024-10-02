@@ -121,7 +121,7 @@ impl From<junction_core::Endpoint> for Endpoint {
 }
 
 //
-// FIXME: this works fine if you keep want to retyring the one address, but best
+// FIXME: this works fine if you keep want to retrying the one address, but best
 // practices is to vary the addresses on a retry, which requires bigger changes
 //
 /// A policy that describes how a client should retry requests.
@@ -242,7 +242,7 @@ fn default_ads_server(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
         .or(env::var("JUNCTION_ADS_SERVER").ok())
         .ok_or(
             PyRuntimeError::new_err(
-                "Could not contact ADS server as neither ads_server option was passed nor JUNCTION_ADS_SERVER environment variable was set",
+                "Can not contact ADS server as neither ads_server option was passed nor is JUNCTION_ADS_SERVER environment variable set",
             ))
 }
 

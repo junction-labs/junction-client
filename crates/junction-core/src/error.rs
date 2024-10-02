@@ -1,4 +1,4 @@
-use junction_api_types::shared::Attachment;
+use junction_api_types::shared::Target;
 
 /// A `Result` alias where the `Err` case is `junction_core::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -11,41 +11,38 @@ pub enum Error {
     #[error("invalid route configuration")]
     InvalidRoutes {
         message: &'static str,
-        attachment: Attachment,
+        target: Target,
         rule: usize,
     },
 
     #[error("invalid backend configuration")]
     InvalidBackends {
         message: &'static str,
-        attachment: Attachment,
+        target: Target,
     },
 
     #[error(
         "no routing info is available for any of the following targets: [{}]",
-        format_attachments(.routes)
+        format_targets(.routes)
     )]
-    NoRouteMatched { routes: Vec<Attachment> },
+    NoRouteMatched { routes: Vec<Target> },
 
     #[error("using route '{route}': no routing rules matched the request")]
-    NoRuleMatched { route: Attachment },
+    NoRuleMatched { route: Target },
 
     #[error("{route}: backend not found: {backend}")]
     NoBackend {
-        route: Attachment,
+        route: Target,
         rule: usize,
-        backend: Attachment,
+        backend: Target,
     },
 
     #[error("{backend}: no endpoints are healthy")]
-    NoReachableEndpoints {
-        route: Attachment,
-        backend: Attachment,
-    },
+    NoReachableEndpoints { route: Target, backend: Target },
 }
 
-fn format_attachments(attachments: &[Attachment]) -> String {
-    attachments
+fn format_targets(targets: &[Target]) -> String {
+    targets
         .iter()
         .map(|a| a.to_string())
         .collect::<Vec<_>>()

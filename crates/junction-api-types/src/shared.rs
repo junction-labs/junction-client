@@ -14,9 +14,8 @@ use crate::value_or_default;
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
 
-/// The fully qualified domain name of a network host. This matches the RFC 1123
-/// definition of a hostname with 1 notable exception that numeric IP addresses
-/// are not allowed.
+/// The fully qualified domain name of a network host. This matches the RFC 1123 definition of a
+/// hostname with 1 notable exception that numeric IP addresses are not allowed.
 pub type PreciseHostname = String;
 
 /// Defines a network port.
@@ -119,16 +118,15 @@ impl FromStr for Regex {
     }
 }
 
-/// A duration type where parsing and formatting obey the k8s Gateway API
-/// GEP-2257 (https://gateway-api.sigs.k8s.io/geps/gep-2257).
+/// A duration type where parsing and formatting obey the k8s Gateway API GEP-2257
+/// (https://gateway-api.sigs.k8s.io/geps/gep-2257).
 ///
-/// This means when parsing from a string, the string must match
-/// `^([0-9]{1,5}(h|m|s|ms)){1,4}$` and is otherwise parsed the same way that
-/// Go's `time.ParseDuration` parses durations.
+/// This means when parsing from a string, the string must match `^([0-9]{1,5}(h|m|s|ms)){1,4}$` and
+/// is otherwise parsed the same way that Go's `time.ParseDuration` parses durations.
 ///
-/// When formatting as a string, zero-valued durations must always be formatted
-/// as `0s`, and non-zero durations must be formatted to with only one instance
-/// of each applicable unit, greatest unit first.
+/// When formatting as a string, zero-valued durations must always be formatted as `0s`, and
+/// non-zero durations must be formatted to with only one instance of each applicable unit, greatest
+/// unit first.
 #[derive(Copy, Clone, PartialEq, Eq, JsonSchema)]
 pub struct Duration(StdDuration);
 
@@ -145,11 +143,10 @@ impl TypeInfo for Duration {
     }
 }
 
-/// Checks if a duration is valid. If it's not, return an error result
-/// explaining why the duration is not valid.
+/// Checks if a duration is valid. If it's not, return an error result explaining why the duration
+/// is not valid.
 fn is_valid(duration: StdDuration) -> Result<(), String> {
-    // Check nanoseconds to see if we have sub-millisecond precision in this
-    // duration.
+    // Check nanoseconds to see if we have sub-millisecond precision in this duration.
     if duration.subsec_nanos() % 1_000_000 != 0 {
         return Err("Cannot express sub-millisecond precision in GEP-2257".to_string());
     }
@@ -162,9 +159,8 @@ fn is_valid(duration: StdDuration) -> Result<(), String> {
     Ok(())
 }
 
-/// Converting from `std::time::Duration` to `gateway_api::Duration` is allowed,
-/// but we need to make sure that the incoming duration is valid according to
-/// GEP-2257.
+/// Converting from `std::time::Duration` to `gateway_api::Duration` is allowed, but we need to make
+/// sure that the incoming duration is valid according to GEP-2257.
 ///
 /// ```rust
 /// use junction_api_types::shared::Duration;
@@ -207,9 +203,8 @@ impl TryFrom<StdDuration> for Duration {
     }
 }
 
-/// Converting from `k8s::time::Duration` to `gateway_api::Duration` is allowed,
-/// but we need to make sure that the incoming duration is valid according to
-/// GEP-2257.
+/// Converting from `k8s::time::Duration` to `gateway_api::Duration` is allowed, but we need to make
+/// sure that the incoming duration is valid according to GEP-2257.
 ///
 /// ```rust
 /// use junction_api_types::shared::Duration;
@@ -258,16 +253,14 @@ impl TryFrom<KubeDuration> for Duration {
     type Error = String;
 
     fn try_from(duration: KubeDuration) -> Result<Self, Self::Error> {
-        // We can't rely on kube::core::Duration to check validity for
-        // gateway_api::Duration, so first we need to make sure that our
-        // KubeDuration is not negative...
+        // We can't rely on kube::core::Duration to check validity for gateway_api::Duration, so
+        // first we need to make sure that our KubeDuration is not negative...
         if duration.is_negative() {
             return Err("Duration cannot be negative".to_string());
         }
 
-        // Once we know it's not negative, we can safely convert it to a
-        // std::time::Duration (which will always succeed) and then check it for
-        // validity as in TryFrom<StdDuration>.
+        // Once we know it's not negative, we can safely convert it to a std::time::Duration (which
+        // will always succeed) and then check it for validity as in TryFrom<StdDuration>.
         let stddur = StdDuration::from(duration);
         is_valid(stddur)?;
         Ok(Duration(stddur))
@@ -275,25 +268,24 @@ impl TryFrom<KubeDuration> for Duration {
 }
 
 impl Duration {
-    /// Create a new `gateway_api::Duration` from seconds and nanoseconds, while
-    /// requiring that the resulting duration is valid according to GEP-2257.
+    /// Create a new `gateway_api::Duration` from seconds and nanoseconds, while requiring that the
+    /// resulting duration is valid according to GEP-2257.
     pub fn new(secs: u64, nanos: u32) -> Result<Self, String> {
         let stddur = StdDuration::new(secs, nanos);
 
-        // Propagate errors if not valid, or unwrap the new Duration if all's
-        // well.
+        // Propagate errors if not valid, or unwrap the new Duration if all's well.
         is_valid(stddur)?;
         Ok(Self(stddur))
     }
 
-    /// Create a new `gateway_api::Duration` from seconds, while requiring that
-    /// the resulting duration is valid according to GEP-2257.
+    /// Create a new `gateway_api::Duration` from seconds, while requiring that the resulting
+    /// duration is valid according to GEP-2257.
     pub fn from_secs(secs: u64) -> Result<Self, String> {
         Self::new(secs, 0)
     }
 
-    /// Create a new `gateway_api::Duration` from microseconds, while requiring
-    /// that the resulting duration is valid according to GEP-2257.
+    /// Create a new `gateway_api::Duration` from microseconds, while requiring that the resulting
+    /// duration is valid according to GEP-2257.
     pub fn from_micros(micros: u64) -> Result<Self, String> {
         let sec = micros / 1_000_000;
         let ns = ((micros % 1_000_000) * 1_000) as u32;
@@ -301,8 +293,8 @@ impl Duration {
         Self::new(sec, ns)
     }
 
-    /// Create a new `gateway_api::Duration` from milliseconds, while requiring
-    /// that the resulting duration is valid according to GEP-2257.
+    /// Create a new `gateway_api::Duration` from milliseconds, while requiring that the resulting
+    /// duration is valid according to GEP-2257.
     pub fn from_millis(millis: u64) -> Result<Self, String> {
         let sec = millis / 1_000;
         let ns = ((millis % 1_000) * 1_000_000) as u32;
@@ -315,8 +307,8 @@ impl Duration {
         self.0.as_secs()
     }
 
-    /// The number of milliseconds in the whole duration. GEP-2257 doesn't
-    /// support sub-millisecond precision, so this is always exact.
+    /// The number of milliseconds in the whole duration. GEP-2257 doesn't support sub-millisecond
+    /// precision, so this is always exact.
     pub fn as_millis(&self) -> u128 {
         self.0.as_millis()
     }
@@ -326,9 +318,9 @@ impl Duration {
         self.0.as_nanos()
     }
 
-    /// The number of nanoseconds in the part of the duration that's not whole
-    /// seconds. Since GEP-2257 doesn't support sub-millisecond precision, this
-    /// will always be 0 or a multiple of 1,000,000.
+    /// The number of nanoseconds in the part of the duration that's not whole seconds. Since
+    /// GEP-2257 doesn't support sub-millisecond precision, this will always be 0 or a multiple of
+    /// 1,000,000.
     pub fn subsec_nanos(&self) -> u32 {
         self.0.subsec_nanos()
     }
@@ -343,14 +335,13 @@ impl Duration {
     }
 }
 
-/// Parsing a `gateway_api::Duration` from a string requires that the input
-/// string obey GEP-2257:
+/// Parsing a `gateway_api::Duration` from a string requires that the input string obey GEP-2257:
 ///
 /// - input strings must match `^([0-9]{1,5}(h|m|s|ms)){1,4}$`
 /// - durations are parsed the same way that Go's `time.ParseDuration` does
 ///
-/// If the input string is not valid according to GEP-2257, an error is returned
-/// explaining what went wrong.
+/// If the input string is not valid according to GEP-2257, an error is returned explaining what
+/// went wrong.
 ///
 /// ```rust
 /// use junction_api_types::shared::Duration;
@@ -379,14 +370,13 @@ impl Duration {
 impl FromStr for Duration {
     type Err = String;
 
-    // Parse a GEP-2257-compliant duration string into a
-    // `gateway_api::Duration`.
+    // Parse a GEP-2257-compliant duration string into a `gateway_api::Duration`.
     fn from_str(duration_str: &str) -> Result<Self, Self::Err> {
-        // GEP-2257 dictates that string values must match GEP2257_PATTERN and
-        // be parsed the same way that Go's time.ParseDuration parses durations.
+        // GEP-2257 dictates that string values must match GEP2257_PATTERN and be parsed the same
+        // way that Go's time.ParseDuration parses durations.
         //
-        // This Lazy Regex::new should never ever fail, given that the regex is
-        // a compile-time constant. But just in case.....
+        // This Lazy Regex::new should never ever fail, given that the regex is a compile-time
+        // constant. But just in case.....
         static RE: Lazy<regex::Regex> = Lazy::new(|| {
             regex::Regex::new(GEP2257_PATTERN).unwrap_or_else(|_| {
                 panic!(
@@ -406,19 +396,19 @@ impl FromStr for Duration {
             // If the parse fails, return an error immediately...
             Err(err) => Err(err.to_string()),
 
-            // ...otherwise, we need to try to turn the KubeDuration into a
-            // gateway_api::Duration (which will check validity).
+            // ...otherwise, we need to try to turn the KubeDuration into a gateway_api::Duration
+            // (which will check validity).
             Ok(kd) => Duration::try_from(kd),
         }
     }
 }
 
-/// Formatting a `gateway_api::Duration` for display is defined only for valid
-/// durations, and must follow the GEP-2257 rules for formatting:
+/// Formatting a `gateway_api::Duration` for display is defined only for valid durations, and must
+/// follow the GEP-2257 rules for formatting:
 ///
 /// - zero-valued durations must always be formatted as `0s`
-/// - non-zero durations must be formatted with only one instance of each
-///   applicable unit, greatest unit first.
+/// - non-zero durations must be formatted with only one instance of each applicable unit, greatest
+///   unit first.
 ///
 /// ```rust
 /// use junction_api_types::shared::Duration;
@@ -446,23 +436,22 @@ impl FromStr for Duration {
 impl fmt::Display for Duration {
     /// Format a `gateway_api::Duration` for display, following GEP-2257 rules.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Short-circuit if the duration is zero, since "0s" is the special case
-        // for a zero-valued duration.
+        // Short-circuit if the duration is zero, since "0s" is the special case for a zero-valued
+        // duration.
         if self.is_zero() {
             return write!(f, "0s");
         }
 
-        // Unfortunately, we can't rely on kube::core::Duration for formatting,
-        // since it can happily hand back things like "5400s" instead of
-        // "1h30m".
+        // Unfortunately, we can't rely on kube::core::Duration for formatting, since it can happily
+        // hand back things like "5400s" instead of "1h30m".
         //
-        // So we'll do the formatting ourselves. Start by grabbing the
-        // milliseconds part of the Duration (remember, the constructors make
-        // sure that we don't have sub-millisecond precision)...
+        // So we'll do the formatting ourselves. Start by grabbing the milliseconds part of the
+        // Duration (remember, the constructors make sure that we don't have sub-millisecond
+        // precision)...
         let ms = self.subsec_nanos() / 1_000_000;
 
-        // ...then after that, do the usual div & mod tree to take seconds and
-        // get hours, minutes, and seconds from it.
+        // ...then after that, do the usual div & mod tree to take seconds and get hours, minutes,
+        // and seconds from it.
         let mut secs = self.as_secs();
 
         let hours = secs / 3600;
@@ -490,8 +479,7 @@ impl fmt::Display for Duration {
     }
 }
 
-/// Formatting a `gateway_api::Duration` for debug is the same as formatting it
-/// for display.
+/// Formatting a `gateway_api::Duration` for debug is the same as formatting it for display.
 impl fmt::Debug for Duration {
     /// Format a `gateway_api::Duration` for debug, following GEP-2257 rules.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -553,9 +541,8 @@ mod test_duration {
     use super::*;
 
     #[test]
-    /// Test that the validation logic in `Duration`'s constructor method(s)
-    /// correctly handles known-good durations. (The tests are ordered to match
-    /// the from_str test cases.)
+    /// Test that the validation logic in `Duration`'s constructor method(s) correctly handles
+    /// known-good durations. (The tests are ordered to match the from_str test cases.)
     fn test_gep2257_from_valid_duration() {
         let test_cases = vec![
             Duration::from_secs(0),                        // 0s / 0h0m0s / 0m0s
@@ -582,8 +569,8 @@ mod test_duration {
     }
 
     #[test]
-    /// Test that the validation logic in `Duration`'s constructor method(s)
-    /// correctly handles known-bad durations.
+    /// Test that the validation logic in `Duration`'s constructor method(s) correctly handles
+    /// known-bad durations.
     fn test_gep2257_from_invalid_duration() {
         let test_cases = vec![
             (
@@ -610,8 +597,8 @@ mod test_duration {
     }
 
     #[test]
-    /// Test that the TryFrom implementation for KubeDuration correctly converts
-    /// to gateway_api::Duration and validates the result.
+    /// Test that the TryFrom implementation for KubeDuration correctly converts to
+    /// gateway_api::Duration and validates the result.
     fn test_gep2257_from_valid_k8s_duration() {
         let test_cases = vec![
             (
@@ -646,8 +633,8 @@ mod test_duration {
     }
 
     #[test]
-    /// Test that the TryFrom implementation for KubeDuration correctly fails
-    /// for kube::core::Durations that aren't valid GEP-2257 durations.
+    /// Test that the TryFrom implementation for KubeDuration correctly fails for
+    /// kube::core::Durations that aren't valid GEP-2257 durations.
     fn test_gep2257_from_invalid_k8s_duration() {
         let test_cases: Vec<(KubeDuration, Result<Duration, String>)> = vec![
             (
@@ -682,9 +669,8 @@ mod test_duration {
 
     #[test]
     fn test_gep2257_from_str() {
-        // Test vectors are mostly taken directly from GEP-2257, but there are
-        // some extras thrown in and it's not meaningful to test e.g. "0.5m" in
-        // Rust.
+        // Test vectors are mostly taken directly from GEP-2257, but there are some extras thrown in
+        // and it's not meaningful to test e.g. "0.5m" in Rust.
         let test_cases = vec![
             ("0h", Duration::from_secs(0)),
             ("0s", Duration::from_secs(0)),
@@ -734,8 +720,8 @@ mod test_duration {
 
     #[test]
     fn test_gep2257_format() {
-        // Formatting should always succeed for valid durations, and we've
-        // covered invalid durations in the constructor and parse tests.
+        // Formatting should always succeed for valid durations, and we've covered invalid durations
+        // in the constructor and parse tests.
         let test_cases = vec![
             (Duration::from_secs(0), "0s".to_string()),
             (Duration::from_secs(3600), "1h".to_string()),
@@ -772,42 +758,34 @@ mod test_duration {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct ServiceAttachment {
+pub struct ServiceTarget {
     ///
     /// The name of the Kubernetes Service
     ///
     pub name: String,
 
     ///
-    /// The namespace of the Kubernetes service.
-    /// FIXME(namespace): what should the semantic be when this is not specified:
-    /// default, namespace of client, namespace of EZbake?
+    /// The namespace of the Kubernetes service. FIXME(namespace): what should the semantic be when
+    /// this is not specified: default, namespace of client, namespace of EZbake?
     ///
     pub namespace: String,
 
     ///
-    /// The port number of the Kubernetes service to target/
-    /// attach to.
+    /// The port number of the Kubernetes service to target/ attach to.
     ///
-    /// When attaching policies, if it is not specified, the
-    /// attachment will apply to all connections that don't have a specific
-    /// port specified.
+    /// When attaching policies, if it is not specified, the target will apply to all connections
+    /// that don't have a specific port specified.
     ///
-    /// When being used to lookup a backend after a matched rule,
-    /// if it is not specified then it will use the same port as the incoming request
+    /// When being used to lookup a backend after a matched rule, if it is not specified then it
+    /// will use the same port as the incoming request
     ///
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<PortNumber>,
-    // FIXME(gateway): Section of the gateway API to attach to
-    // todo: this is needed eventually to support attaching to gateways
-    // in the meantime though it just confuses things.
-    //#[serde(default, skip_serializing_if = "Option::is_none")]
-    //pub section_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct DNSAttachment {
+pub struct DNSTarget {
     ///
     /// The DNS Name to target/attach to
     ///
@@ -816,12 +794,11 @@ pub struct DNSAttachment {
     ///
     /// The port number to target/attach to.
     ///
-    /// When attaching policies, if it is not specified, the
-    /// attachment will apply to all connections that don't have a specific
-    /// port specified.
+    /// When attaching policies, if it is not specified, the target will apply to all connections
+    /// that don't have a specific port specified.
     ///
-    /// When being used to lookup a backend after a matched rule,
-    /// if it is not specified then it will use the same port as the incoming request
+    /// When being used to lookup a backend after a matched rule, if it is not specified then it
+    /// will use the same port as the incoming request
     ///
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<PortNumber>,
@@ -830,16 +807,16 @@ pub struct DNSAttachment {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub enum Attachment {
-    DNS(DNSAttachment),
+pub enum Target {
+    DNS(DNSTarget),
 
     #[serde(untagged)]
-    Service(ServiceAttachment),
+    Service(ServiceTarget),
 }
 
 static KUBE_SERVICE_SUFFIX: &str = ".svc.cluster.local";
 
-impl std::fmt::Display for Attachment {
+impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.as_hostname())?;
 
@@ -854,23 +831,22 @@ impl std::fmt::Display for Attachment {
 ///
 ///  FIXME(ports): nothing with ports here will work until we move to xdstp
 ///
-///  FIXME(DNS): For kube service hostnames, forcing the use of the ".svc.cluster.local"
-///  suffix is icky,in that it stops the current k8s behavoiur of clients sending a request
-///  to http://service_name, and having the namespace resolved based on where
-///  the client is running.
+///  FIXME(DNS): For kube service hostnames, forcing the use of the ".svc.cluster.local" suffix is
+///  icky,in that it stops the current k8s behavior of clients sending a request to
+///  http://service_name, and having the namespace resolved based on where the client is running.
 ///
-///  However without it, we are going to have a hard time here saying when an incoming
-///  hostname is targeted at DNS, vs when it is targeted at a kube service. That might
-///  not be a problem though, in that if we can process XDS NACKs, we can use something
-///  at a higher level to work out what it is.
+///  However without it, we are going to have a hard time here saying when an incoming hostname is
+///  targeted at DNS, vs when it is targeted at a kube service. That might not be a problem though,
+///  in that if we can process XDS NACKs, we can use something at a higher level to work out what it
+///  is.
 ///
 ///  So punting thinking more about this until we support DNS properly.
 ///
-impl Attachment {
+impl Target {
     pub fn as_hostname(&self) -> String {
         match self {
-            Attachment::DNS(c) => c.hostname.clone(),
-            Attachment::Service(c) => format!("{}.{}{}", c.name, c.namespace, KUBE_SERVICE_SUFFIX),
+            Target::DNS(c) => c.hostname.clone(),
+            Target::Service(c) => format!("{}.{}{}", c.name, c.namespace, KUBE_SERVICE_SUFFIX),
         }
     }
 
@@ -879,25 +855,25 @@ impl Attachment {
             let mut parts = hostname.split('.');
             let name = parts.next().unwrap().to_string();
             let namespace = parts.next().unwrap().to_string();
-            Attachment::Service(ServiceAttachment {
+            Target::Service(ServiceTarget {
                 name,
                 namespace,
                 port,
             })
         } else {
-            Attachment::DNS(DNSAttachment {
+            Target::DNS(DNSTarget {
                 hostname: hostname.to_string(),
                 port,
             })
         }
     }
 
-    // FIXME(DNS): no reason we cannot support DNS here, but likely it should
-    // be determined by whats in the cluster config so passed as a extra parameter
+    // FIXME(DNS): no reason we cannot support DNS here, but likely it should be determined by whats
+    // in the cluster config so passed as a extra parameter
     pub fn from_cluster_xds_name(name: &str) -> Result<Self, crate::xds::Error> {
         let parts: Vec<&str> = name.split('/').collect();
         if parts.len() == 3 && parts[2].eq("cluster") {
-            Ok(Attachment::Service(ServiceAttachment {
+            Ok(Target::Service(ServiceTarget {
                 name: parts[1].to_string(),
                 namespace: parts[0].to_string(),
                 port: None,
@@ -913,8 +889,8 @@ impl Attachment {
 
     pub fn as_cluster_xds_name(&self) -> String {
         match self {
-            Attachment::DNS(c) => c.hostname.clone(),
-            Attachment::Service(c) => format!("{}/{}/cluster", c.namespace, c.name),
+            Target::DNS(c) => c.hostname.clone(),
+            Target::Service(c) => format!("{}/{}/cluster", c.namespace, c.name),
         }
     }
 
@@ -930,20 +906,20 @@ impl Attachment {
 
     pub fn port(&self) -> Option<u16> {
         match self {
-            Attachment::DNS(c) => c.port,
+            Target::DNS(c) => c.port,
             //FIXME(namespace): work out what to do if namespace is optional
-            Attachment::Service(c) => c.port,
+            Target::Service(c) => c.port,
         }
     }
 
     pub fn with_port(&self, port: u16) -> Self {
         match self {
-            Attachment::DNS(c) => Attachment::DNS(DNSAttachment {
+            Target::DNS(c) => Target::DNS(DNSTarget {
                 port: Some(port),
                 hostname: c.hostname.clone(),
             }),
 
-            Attachment::Service(c) => Attachment::Service(ServiceAttachment {
+            Target::Service(c) => Target::Service(ServiceTarget {
                 port: Some(port),
                 name: c.name.clone(),
                 namespace: c.namespace.clone(),
@@ -959,30 +935,30 @@ fn weight_default() -> u32 {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct WeightedAttachment {
+pub struct WeightedTarget {
     #[serde(default = "weight_default")]
     pub weight: u32,
 
     #[serde(flatten)]
-    pub attachment: Attachment,
-    //Todo: gateway API also allows filters here under an extended support condition
-    // we need to decide whether this is one where its simpler just to drop it.
+    pub target: Target,
+    //Todo: gateway API also allows filters here under an extended support condition we need to
+    // decide whether this is one where its simpler just to drop it.
 }
 
-impl WeightedAttachment {
+impl WeightedTarget {
     pub(crate) fn from_xds(
         xds: Option<&xds_route::route_action::ClusterSpecifier>,
     ) -> Result<Vec<Self>, crate::xds::Error> {
         match xds {
             Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => Ok(vec![Self {
-                attachment: Attachment::from_cluster_xds_name(name)?,
+                target: Target::from_cluster_xds_name(name)?,
                 weight: 1,
             }]),
             Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(weighted_cluster)) => {
                 let mut ret: Vec<_> = vec![];
                 for w in &weighted_cluster.clusters {
                     ret.push(Self {
-                        attachment: Attachment::from_cluster_xds_name(&w.name)?,
+                        target: Target::from_cluster_xds_name(&w.name)?,
                         weight: value_or_default!(w.weight, 1),
                     })
                 }
@@ -1003,8 +979,8 @@ impl WeightedAttachment {
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum SessionAffinityHashParamType {
-    /// Hash the value of a header. If the header has multiple values, they will
-    /// all be used as hash input.
+    /// Hash the value of a header. If the header has multiple values, they will all be used as hash
+    /// input.
     #[serde(alias = "header")]
     Header {
         /// The name of the header to use as hash input.
@@ -1018,8 +994,8 @@ pub enum SessionAffinityHashParamType {
 pub struct SessionAffinityHashParam {
     /// Whether to stop immediately after hashing this value.
     ///
-    /// This is useful if you want to try to hash a value, and then fall back
-    /// to another as a default if it wasn't set.
+    /// This is useful if you want to try to hash a value, and then fall back to another as a
+    /// default if it wasn't set.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub terminal: bool,
 

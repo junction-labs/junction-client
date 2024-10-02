@@ -4,8 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 ///
-/// These are the custom CRDs for junction-specific extensions that aren't
-/// in the Gateway API CRDs.
+/// These are the custom CRDs for junction-specific extensions that aren't in the Gateway API CRDs.
 ///
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
@@ -21,10 +20,9 @@ pub struct LocalPolicyTargetReference {
 }
 
 ///
-///  HTTPRoutePolicyConfig is due to become in the standard, and we have picked
-///  the exact parameters likely to standardize. However (a) they may change and
-///  (b) aren't in any CRDs yet. So this policy is to allow those, and any
-///  similar extensions in the future.
+///  HTTPRoutePolicyConfig is due to become in the standard, and we have picked the exact parameters
+///  likely to standardize. However (a) they may change and (b) aren't in any CRDs yet. So this
+///  policy is to allow those, and any similar extensions in the future.
 ///
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default, JsonSchema)]
 #[kube(
@@ -54,8 +52,8 @@ pub struct JctHTTPRoutePolicyConfig {
 }
 
 ///
-/// session_persitence will be handled the the upcoming 1.2 release of BackendLBPolicy
-/// so the junction CRD only has to support our customized load balancer config.
+/// session_persistence will be handled the the upcoming 1.2 release of BackendLBPolicy so the
+/// junction CRD only has to support our customized load balancer config.
 ///
 #[derive(CustomResource, Serialize, Deserialize, Clone, Debug, Default, JsonSchema)]
 #[kube(
@@ -73,13 +71,9 @@ pub struct JctBackendPolicySpec {
     pub lb: Option<LbPolicy>,
 }
 
-//FIXME: not needed till ezbake integrates
-// impl JctBackendPolicyConfig {
-//     pub fn from_annotations(annotations: &BTreeMap<String, String>) -> Option<Self> {
-//         // after slash has to be 63 chars, alphanumeric, _, -, .
-//         // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX/012345678901234567890123456789012345678901234567890123456789012
-//         // backend.policies.junctionlabs.io/lb.type = "RoundRobin"
-//         // backend.policies.junctionlabs.io/lb.minRingSize = 3
-//         todo!();
-//     }
-// }
+//FIXME: not needed till ezbake integrates impl JctBackendPolicyConfig { pub fn
+// from_annotations(annotations: &BTreeMap<String, String>) -> Option<Self> { // after slash has to
+//     be 63 chars, alphanumeric, _, -, . //
+//         XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX/012345678901234567890123456789012345678901234567890123456789012
+//         // backend.policies.junctionlabs.io/lb.type = "RoundRobin" //
+//         backend.policies.junctionlabs.io/lb.minRingSize = 3 todo!(); } }
