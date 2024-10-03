@@ -1,14 +1,24 @@
 from collections import defaultdict
 from typing import List
 import argparse
-import urllib3
 import junction.requests
+import urllib3
+from junction.urllib3 import PoolManager as JunctionPoolManger
+from urllib3.util import Timeout
+import requests
 
 
 def print_header(name):
     print("***** ")
     print(f"***** {name}")
     print("***** ")
+
+
+def print_counters(counters):
+    keys = list(counters.keys())
+    keys.sort()
+    for key in keys:
+        print(f"  {key} = {counters[key]}")
 
 
 # we get a little clever here, and use the same query_param we use to tell the server to send fail
@@ -18,17 +28,17 @@ def retry_sample(args):
         "Retry Test - 502's have retries configured and will succeed, 501s do not"
     )
 
-    default_backend: junction.config.Target = {
+    default_target: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
-    feature_backend: junction.config.Target = {
+    feature_target: junction.config.Target = {
         "name": "jct-http-server-feature-1",
         "namespace": "default",
     }
     default_routes: List[junction.config.Route] = [
         {
-            "target": default_backend,
+            "target": default_target,
             "rules": [
                 {
                     "matches": [
@@ -42,12 +52,12 @@ def retry_sample(args):
                         codes=[502], attempts=2, backoff="1ms"
                     ),
                     "backends": [
-                        feature_backend,
+                        feature_target,
                     ],
                 },
                 {
                     "backends": [
-                        default_backend,
+                        default_target,
                     ]
                 },
             ],
@@ -62,10 +72,8 @@ def retry_sample(args):
         resp = session.get(f"{args.base_url}/?fail_match={code}")
         counters[resp.status_code] += 1
         print(f"For initial error code '{code}' actual response code counts are - ")
-        myKeys = list(counters.keys())
-        myKeys.sort()
-        for key in myKeys:
-            print(f"  {key} = {counters[key]}")
+        print_counters(counters)
+
     print("")
 
 
@@ -74,34 +82,34 @@ def path_match_sample(args):
         "Header Match - 50% of /feature-1/index sent to a different backend target"
     )
 
-    default_backend: junction.config.Target = {
+    default_target: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
-    feature_backend: junction.config.Target = {
+    feature_target: junction.config.Target = {
         "name": "jct-http-server-feature-1",
         "namespace": "default",
     }
     default_routes: List[junction.config.Route] = [
         {
-            "target": default_backend,
+            "target": default_target,
             "rules": [
                 {
                     "matches": [{"path": {"value": "/feature-1/index"}}],
                     "backends": [
                         {
-                            **default_backend,
+                            **default_target,
                             "weight": 50,
                         },
                         {
-                            **feature_backend,
+                            **feature_target,
                             "weight": 50,
                         },
                     ],
                 },
                 {
                     "backends": [
-                        default_backend,
+                        default_target,
                     ]
                 },
             ],
@@ -117,10 +125,7 @@ def path_match_sample(args):
             resp.raise_for_status()
             counters[resp.text] += 1
         print(f"For path '{path}' response body counts are - ")
-        myKeys = list(counters.keys())
-        myKeys.sort()
-        for key in myKeys:
-            print(f"  {key} = {counters[key]}")
+        print_counters(counters)
     print("")
 
 
@@ -128,14 +133,14 @@ def ring_hash_sample(args):
     print_header(
         "RingHash - header USER is hashed so requests with fixed value go to one backend server"
     )
-    default_backend: junction.config.Target = {
+    default_target: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
     default_routes: List[junction.config.Route] = []
     default_backends: List[junction.config.Backend] = [
         {
-            "target": default_backend,
+            "target": default_target,
             "lb": {
                 "type": "RingHash",
                 "minRingSize": 1024,
@@ -152,10 +157,7 @@ def ring_hash_sample(args):
             resp.raise_for_status()
             counters[resp.text] += 1
         print(f"With headers '{headers}' response body counts are - ")
-        myKeys = list(counters.keys())
-        myKeys.sort()
-        for key in myKeys:
-            print(f"  {key} = {counters[key]}")
+        print_counters(counters)
     print("")
 
 
@@ -164,17 +166,17 @@ def timeouts_sample(args):
         "Timeouts - timeout is 50ms, so if the server takes longer, request should throw"
     )
 
-    default_backend: junction.config.Target = {
+    default_target: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
     default_routes: List[junction.config.Route] = [
         {
-            "target": default_backend,
+            "target": default_target,
             "rules": [
                 {
                     "backends": [
-                        default_backend,
+                        default_target,
                     ],
                     "timeouts": {"backend_request": "50ms"},
                 }
@@ -189,13 +191,70 @@ def timeouts_sample(args):
         try:
             session.get(f"{args.base_url}/?sleep_ms={sleep_ms}")
             counters["success"] += 1
-        except urllib3.exceptions.ReadTimeoutError:
+        except requests.exceptions.ReadTimeout:
+            counters["exception"] += 1
+        print(f"With server sleep time '{sleep_ms}'ms call result counts are - ")
+        print_counters(counters)
+    print("")
+
+
+def urllib3_sample(args):
+    print_header(
+        "urllib3 - We repeat the timeouts sample, using urllib3 directly instead"
+    )
+
+    default_target: junction.config.Target = {
+        "name": "jct-http-server",
+        "namespace": "default",
+    }
+    default_routes: List[junction.config.Route] = [
+        {
+            "target": default_target,
+            "rules": [
+                {
+                    "backends": [
+                        default_target,
+                    ],
+                    "timeouts": {"backend_request": "50ms"},
+                }
+            ],
+        }
+    ]
+    default_backends: List[junction.config.Backend] = []
+    http = JunctionPoolManger(
+        default_backends=default_backends, default_routes=default_routes
+    )
+
+    for sleep_ms in [0, 100]:
+        counters = defaultdict(int)
+        try:
+            http.urlopen("GET", f"{args.base_url}/?sleep_ms={sleep_ms}")
+            counters["success"] += 1
+        except urllib3.exceptions.MaxRetryError:  # note, the exception differs!
             counters["exception"] += 1
         print(f"With server sleep time '{sleep_ms}'ms call result counts are - ")
         myKeys = list(counters.keys())
         myKeys.sort()
         for key in myKeys:
             print(f"  {key} = {counters[key]}")
+
+    # now show an override of timeout on the method call still works
+    for sleep_ms in [0, 100]:
+        counters = defaultdict(int)
+        try:
+            http.urlopen(
+                "GET",
+                f"{args.base_url}/?sleep_ms={sleep_ms}",
+                timeout=Timeout(connect=1000, read=1000),
+            )
+            counters["success"] += 1
+        except urllib3.exceptions.MaxRetryError:  # note, the exception differs!
+            counters["exception"] += 1
+        print(
+            f"With server sleep time '{sleep_ms}'ms and a 1s override on call, call result counts are - "
+        )
+        print_counters(counters)
+
     print("")
 
 
@@ -204,6 +263,7 @@ def all_samples(args):
     path_match_sample(args)
     ring_hash_sample(args)
     timeouts_sample(args)
+    urllib3_sample(args)
 
 
 if __name__ == "__main__":
