@@ -4,20 +4,28 @@ from junction.junction import Junction, default_client
 from . import config, requests, urllib3
 
 
-def _handle_kwargs(
+##
+## Purpose of this function is to convert between the non-pyo3
+## route and backend structs by passing them as kwargs
+##
+def _get_client(
     default_routes: typing.List[config.Route] | None,
     default_backends: typing.List[config.Backend] | None,
-    junction_client: Junction | None,
-    kwargs: dict,
-) -> tuple[dict, Junction]:
-    if not junction_client:
-        client_kwargs = {}
-        if default_routes:
-            client_kwargs["default_routes"] = default_routes
-        if default_backends:
-            client_kwargs["default_backends"] = default_backends
-        junction_client = default_client(**client_kwargs)
-    return kwargs, junction_client
+) -> Junction:
+    client_kwargs = {}
+    if default_routes:
+        # This check is just in case the user does something dumb as otherwise
+        # the error on the return line is pretty ambiguous
+        if not isinstance(default_routes, typing.List):
+            raise ValueError("default_routes must be a list of routes")
+        client_kwargs["default_routes"] = default_routes
+    if default_backends:
+        # This check is just in case the user does something dumb as otherwise
+        # the error on the return line is pretty ambiguous
+        if not isinstance(default_backends, typing.List):
+            raise ValueError("default_backends must be a list of backends")
+        client_kwargs["default_backends"] = default_backends
+    return default_client(**client_kwargs)
 
 
 __all__ = (Junction, config, urllib3, requests, default_client)

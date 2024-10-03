@@ -1,19 +1,40 @@
 import os
 from typing import List, Mapping
 
-
 import requests
+
 import urllib3
 from urllib3.util import Timeout
+from urllib3.exceptions import HTTPError as _HTTPError
+from urllib3.exceptions import InvalidHeader as _InvalidHeader
+from urllib3.exceptions import ProxyError as _ProxyError
+from urllib3.exceptions import SSLError as _SSLError
+from urllib3.exceptions import (
+    MaxRetryError,
+    NewConnectionError,
+    ProtocolError,
+    ReadTimeoutError,
+    ResponseError,
+    ClosedPoolError,
+    ConnectTimeoutError,
+)
+from .urllib3 import PoolManager
+from requests.exceptions import (
+    ConnectionError,
+    ConnectTimeout,
+    InvalidHeader,
+    ProxyError,
+    ReadTimeout,
+    RetryError,
+    SSLError,
+)
 
 import junction
-
-from .urllib3 import PoolManager
 
 
 class HTTPAdapter(requests.adapters.HTTPAdapter):
     """
-    An HTTPAdapater subclass customized to use Junction for endpoint discovery
+    An HTTPAdapter subclass customized to use Junction for endpoint discovery
     and load-balancing.
 
     You should almost never need to use this class directly, use a Session
@@ -42,20 +63,23 @@ class HTTPAdapter(requests.adapters.HTTPAdapter):
         cert: None | bytes | str | tuple[bytes | str, bytes | str] = None,
         proxies: Mapping[str, str] | None = None,
     ) -> requests.Response:
-        # This is overridden instead of the smaller hooks that requests provides because
-        # it's where the actual load balancing takes place - for some reason requests
-        # pulls connections from a PoolManager itself instead of calling PoolManager.urlopen.
+        # This is overridden instead of the smaller hooks that requests provides
+        # because it's where the actual load balancing takes place - for some
+        # reason requests pulls connections from a PoolManager itself instead of
+        # calling PoolManager.urlopen.
         #
         # The code in the original send method does:
-        # - Some very basic TLS cert validation (literally just checking os.path.exists)
-        # - Formats the request url so it's always relative, with a twist for proxy usage
+        # - Some very basic TLS cert validation (literally just checking
+        #   os.path.exists)
+        # - Formats the request url so it's always relative, with a twist for
+        #   proxy usage
         # - Grabs a single connection and then uses it
         # - Munges timeouts for urllib3
         # - Translates exceptions
         #
-        # We're interested in fixing that middle step where the code grabs a single connection
-        # and use it. Instead of doing that, grab the junction PoolManager we've installed
-        # instead and delegate.
+        # We're interested in fixing that middle step where the code grabs a
+        # single connection and use it. Instead of doing that, grab the junction
+        # PoolManager we've installed instead and delegate.
 
         self.add_headers(
             request,
@@ -81,7 +105,7 @@ class HTTPAdapter(requests.adapters.HTTPAdapter):
                 ) from None
         elif isinstance(timeout, Timeout):
             pass
-        else:
+        elif timeout:
             timeout = Timeout(connect=timeout, read=timeout)
 
         # in requests.HTTPAdapter, TLS settings get configured on individual
@@ -104,21 +128,58 @@ class HTTPAdapter(requests.adapters.HTTPAdapter):
             else:
                 tls_args["ca_certs"] = verify
 
-        # TODO: catch and translate exceptions back into requests exceptions
-        resp = self.poolmanager.urlopen(
-            method=request.method,
-            url=request.url,
-            redirect=False,
-            body=request.body,
-            headers=request.headers,
-            assert_same_host=False,
-            preload_content=False,
-            decode_content=False,
-            retries=self.max_retries,
-            timeout=timeout,
-            chunked=chunked,
-            jct_tls_args=tls_args,
-        )
+        try:
+            resp = self.poolmanager.urlopen(
+                method=request.method,
+                url=request.url,
+                redirect=False,
+                body=request.body,
+                headers=request.headers,
+                assert_same_host=False,
+                preload_content=False,
+                decode_content=False,
+                retries=self.max_retries,
+                timeout=timeout,
+                chunked=chunked,
+                jct_tls_args=tls_args,
+            )
+        except (ProtocolError, OSError) as err:
+            raise ConnectionError(err, request=request)
+
+        except MaxRetryError as e:
+            if isinstance(e.reason, ConnectTimeoutError):
+                # TODO: Remove this in 3.0.0: see #2811
+                if not isinstance(e.reason, NewConnectionError):
+                    raise ConnectTimeout(e, request=request)
+
+            if isinstance(e.reason, ResponseError):
+                raise RetryError(e, request=request)
+
+            if isinstance(e.reason, _ProxyError):
+                raise ProxyError(e, request=request)
+
+            if isinstance(e.reason, _SSLError):
+                # This branch is for urllib3 v1.22 and later.
+                raise SSLError(e, request=request)
+
+            raise ConnectionError(e, request=request)
+
+        except ClosedPoolError as e:
+            raise ConnectionError(e, request=request)
+
+        except _ProxyError as e:
+            raise ProxyError(e)
+
+        except (_SSLError, _HTTPError) as e:
+            if isinstance(e, _SSLError):
+                # This branch is for urllib3 versions earlier than v1.22
+                raise SSLError(e, request=request)
+            elif isinstance(e, ReadTimeoutError):
+                raise ReadTimeout(e, request=request)
+            elif isinstance(e, _InvalidHeader):
+                raise InvalidHeader(e, request=request)
+            else:
+                raise
 
         return self.build_response(request, resp)
 
@@ -137,13 +198,10 @@ class Session(requests.Session):
     ) -> None:
         super().__init__()
 
-        _, client = junction._handle_kwargs(
-            default_routes=default_routes,
-            default_backends=default_backends,
-            junction_client=junction_client,
-            kwargs={},
-        )
-        self.junction = client
+        if not junction_client:
+            junction_client = junction._get_client(
+                default_routes=default_routes, default_backends=default_backends
+            )
 
-        self.mount("https://", HTTPAdapter(junction_client=self.junction))
-        self.mount("http://", HTTPAdapter(junction_client=self.junction))
+        self.mount("https://", HTTPAdapter(junction_client=junction_client))
+        self.mount("http://", HTTPAdapter(junction_client=junction_client))

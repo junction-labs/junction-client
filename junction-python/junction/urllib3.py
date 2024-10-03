@@ -13,14 +13,14 @@ import junction.junction as jct_core
 # we DO want to distinguish between endpoints.
 #
 # Practically, this means that we're writing a subclass of PoolManager that uses
-# the connection_from_* methods to pick out a connection for the endpoints
-# we'd like to send data to. urlopen is a nice place to do that, because it means
-# a lot of the convenient methods (like request) come with.
+# the connection_from_* methods to pick out a connection for the endpoints we'd
+# like to send data to. urlopen is a nice place to do that, because it means a
+# lot of the convenient methods (like request) come with.
 #
-# There's a bit of strange API surface area after we subclass - the connection_from_*
-# methods are all still publicly exposed, and any caller can go get a connection
-# on their own, bypassing Junction load-balancing. It may eventually make sense
-# to override all of this.
+# There's a bit of strange API surface area after we subclass - the
+# connection_from_* methods are all still publicly exposed, and any caller can
+# go get a connection on their own, bypassing Junction load-balancing. It may
+# eventually make sense to override all of this.
 #
 # Because requests is built on top of urllib3 and has an insane API around
 # configuring a Session, there's some extra work that gets done in our subclass
@@ -47,15 +47,14 @@ class PoolManager(urllib3.PoolManager):
         # kwargs
         **kwargs: typing.Any,
     ) -> None:
-        connection_pool_kw, client = junction._handle_kwargs(
-            default_routes=default_routes,
-            default_backends=default_backends,
-            junction_client=junction_client,
-            kwargs=kwargs,
-        )
-        self.junction = client
+        if junction_client:
+            self.junction = junction_client
+        else:
+            self.junction = junction._get_client(
+                default_routes=default_routes, default_backends=default_backends
+            )
 
-        super().__init__(num_pools, headers, **connection_pool_kw)
+        super().__init__(num_pools, headers, **kwargs)
 
     def urlopen(
         self,
@@ -79,32 +78,38 @@ class PoolManager(urllib3.PoolManager):
         kw["redirect"] = False
 
         # requests has an insane API for setting TLS settings, so the junction
-        # HTTP adapter has to smuggle TLS connection keys through on every request
-        # instead of configuring this pool manager upfront. unsmuggle them here.
+        # HTTP adapter has to smuggle TLS connection keys through on every
+        # request instead of configuring this pool manager upfront. unsmuggle
+        # them here.
         jct_tls_args = kw.pop("jct_tls_args", {})
 
         # TODO: actually do shadowing, etc.
         for endpoint in endpoints:
+            kw2 = dict(kw)
             if endpoint.host:
-                kw["headers"]["Host"] = endpoint.host
+                kw2["headers"]["Host"] = endpoint.host
 
-            # TODO: retries might already be set - this should be a merge in that case
-            # rather than a pummel
-            if endpoint.retry_policy:
-                kw["retries"] = urllib3.Retry(
+            if not kw2.get("retries") and endpoint.retry_policy:
+                kw2["retries"] = urllib3.Retry(
                     total=endpoint.retry_policy.attempts - 1,
                     backoff_factor=endpoint.retry_policy.backoff,
                     status_forcelist=endpoint.retry_policy.codes,
                 )
 
-            # TODO: similarly we likely should not override a per-request
-            # value here
-            if endpoint.timeout_policy and endpoint.timeout_policy.backend_request != 0:
-                kw["timeout"] = urllib3.Timeout(
+            if (
+                not kw2.get("timeout")
+                and endpoint.timeout_policy
+                and endpoint.timeout_policy.backend_request != 0
+            ):
+                kw2["timeout"] = urllib3.Timeout(
                     total=endpoint.timeout_policy.backend_request
                 )
-            elif endpoint.timeout_policy and endpoint.timeout_policy.request != 0:
-                kw["timeout"] = urllib3.Timeout(
+            elif (
+                not kw2.get("timeout")
+                and endpoint.timeout_policy
+                and endpoint.timeout_policy.request != 0
+            ):
+                kw2["timeout"] = urllib3.Timeout(
                     ## FIXME: this is obviously not right, but urllib3 does not
                     ## give us more options. To implement properly, we would
                     ## have to implement retries ourselves.
@@ -115,7 +120,7 @@ class PoolManager(urllib3.PoolManager):
             return conn.urlopen(
                 method,
                 endpoint.request_uri,
-                **kw,
+                **kw2,
             )
 
     def connection_from_endpoint(
