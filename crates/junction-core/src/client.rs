@@ -3,7 +3,7 @@ use crate::{
     xds::{self, AdsClient},
 };
 use junction_api_types::{
-    backend::Backend,
+    backend::{Backend, LbPolicy},
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
     shared::Target,
 };
@@ -194,7 +194,7 @@ impl Client {
         let mut defaults: BTreeSet<_> = self.default_backends.keys().collect();
 
         for backend in self.ads.cache.iter_backends() {
-            let backend = if backend.config.lb.is_default_policy() {
+            let backend = if matches!(&backend.config.lb, LbPolicy::Unspecified) {
                 self.default_backends
                     .get(&backend.config.target.as_cluster_xds_name())
                     .cloned()
@@ -348,7 +348,7 @@ impl Client {
         // use the load
         let (backend, endpoints) = match self.ads.get_target(&backend_id) {
             (Some(backend), Some(endpoints)) => {
-                let lb = if backend.config.lb.is_default_policy() {
+                let lb = if matches!(&backend.config.lb, LbPolicy::Unspecified) {
                     self.default_backends
                         .get(&backend_id.as_cluster_xds_name())
                         .cloned()

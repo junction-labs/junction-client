@@ -26,7 +26,6 @@ pub struct RingHashParams {
     /// falling back to the value of `HeaderB`.
     ///
     /// If no policies match, a random hash is generated for each request.
-    // FIXME: big question is still how to fill this field over xDS
     #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "hashParams")]
     pub hash_params: Vec<SessionAffinityHashParam>,
 }
@@ -60,25 +59,16 @@ pub enum LbPolicy {
 }
 
 impl LbPolicy {
-    #[doc(hidden)]
-    pub fn is_default_policy(&self) -> bool {
-        match self {
-            // FIXME: only Unspecified should be here
-            LbPolicy::RoundRobin | LbPolicy::Unspecified => true,
-            _ => false,
-        }
-    }
-
-    //FIXME: work out what XDS leads to Unspecified being returned
     pub(crate) fn from_xds(cluster: &xds_cluster::Cluster) -> Option<Self> {
         match cluster.lb_policy() {
             // for ROUND_ROBIN, ignore the slow_start_config entirely and return a brand new
             // RoundRobin policy each time. validate that the config matches the enum field even
             // though it's ignored.
             xds_cluster::cluster::LbPolicy::RoundRobin => match cluster.lb_config.as_ref() {
-                Some(xds_cluster::cluster::LbConfig::RoundRobinLbConfig(_)) | None => {
+                Some(xds_cluster::cluster::LbConfig::RoundRobinLbConfig(_)) => {
                     Some(LbPolicy::RoundRobin)
                 }
+                None => Some(LbPolicy::Unspecified),
                 _ => None,
             },
             // for RING_HASH pull the config out if set or use default values to populate our
@@ -94,10 +84,10 @@ impl LbPolicy {
                 if lb_config.hash_function() != HashFunction::XxHash {
                     return None;
                 }
-                //FIXME(defaults): is this really the place to insist on defaults?
-                let min_ring_size: u32 = value_or_default!(lb_config.minimum_ring_size, 2048)
-                    .try_into()
-                    .ok()?;
+                let min_ring_size: u32 =
+                    value_or_default!(lb_config.minimum_ring_size, default_min_ring_size() as u64)
+                        .try_into()
+                        .ok()?;
 
                 let policy = RingHashParams {
                     min_ring_size,
@@ -110,8 +100,6 @@ impl LbPolicy {
     }
 }
 
-//FIXME(persistence) enable session persistence as per the gateway API #[serde(default,
-// skip_serializing_if = "Option::is_none")] pub session_persistence: Option<SessionPersistence>,
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
