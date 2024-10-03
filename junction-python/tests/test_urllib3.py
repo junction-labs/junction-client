@@ -29,3 +29,16 @@ def test_no_request_body():
 
     assert all(r.status == 200 for r in responses)
     all(_responses_equal(responses[0], r) for r in responses)
+
+
+@pytest.mark.skipif(
+    "JUNCTION_ADS_SERVER" not in os.environ,
+    reason="missing ADS server address",
+)
+def test_loads_config():
+    pool = JunctionPoolManger()
+    pool.urlopen("GET", "http://nginx.default.svc.cluster.local")
+
+    # TODO: test that there's a backend config for nginx, once we actually stabilize
+    assert pool.junction.dump_routes()
+    assert pool.junction.dump_backends()

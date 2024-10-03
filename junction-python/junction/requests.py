@@ -203,5 +203,7 @@ class Session(requests.Session):
                 default_routes=default_routes, default_backends=default_backends
             )
 
+        self.junction = junction_client
+
         self.mount("https://", HTTPAdapter(junction_client=junction_client))
         self.mount("http://", HTTPAdapter(junction_client=junction_client))
