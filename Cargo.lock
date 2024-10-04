@@ -959,20 +959,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "junction-api-gen"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "askama",
- "junction-api-types",
- "junction-typeinfo",
- "once_cell",
- "regex",
- "textwrap",
-]
-
-[[package]]
-name = "junction-api-types"
+name = "junction-api"
 version = "0.1.0"
 dependencies = [
  "http 1.1.0",
@@ -989,6 +976,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "junction-api-gen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "askama",
+ "junction-api",
+ "junction-typeinfo",
+ "once_cell",
+ "regex",
+ "textwrap",
+]
+
+[[package]]
 name = "junction-core"
 version = "0.1.0"
 dependencies = [
@@ -1000,7 +1000,7 @@ dependencies = [
  "futures",
  "h2",
  "http 1.1.0",
- "junction-api-types",
+ "junction-api",
  "once_cell",
  "petgraph",
  "prost",
@@ -1026,7 +1026,7 @@ name = "junction-python"
 version = "0.1.0"
 dependencies = [
  "http 1.1.0",
- "junction-api-types",
+ "junction-api",
  "junction-core",
  "junction-typeinfo",
  "once_cell",

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use junction_api_types::backend::Backend;
+use junction_api::backend::Backend;
 
 pub(crate) mod endpoints;
 pub(crate) mod load_balancer;
-use junction_api_types::http::Route;
-use junction_api_types::shared::Target;
+use junction_api::http::Route;
+use junction_api::shared::Target;
 pub(crate) use load_balancer::EndpointGroup;
 pub(crate) use load_balancer::LoadBalancer;
 

@@ -1,5 +1,5 @@
 use http::HeaderValue;
-use junction_api_types::{
+use junction_api::{
     backend::{Backend, LbPolicy},
     http::*,
     shared::{Regex, ServiceTarget, Target, WeightedTarget},

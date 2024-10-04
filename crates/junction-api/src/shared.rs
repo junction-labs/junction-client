@@ -163,7 +163,7 @@ fn is_valid(duration: StdDuration) -> Result<(), String> {
 /// sure that the incoming duration is valid according to GEP-2257.
 ///
 /// ```rust
-/// use junction_api_types::shared::Duration;
+/// use junction_api::shared::Duration;
 /// use std::convert::TryFrom;
 /// use std::time::Duration as StdDuration;
 ///
@@ -207,7 +207,7 @@ impl TryFrom<StdDuration> for Duration {
 /// sure that the incoming duration is valid according to GEP-2257.
 ///
 /// ```rust
-/// use junction_api_types::shared::Duration;
+/// use junction_api::shared::Duration;
 /// use std::convert::TryFrom;
 /// use std::str::FromStr;
 /// use kube::core::Duration as KubeDuration;
@@ -344,7 +344,7 @@ impl Duration {
 /// went wrong.
 ///
 /// ```rust
-/// use junction_api_types::shared::Duration;
+/// use junction_api::shared::Duration;
 /// use std::str::FromStr;
 ///
 /// let duration = Duration::from_str("1h");
@@ -411,7 +411,7 @@ impl FromStr for Duration {
 ///   unit first.
 ///
 /// ```rust
-/// use junction_api_types::shared::Duration;
+/// use junction_api::shared::Duration;
 /// use std::fmt::Display;
 ///
 /// // Zero-valued durations are always formatted as "0s".

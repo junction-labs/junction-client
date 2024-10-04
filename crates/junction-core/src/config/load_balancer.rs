@@ -1,5 +1,5 @@
 use crate::EndpointAddress;
-use junction_api_types::{
+use junction_api::{
     backend::{LbPolicy, RingHashParams},
     shared::{SessionAffinity, SessionAffinityHashParam, SessionAffinityHashParamType, Target},
 };

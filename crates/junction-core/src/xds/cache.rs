@@ -76,8 +76,8 @@
 
 use crossbeam_skiplist::SkipMap;
 use enum_map::EnumMap;
-use junction_api_types::http::Route;
-use junction_api_types::shared::Target;
+use junction_api::http::Route;
+use junction_api::shared::Target;
 use petgraph::{
     graph::{DiGraph, NodeIndex},
     visit::{self, Visitable},
@@ -119,7 +119,7 @@ use super::ResourceVersion;
 #[derive(Debug, Clone)]
 struct CacheEntry<T> {
     pub version: ResourceVersion,
-    pub last_error: Option<(ResourceVersion, junction_api_types::xds::Error)>,
+    pub last_error: Option<(ResourceVersion, junction_api::xds::Error)>,
     pub data: Option<T>,
 }
 
@@ -209,7 +209,7 @@ where
         &self,
         name: String,
         version: ResourceVersion,
-        error: junction_api_types::xds::Error,
+        error: junction_api::xds::Error,
     ) {
         match self.0.get(&name) {
             Some(entry) => {
@@ -254,7 +254,7 @@ impl<'a, T> ResourceEntry<'a, T> {
         &self.0.value().version
     }
 
-    fn last_error(&self) -> Option<&(ResourceVersion, junction_api_types::xds::Error)> {
+    fn last_error(&self) -> Option<&(ResourceVersion, junction_api::xds::Error)> {
         self.0.value().last_error.as_ref()
     }
 
@@ -438,7 +438,7 @@ impl Cache {
         &mut self,
         version: crate::xds::ResourceVersion,
         resources: ResourceVec,
-    ) -> (ResourceTypeSet, Vec<junction_api_types::xds::Error>) {
+    ) -> (ResourceTypeSet, Vec<junction_api::xds::Error>) {
         let (changed, errs) = match resources {
             ResourceVec::Listener(ls) => self.insert_listeners(version, ls),
             ResourceVec::RouteConfiguration(rcs) => self.insert_route_configs(version, rcs),
@@ -551,7 +551,7 @@ impl Cache {
         &mut self,
         version: crate::xds::ResourceVersion,
         listeners: Vec<xds_listener::Listener>,
-    ) -> (ResourceTypeSet, Vec<junction_api_types::xds::Error>) {
+    ) -> (ResourceTypeSet, Vec<junction_api::xds::Error>) {
         let mut changed = ResourceTypeSet::default();
         let mut errors = Vec::new();
         let mut to_remove: BTreeSet<_> = self.data.listeners.names().collect();
@@ -628,7 +628,7 @@ impl Cache {
         &mut self,
         version: crate::xds::ResourceVersion,
         clusters: Vec<xds_cluster::Cluster>,
-    ) -> (ResourceTypeSet, Vec<junction_api_types::xds::Error>) {
+    ) -> (ResourceTypeSet, Vec<junction_api::xds::Error>) {
         let mut changed = ResourceTypeSet::default();
         let mut errors = Vec::new();
         let mut to_remove: BTreeSet<_> = self.data.clusters.names().collect();
@@ -693,7 +693,7 @@ impl Cache {
         &mut self,
         version: crate::xds::ResourceVersion,
         route_configs: Vec<xds_route::RouteConfiguration>,
-    ) -> (ResourceTypeSet, Vec<junction_api_types::xds::Error>) {
+    ) -> (ResourceTypeSet, Vec<junction_api::xds::Error>) {
         let mut errors = Vec::new();
         let mut changed = ResourceTypeSet::default();
 
@@ -756,7 +756,7 @@ impl Cache {
         &mut self,
         version: crate::xds::ResourceVersion,
         load_assignments: Vec<xds_endpoint::ClusterLoadAssignment>,
-    ) -> (ResourceTypeSet, Vec<junction_api_types::xds::Error>) {
+    ) -> (ResourceTypeSet, Vec<junction_api::xds::Error>) {
         let mut errors = Vec::new();
         let mut changed = ResourceTypeSet::default();
 
@@ -917,7 +917,7 @@ mod test {
     }
 
     fn assert_insert(
-        (changed, errors): (ResourceTypeSet, Vec<junction_api_types::xds::Error>),
+        (changed, errors): (ResourceTypeSet, Vec<junction_api::xds::Error>),
     ) -> ResourceTypeSet {
         assert!(errors.is_empty(), "first error = {}", errors[0]);
         changed

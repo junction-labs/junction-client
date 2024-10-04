@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use junction_api_types::shared::Target;
+use junction_api::shared::Target;
 
 /// A `Result` alias where the `Err` case is `junction_core::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
