@@ -1,7 +1,5 @@
-import os
 import typing
 
-import pytest
 from urllib3 import BaseHTTPResponse
 from urllib3 import PoolManager as Urllib3PoolManager
 

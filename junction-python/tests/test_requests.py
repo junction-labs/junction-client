@@ -1,7 +1,5 @@
-import os
 import typing
 
-import pytest
 from requests import Response
 from requests import Session as RequestsSession
 
