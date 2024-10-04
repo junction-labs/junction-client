@@ -20,13 +20,15 @@ with you.
 
 ## Our Focus Right Now (10/3/2024)
 
-Right now, we're focused on getting the client side experience right and
-figuring out the high-level bits of the library. We want to make sure that
-routes and backends all make sense before we start making things more complex.
+Right now, we're focused on getting the UX and data model for Routes and
+Backends correct, and to a place where people feel like they can do something
+useful with them. That means right now they're front and center in every client.
 
-As we're iterating on the client UX with alpha testers, we're going to complete
-the loop and build APIs for saving config back to a central service and
-dynamically pushing it out to clients.
+Long term, we absolutely don't envision most of the usage of Junction to involve
+putting routes in your client - we want as much config as possible to be pushed
+dynamically over the network, and mostly invisible. The next thing we're
+focusing on is the workflow for saving Routes and Backends to a central config
+store and serving them dynamically. Stay tuned for that.
 
 ## Known Bugs/Limitations
 
