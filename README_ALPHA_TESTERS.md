@@ -34,6 +34,9 @@ dynamically pushing it out to clients.
   your control plane runs in. If you try something like
   `session.get("http://example.com")` it won't route.
 
+* Durations have to be specified  as a short string, like "1h20m30s". This is
+annoying, and should be gone shortly.
+
 * We're not automatically generating Python API documentation yet - we're
 betting on our examples and docstrings for now. The config API is fully
 represented and documented in [`config.py`][config-py] and you should get
