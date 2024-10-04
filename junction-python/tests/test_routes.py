@@ -5,12 +5,12 @@ import pytest
 
 
 @pytest.fixture
-def nginx() -> junction.config.Target:
+def nginx() -> junction.config.TargetService:
     return {"namespace": "default", "name": "nginx"}
 
 
 @pytest.fixture
-def nginx_staging() -> junction.config.Target:
+def nginx_staging() -> junction.config.TargetService:
     return {"namespace": "default", "name": "nginx-staging"}
 
 
@@ -33,7 +33,7 @@ def test_check_retry_and_timeouts(nginx):
         "backoff": "200ms",
         "codes": list(range(400, 499)),
     }
-    timeouts = config.RouteTimeouts = {
+    timeouts: config.RouteTimeouts = {
         "request": "100ms",
     }
 

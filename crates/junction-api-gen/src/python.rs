@@ -1,5 +1,12 @@
 use askama::Template;
 
+// TODO: To make mypy happy, we have to make TypedDict keys optional. This
+// requires shaving some yaks around typing: we can use typing.NotRequired on
+// any individual field that's nullable (or has a default), but for python<3.11
+// that involves installing typing_extensions and some backport fun.
+//
+// See: https://peps.python.org/pep-0655/
+
 /// Generate Python type information for Junction API config.
 ///
 /// The generated code is suitable for saving as a .pyi stub file. See
@@ -22,6 +29,9 @@ pub fn generate(
         writeln!(w, "import {package}")?;
     }
     write!(w, "\n\n")?;
+
+    PyDef::duration().render(w)?;
+    writeln!(w)?;
 
     for item in items {
         for py_def in into_pydefs(item) {
@@ -62,6 +72,16 @@ impl PyDef {
             PyDef::Union(py_union) => py_union.render_into(w),
         }
     }
+
+    fn duration() -> Self {
+        PyDef::Union(PyUnion {
+            name: "Duration",
+            doc: Some(
+                "A duration expressed as a number of seconds or a string like '1h30m27s42ms'",
+            ),
+            types: vec![PyType::Str, PyType::Int, PyType::Float],
+        })
+    }
 }
 
 #[derive(Debug, Clone, Template)]
@@ -93,17 +113,23 @@ struct PyDict {
 
 #[derive(Debug, Template)]
 #[template(
-    source = "
+    source = r#"
 {{name}} =
 {%- for type in types -%}
     {{ type }} {% if !loop.last -%}|{%- endif %}
 {%- endfor -%}
-    ",
+{%- match doc -%}
+{%- when Some with (doc) %}
+"""{{ doc|doc_pad(4) }}"""
+{% when None %}
+{%- endmatch -%}
+    "#,
     ext = "py",
     escape = "none"
 )]
 struct PyUnion {
     name: &'static str,
+    doc: Option<&'static str>,
     types: Vec<PyType>,
 }
 
@@ -142,7 +168,11 @@ fn into_pydefs(item: junction_typeinfo::Item) -> Vec<PyDef> {
             }
 
             let types = variants.into_iter().map(|v| v.into()).collect();
-            defs.push(PyDef::Union(PyUnion { name, types }));
+            defs.push(PyDef::Union(PyUnion {
+                name,
+                types,
+                doc: None,
+            }));
         }
         junction_typeinfo::Kind::Object(name) => {
             defs.push(PyDef::TypedDict(PyDict {
@@ -179,16 +209,38 @@ impl From<junction_typeinfo::StructVariant> for PyDict {
 /// [junction_typeinfo::Kind]s into.
 #[derive(Debug, Clone)]
 enum PyType {
+    /// A Python string.
     Str,
+
+    /// A literal string. Can be used as a typehint.
     LiteralStr(&'static str),
+
+    /// A Python int.
     Int,
+
+    /// A Python float.
     Float,
+
+    /// A Python bool.
     Bool,
-    Timedelta,
+
+    /// A duration. Can be expressed as a string listing hours/minutes/seconds,
+    /// or as an number of seconds (int or float).
+    Duration,
+
+    /// A TypedDict with a name and fields.
     TypedDict(PyDict),
+
+    /// A Python `list` of items that all share a type.
     List(Box<PyType>),
+
+    /// A Python `tuple` of items.
     Tuple(Vec<PyType>),
+
+    /// A typing.Union of multiple types, used as a type hint.
     Union(&'static str, Vec<PyType>),
+
+    /// An object in this namespace with the given name.
     Object(&'static str),
 }
 
@@ -209,7 +261,7 @@ impl std::fmt::Display for PyType {
             PyType::Int => write!(f, "int"),
             PyType::Float => write!(f, "float"),
             PyType::Bool => write!(f, "bool"),
-            PyType::Timedelta => write!(f, "datetime.timedelta"),
+            PyType::Duration => write!(f, "Duration"),
             PyType::List(ty) => write!(f, "typing.List[{ty}]"),
             PyType::Tuple(py_types) => {
                 write!(f, "typing.Tuple[")?;
@@ -256,7 +308,7 @@ impl From<junction_typeinfo::Kind> for PyType {
             }
             junction_typeinfo::Kind::Array(kind) => Self::List(Box::new((*kind).into())),
             junction_typeinfo::Kind::Object(name) => Self::Object(name),
-            junction_typeinfo::Kind::Duration => Self::Timedelta,
+            junction_typeinfo::Kind::Duration => Self::Duration,
         }
     }
 }
