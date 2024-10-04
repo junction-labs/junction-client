@@ -34,13 +34,16 @@ dynamically pushing it out to clients.
   your control plane runs in. If you try something like
   `session.get("http://example.com")` it won't route.
 
-* Durations have to be specified  as a short string, like "1h20m30s". This is
-annoying, and should be gone shortly.
-
 * We're not automatically generating Python API documentation yet - we're
 betting on our examples and docstrings for now. The config API is fully
 represented and documented in [`config.py`][config-py] and you should get
 auto-complete and pop-up documentation in any editor that supports it.
+
+* We currently fail `mypy` type checking. We generate our config types in such
+a way that doesn't expose which fields are optional and which are required. We're
+still figuring out if we want to do dict-style config before we spend more time
+on making this better, so if you're someone who regularly uses `mypy` or have an
+opinion on dicts vs. classes, please reach out!
 
 [config-py]: https://github.com/junction-labs/junction-client/blob/main/junction-python/junction/config.py
 
