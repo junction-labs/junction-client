@@ -497,32 +497,66 @@ impl Serialize for Duration {
     }
 }
 
-struct DurationVisitor;
-
-impl<'de> Visitor<'de> for DurationVisitor {
-    type Value = Duration;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a GEP-2257 Duration as a string")
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        match Duration::from_str(value) {
-            Ok(s) => Ok(s),
-            Err(e) => Err(E::custom(format!("could not parse {}: {}", value, e))),
-        }
-    }
-}
-
 impl<'de> Deserialize<'de> for Duration {
     fn deserialize<D>(deserializer: D) -> Result<Duration, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_string(DurationVisitor)
+        // deserialize as either a String or number of seconds.
+        //
+        // https://serde.rs/string-or-struct.html
+        struct DurationVisitor;
+
+        impl<'de> Visitor<'de> for DurationVisitor {
+            type Value = Duration;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a GEP-2257 Duration as a string")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                match Duration::from_str(value) {
+                    Ok(s) => Ok(s),
+                    Err(e) => Err(E::custom(format!("could not parse {}: {}", value, e))),
+                }
+            }
+
+            fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                StdDuration::from_secs_f64(v)
+                    .try_into()
+                    .map_err(|msg| E::custom(format!("invalid duration: {msg}")))
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                StdDuration::from_secs(v)
+                    .try_into()
+                    .map_err(|msg| E::custom(format!("invalid duration: {msg}")))
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                let v: u64 = v
+                    .try_into()
+                    .map_err(|_| E::custom("Duration cannot be negative"))?;
+
+                StdDuration::from_secs(v)
+                    .try_into()
+                    .map_err(|msg| E::custom(format!("invalid duration: {msg}")))
+            }
+        }
+
+        deserializer.deserialize_any(DurationVisitor)
     }
 }
 
@@ -539,6 +573,54 @@ impl TryFrom<xds_api::pb::google::protobuf::Duration> for Duration {
 #[cfg(test)]
 mod test_duration {
     use super::*;
+
+    use serde_json;
+
+    #[test]
+    /// Duration should deserialize from strings, an int number of seconds, or a
+    /// float number of seconds.
+    fn test_duration_deserialize() {
+        #[derive(Debug, Deserialize, PartialEq, Eq)]
+        struct SomeValue {
+            string_duration: Duration,
+            float_duration: Duration,
+            int_duration: Duration,
+        }
+
+        let value = serde_json::json!({
+            "string_duration": "1h23m4s",
+            "float_duration": 1.234,
+            "int_duration": 1234,
+        });
+
+        assert_eq!(
+            serde_json::from_value::<SomeValue>(value).unwrap(),
+            SomeValue {
+                string_duration: Duration::new(4984, 0).unwrap(),
+                float_duration: Duration::new(1, 234 * 1_000_000).unwrap(),
+                int_duration: Duration::new(1234, 0).unwrap(),
+            }
+        );
+    }
+
+    #[test]
+    /// Duration should always serialize to the string representation.
+    fn test_duration_serialize() {
+        #[derive(Debug, Serialize, PartialEq, Eq)]
+        struct SomeValue {
+            duration: Duration,
+        }
+
+        assert_eq!(
+            serde_json::json!({
+                "duration": "1h23m4s",
+            }),
+            serde_json::to_value(SomeValue {
+                duration: "1h23m4s".parse().unwrap(),
+            })
+            .unwrap(),
+        );
+    }
 
     #[test]
     /// Test that the validation logic in `Duration`'s constructor method(s) correctly handles
