@@ -89,12 +89,20 @@ class PoolManager(urllib3.PoolManager):
             if endpoint.host:
                 kw2["headers"]["Host"] = endpoint.host
 
-            if not kw2.get("retries") and endpoint.retry_policy:
-                kw2["retries"] = urllib3.Retry(
-                    total=endpoint.retry_policy.attempts - 1,
-                    backoff_factor=endpoint.retry_policy.backoff,
-                    status_forcelist=endpoint.retry_policy.codes,
-                )
+            if endpoint.retry_policy:
+                # unfortunately requests always creates an object, so testing
+                # whether its a default means assuming a count of 0 is a
+                # default, although we add a check on the read value being false
+                # as a way to workaround when you really dont want 0 to be
+                # overridden
+                current = kw2.get("retries")
+                is_default = not current or (current.total == 0 and not current.read)
+                if is_default:
+                    kw2["retries"] = urllib3.Retry(
+                        total=endpoint.retry_policy.attempts - 1,
+                        backoff_factor=endpoint.retry_policy.backoff,
+                        status_forcelist=endpoint.retry_policy.codes,
+                    )
 
             if (
                 not kw2.get("timeout")

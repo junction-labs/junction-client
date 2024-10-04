@@ -1,7 +1,5 @@
-import os
 import typing
 
-import pytest
 from requests import Response
 from requests import Session as RequestsSession
 
@@ -16,30 +14,3 @@ def _responses_equal(a: Response, b: Response):
 
 def _sessions(url: str, **attrs) -> typing.List[RequestsSession]:
     return [cls() for cls in SESSION_CLASSES]
-
-
-@pytest.mark.skipif(
-    "JUNCTION_ADS_SERVER" not in os.environ,
-    reason="missing ADS server address",
-)
-def test_no_request_body():
-    url = "http://nginx.default.svc.cluster.local"
-    sessions = _sessions(url)
-    responses = [s.request("GET", url, allow_redirects=False) for s in sessions]
-
-    assert all(r.status_code == 200 for r in responses)
-    all(_responses_equal(responses[0], r) for r in responses)
-
-
-@pytest.mark.skipif(
-    "JUNCTION_ADS_SERVER" not in os.environ,
-    reason="missing ADS server address",
-)
-def test_loads_config():
-    s = JunctionSession()
-    resp = s.request("GET", "http://nginx.default.svc.cluster.local")
-    resp.raise_for_status()
-
-    # TODO: test that there's a backend config for nginx, once we actually stabilize
-    assert s.junction.dump_routes()
-    assert s.junction.dump_backends()

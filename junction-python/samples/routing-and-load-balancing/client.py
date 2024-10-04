@@ -19,10 +19,11 @@ def print_counters(counters):
     keys.sort()
     for key in keys:
         print(f"  {key} = {counters[key]}")
+    return counters
 
 
-# we get a little clever here, and use the same query_param we use to tell the server to send fail
-# codes to also do the route, so we demonstrate that too
+# we get a little clever here, and use the same query_param we use to tell the
+# server to send fail codes to also do the route, so we demonstrate that too
 def retry_sample(args):
     print_header(
         "Retry Test - 502's have retries configured and will succeed, 501s do not"
@@ -66,14 +67,19 @@ def retry_sample(args):
     default_backends: List[junction.config.Backend] = []
     session = junction.requests.Session(default_routes, default_backends)
 
+    results = []
     for code in [501, 502]:
         session.get(f"{args.base_url}/?fail_match={code}&fail_match_set_counter=2")
         counters = defaultdict(int)
         resp = session.get(f"{args.base_url}/?fail_match={code}")
         counters[resp.status_code] += 1
         print(f"For initial error code '{code}' actual response code counts are - ")
-        print_counters(counters)
+        results.append(print_counters(counters))
 
+    if args.validate:
+        assert len(results) == 2
+        assert results[0][501] == 1
+        assert results[1][200] == 1
     print("")
 
 
@@ -118,6 +124,7 @@ def path_match_sample(args):
     default_backends: List[junction.config.Backend] = []
     session = junction.requests.Session(default_routes, default_backends)
 
+    results = []
     for path in ["/index", "/feature-1/index"]:
         counters = defaultdict(int)
         for _ in range(200):
@@ -125,7 +132,21 @@ def path_match_sample(args):
             resp.raise_for_status()
             counters[resp.text] += 1
         print(f"For path '{path}' response body counts are - ")
-        print_counters(counters)
+        results.append(print_counters(counters))
+
+    if args.validate:
+        assert len(results) == 2
+        assert len(results[0]) == 3
+        for key, value in results[0].items():
+            assert value == 66 or value == 67
+        assert len(results[1]) == 4
+        for key, value in results[1].items():
+            # unlike round robin, split is non-deterministic, so need wide bars
+            # here
+            if "jct-http-server-feature-1" in key:
+                assert value > 40  # should be ~100
+            else:
+                assert value < 50  # should be ~ 33
     print("")
 
 
@@ -150,6 +171,7 @@ def ring_hash_sample(args):
     ]
     session = junction.requests.Session(default_routes, default_backends)
 
+    results = []
     for headers in [{}, {"USER": "user"}]:
         counters = defaultdict(int)
         for _ in range(200):
@@ -157,7 +179,14 @@ def ring_hash_sample(args):
             resp.raise_for_status()
             counters[resp.text] += 1
         print(f"With headers '{headers}' response body counts are - ")
-        print_counters(counters)
+        results.append(print_counters(counters))
+
+    if args.validate:
+        assert len(results) == 2
+        assert (
+            len(results[0]) == 3
+        )  # slightly racy, but with 200 attempts all 3 should see 1 call
+        assert len(results[1]) == 1
     print("")
 
 
@@ -186,6 +215,7 @@ def timeouts_sample(args):
     default_backends: List[junction.config.Backend] = []
     session = junction.requests.Session(default_routes, default_backends)
 
+    results = []
     for sleep_ms in [0, 100]:
         counters = defaultdict(int)
         try:
@@ -194,7 +224,13 @@ def timeouts_sample(args):
         except requests.exceptions.ReadTimeout:
             counters["exception"] += 1
         print(f"With server sleep time '{sleep_ms}'ms call result counts are - ")
-        print_counters(counters)
+        results.append(print_counters(counters))
+
+    ## below is just regression validation
+    if args.validate:
+        assert len(results) == 2
+        assert results[0]["success"] == 1
+        assert results[1]["exception"] == 1
     print("")
 
 
@@ -225,18 +261,16 @@ def urllib3_sample(args):
         default_backends=default_backends, default_routes=default_routes
     )
 
+    results = []
     for sleep_ms in [0, 100]:
         counters = defaultdict(int)
         try:
             http.urlopen("GET", f"{args.base_url}/?sleep_ms={sleep_ms}")
             counters["success"] += 1
-        except urllib3.exceptions.MaxRetryError:  # note, the exception differs!
+        except urllib3.exceptions.MaxRetryError:
             counters["exception"] += 1
         print(f"With server sleep time '{sleep_ms}'ms call result counts are - ")
-        myKeys = list(counters.keys())
-        myKeys.sort()
-        for key in myKeys:
-            print(f"  {key} = {counters[key]}")
+        results.append(print_counters(counters))
 
     # now show an override of timeout on the method call still works
     for sleep_ms in [0, 100]:
@@ -248,13 +282,20 @@ def urllib3_sample(args):
                 timeout=Timeout(connect=1000, read=1000),
             )
             counters["success"] += 1
-        except urllib3.exceptions.MaxRetryError:  # note, the exception differs!
+        except urllib3.exceptions.MaxRetryError:
             counters["exception"] += 1
         print(
             f"With server sleep time '{sleep_ms}'ms and a 1s override on call, call result counts are - "
         )
-        print_counters(counters)
+        results.append(print_counters(counters))
 
+    ## below is just regression validation
+    if args.validate:
+        assert len(results) == 4
+        assert results[0]["success"] == 1
+        assert results[1]["exception"] == 1
+        assert results[2]["success"] == 1
+        assert results[3]["success"] == 1
     print("")
 
 
@@ -277,6 +318,12 @@ if __name__ == "__main__":
         "--sample",
         default="all_samples",
         help="specific sample to run",
+    )
+
+    parser.add_argument(
+        "--validate",
+        action=argparse.BooleanOptionalAction,
+        help="whether to validate the results for regressions",
     )
 
     args = parser.parse_args()
