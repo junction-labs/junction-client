@@ -3,7 +3,7 @@ use crate::{
     xds::{self, AdsClient},
     Endpoint,
 };
-use junction_api_types::{
+use junction_api::{
     backend::Backend,
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
     shared::Target,

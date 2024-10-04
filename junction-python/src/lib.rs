@@ -1,4 +1,4 @@
-use junction_api_types::{backend::Backend, http::Route};
+use junction_api::{backend::Backend, http::Route};
 use junction_core::ResourceVersion;
 use once_cell::sync::Lazy;
 use pyo3::{
@@ -161,8 +161,8 @@ impl RetryPolicy {
     }
 }
 
-impl From<junction_api_types::http::RouteRetry> for RetryPolicy {
-    fn from(value: junction_api_types::http::RouteRetry) -> Self {
+impl From<junction_api::http::RouteRetry> for RetryPolicy {
+    fn from(value: junction_api::http::RouteRetry) -> Self {
         Self {
             codes: value.codes,
             attempts: value.attempts.unwrap_or(1),
@@ -182,8 +182,8 @@ impl TimeoutPolicy {
     }
 }
 
-impl From<junction_api_types::http::RouteTimeouts> for TimeoutPolicy {
-    fn from(value: junction_api_types::http::RouteTimeouts) -> Self {
+impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
+    fn from(value: junction_api::http::RouteTimeouts) -> Self {
         Self {
             backend_request: value
                 .backend_request

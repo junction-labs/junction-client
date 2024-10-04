@@ -13,7 +13,7 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 http = { workspace = true }
 junction-core = { workspace = true }
-junction-api-types = { workspace = true }
+junction-api = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -24,5 +24,5 @@ pythonize = "0.21"
 
 [build-dependencies]
 pyo3-build-config = "0.22"
-junction-api-types = { workspace = true, features = ["typeinfo"] }
+junction-api = { workspace = true, features = ["typeinfo"] }
 junction-typeinfo = { workspace = true }

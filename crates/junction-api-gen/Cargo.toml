@@ -12,4 +12,4 @@ once_cell = { workspace = true }
 textwrap = { version = "0.16", features = ["smawk"] }
 
 junction-typeinfo = { workspace = true }
-junction-api-types = { workspace = true, features = ["typeinfo"] }
+junction-api = { workspace = true, features = ["typeinfo"] }

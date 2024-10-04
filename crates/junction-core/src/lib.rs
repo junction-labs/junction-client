@@ -24,8 +24,8 @@ mod xds;
 
 pub use client::Client;
 use config::StaticConfig;
-use junction_api_types::http::Route;
-use junction_api_types::shared::Target;
+use junction_api::http::Route;
+use junction_api::shared::Target;
 pub use xds::{ResourceVersion, XdsConfig};
 
 /// Check route resolution.
