@@ -1,0 +1,18 @@
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+env:
+  KUBECONFIG: k3s.yaml
+jobs:
+  k3s:
+    name: k3s
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout code
+        uses: actions/checkout@master
+      - name: k3s
+        uses: yellowmegaman/k3s-gha@master
+      - name: try to use kubeconfig
+        run: kubectl get ns
