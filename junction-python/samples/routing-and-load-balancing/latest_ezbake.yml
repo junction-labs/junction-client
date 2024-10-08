@@ -1,0 +1,86 @@
+---
+kind: Namespace
+apiVersion: v1
+metadata:
+  name: junction
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: junction-account
+  namespace: junction
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: junction-role
+  namespace: junction
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "watch", "list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes", "grpcroutes"]
+    verbs: ["get", "watch", "list"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "watch", "list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes/status", "grpcroutes/status"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: junction-role-binding
+  namespace: junction
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: junction-role
+subjects:
+  - kind: ServiceAccount
+    name: junction-account
+    namespace: junction
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ezbake
+  namespace: junction
+  labels:
+    app: ezbake
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ezbake
+  template:
+    metadata:
+      labels:
+        app: ezbake
+    spec:
+      serviceAccountName: junction-account
+      containers:
+        - name: ezbake
+          command: ["./ezbake"]
+          args: ["--all-namespaces"]
+          image: ghcr.io/junction-labs/junction-labs/ezbake:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RUST_LOG
+              value: "ezbake=trace,warn"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ezbake
+  namespace: junction
+spec:
+  type: ClusterIP
+  selector:
+    app: ezbake
+  ports:
+    - port: 8008
+      targetPort: 8008
+      name: grpc

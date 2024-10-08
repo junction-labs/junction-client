@@ -1,6 +1,6 @@
 use std::env;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use xshell::{cmd, Shell};
 
 fn main() -> anyhow::Result<()> {
@@ -12,9 +12,9 @@ fn main() -> anyhow::Result<()> {
     match &args.command {
         Commands::PythonClean => python::clean(&sh, &venv),
         Commands::PythonBuild {
-            skip_maturin,
+            maturin,
             skip_stubs,
-        } => python::build(&sh, &venv, !*skip_maturin, !*skip_stubs),
+        } => python::build(&sh, &venv, maturin, !*skip_stubs),
         Commands::PythonLint { fix } => python::lint(&sh, &venv, *fix),
         Commands::PythonTest => python::test(&sh, &venv),
     }
@@ -27,6 +27,14 @@ struct Args {
     command: Commands,
 }
 
+#[derive(ValueEnum, Clone, Default)]
+enum MaturinOption {
+    None,
+    #[default]
+    Develop,
+    Build,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Subcommand)]
 enum Commands {
@@ -34,8 +42,8 @@ enum Commands {
     PythonBuild {
         /// Skip rebuilding the junction-python wheel. Useful for working on
         /// generating config type information.
-        #[clap(long)]
-        skip_maturin: bool,
+        #[clap(long, default_value_t, value_enum)]
+        maturin: MaturinOption,
 
         /// Skip regenerating API stubs. Useful if you're not changing Junction
         /// API types and want to skip calls to `ruff`.
@@ -68,11 +76,18 @@ mod python {
         Ok(())
     }
 
-    pub(super) fn build(sh: &Shell, venv: &str, maturin: bool, stubs: bool) -> anyhow::Result<()> {
+    pub(super) fn build(
+        sh: &Shell,
+        venv: &str,
+        maturin: &MaturinOption,
+        stubs: bool,
+    ) -> anyhow::Result<()> {
         ensure_venv(sh, venv)?;
 
-        if maturin {
-            maturin_build(sh, venv)?;
+        match maturin {
+            MaturinOption::Develop => maturin_develop(sh, venv)?,
+            MaturinOption::Build => maturin_build(sh, venv)?,
+            MaturinOption::None => (),
         }
         if stubs {
             generate_typing_hints(sh, venv)?;
@@ -81,12 +96,22 @@ mod python {
         Ok(())
     }
 
-    fn maturin_build(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+    fn maturin_develop(sh: &Shell, venv: &str) -> anyhow::Result<()> {
         cmd!(
         sh,
         "{venv}/bin/maturin develop -m junction-python/Cargo.toml --extras=test --features extension-module"
     )
     .run()?;
+
+        Ok(())
+    }
+
+    fn maturin_build(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        cmd!(
+            sh,
+            "{venv}/bin/maturin build -m junction-python/Cargo.toml --features extension-module"
+        )
+        .run()?;
 
         Ok(())
     }
@@ -112,7 +137,7 @@ mod python {
 
     pub(super) fn test(sh: &Shell, venv: &str) -> anyhow::Result<()> {
         ensure_venv(sh, venv)?;
-        build(sh, venv, true, true)?;
+        build(sh, venv, &MaturinOption::Develop, true)?;
 
         cmd!(sh, "{venv}/bin/pytest").run()?;
 

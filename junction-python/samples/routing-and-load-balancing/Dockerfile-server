@@ -1,0 +1,4 @@
+FROM python:3.12
+
+ADD junction-python/samples/routing-and-load-balancing/jct_http_server.py .
+CMD ["python", "./jct_http_server.py"]

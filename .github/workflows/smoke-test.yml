@@ -1,10 +1,26 @@
+name: junction-python smoke test
+
 on:
   push:
-    branches:
-      - master
+    branches: [ "main" ]
+    paths:
+      - "junction-python/**"
+      - "crates/**"
+      - ".github/workflows/smoke-test.yml"
+
   pull_request:
+    branches: [ "main" ]
+    paths:
+      - "junction-python/**"
+      - "crates/**"
+      - ".github/workflows/smoke-test.yml"
+
 env:
   KUBECONFIG: k3s.yaml
+  CARGO_TERM_COLOR: always
+  rust_stable: stable
+  rust_min: 1.79
+
 jobs:
   k3s:
     name: k3s
@@ -14,5 +30,16 @@ jobs:
         uses: actions/checkout@master
       - name: k3s
         uses: yellowmegaman/k3s-gha@master
-      - name: try to use kubeconfig
-        run: kubectl get ns
+      - name: set up ezbake and server
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
+          kubectl apply -f junction-python/samples/routing-and-load-balancing/latest_ezbake.yml
+          docker build --tag jct_http_server --file junction-python/samples/routing-and-load-balancing/Dockerfile-server --load .
+          kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml 
+          kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml 
+      - name: build test docker
+        run: |
+            docker build --tag jct_client --file ./junction-python/samples/routing-and-load-balancing/Dockerfile-client --load .
+      - name: run test
+        run: |
+            kubectl run jct-client --image=jct_client:latest --env="JUNCTION_ADS_SERVER=grpc://ezbake.junction.svc.cluster.local:8008" --restart=Never --image-pull-policy=IfNotPresent --attach --rm

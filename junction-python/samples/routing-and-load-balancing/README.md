@@ -18,7 +18,7 @@ source .venv/bin/activate
 
 ## Build Server docker image and deploy it
 ```bash
-docker build --tag jct_http_server --file junction-python/samples/routing-and-load-balancing/Dockerfile --load junction-python/samples/routing-and-load-balancing/
+docker build --tag jct_http_server --file junction-python/samples/routing-and-load-balancing/Dockerfile-server --load .
 kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml 
 kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml 
 ```
