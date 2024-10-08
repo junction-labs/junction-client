@@ -1,4 +1,4 @@
-name: junction-python smoke test
+name: smoke test
 
 on:
   push:
