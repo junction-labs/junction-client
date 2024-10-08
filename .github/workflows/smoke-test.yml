@@ -23,7 +23,7 @@ env:
 jobs:
   smoke-test:
     runs-on: ubuntu-latest
-    continue-on-error: true
+    
     steps:
       - name: checkout code
         uses: actions/checkout@master
@@ -48,6 +48,7 @@ jobs:
           docker build --tag jct_client:latest --file ./junction-python/samples/routing-and-load-balancing/Dockerfile-client .
           k3d image import jct_client:latest -c test-cluster-1
       - name: run test
+        continue-on-error: true
         run: |
           kubectl run jct-client --image=jct_client:latest --restart=Never --attach
       - name: Debug State
