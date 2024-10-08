@@ -1,9 +1,8 @@
 use crate::shared::{
-    Duration, Fraction, PortNumber, PreciseHostname, Regex, SessionAffinity, Target, WeightedTarget,
+    Duration, Fraction, PortNumber, PreciseHostname, Regex, Target, WeightedTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
@@ -20,19 +19,49 @@ pub struct Route {
 }
 
 impl Route {
-    // FIXME: impl Default and make sure this passes on it
+    /// Create a trivial route that passes all traffic for a target directly to
+    /// the same backend target.
+    pub fn passthrough_route(target: Target) -> Route {
+        let backend = WeightedTarget {
+            weight: 1,
+            target: target.clone(),
+        };
+        Route {
+            target,
+            rules: vec![RouteRule {
+                matches: vec![RouteMatch {
+                    path: Some(PathMatch::empty_prefix()),
+                    ..Default::default()
+                }],
+                backends: vec![backend],
+                ..Default::default()
+            }],
+        }
+    }
+
     #[doc(hidden)]
-    pub fn is_default_route(&self) -> bool {
-        self.rules.len() == 1
-            && self.rules[0].backends.len() == 1
-            && self.rules[0].matches.len() == 1
-            && self.rules[0].matches[0].method.is_none()
-            && self.rules[0].matches[0].headers.is_empty()
-            && self.rules[0].matches[0].query_params.is_empty()
-            && self.rules[0].matches[0].path
-                == Some(PathMatch::Prefix {
-                    value: "".to_string(),
-                })
+    pub fn is_passthrough_route(&self) -> bool {
+        let rule = match &self.rules.as_slice() {
+            &[rule] => rule,
+            _ => return false,
+        };
+
+        let route_match = match &rule.matches.as_slice() {
+            &[route_match] => route_match,
+            _ => return false,
+        };
+
+        // one backend
+        rule.backends.len() == 1
+            // nothing else set
+            && rule.filters.is_empty()
+            && rule.timeouts.is_none()
+            && rule.retry.is_none()
+            // route_match is the empty path prefix match
+            && route_match == &RouteMatch {
+                path: Some(PathMatch::empty_prefix()),
+                ..Default::default()
+            }
     }
 }
 
@@ -91,14 +120,6 @@ pub struct RouteRule {
     // The timeouts set on any request that matches route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeouts: Option<RouteTimeouts>,
-
-    #[doc(hidden)]
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "sessionAffinity"
-    )]
-    pub session_affinity: Option<SessionAffinity>,
 
     /// How to retry any requests to this route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,6 +226,18 @@ pub enum PathMatch {
 
     #[serde(untagged)]
     Exact { value: String },
+}
+
+impl PathMatch {
+    /// Return a [PathMatch] that matches the empty prefix.
+    ///
+    /// The empty prefix matches every path, so any matcher using this will
+    /// always return `true`.
+    pub fn empty_prefix() -> Self {
+        Self::Prefix {
+            value: String::new(),
+        }
+    }
 }
 
 /// The name of an HTTP header.
@@ -544,225 +577,6 @@ pub struct RouteRetry {
     pub backoff: Option<Duration>,
 }
 
-///
-/// Now get into xDS deserialization for the above
-///
-use xds_api::pb::envoy::{
-    config::route::v3::{self as xds_route, query_parameter_matcher::QueryParameterMatchSpecifier},
-    r#type::matcher::v3::string_matcher::MatchPattern,
-};
-
-impl Route {
-    pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, crate::xds::Error> {
-        let Some(target) = Target::from_listener_xds_name(&xds.name) else {
-            return Err(crate::xds::Error::InvalidXds {
-                resource_type: "Listener",
-                resource_name: xds.name.clone(),
-                message: "Unable to parse name".to_string(),
-            });
-        };
-        let mut rules = Vec::new();
-        for virtual_host in &xds.virtual_hosts {
-            // todo: as you see, at the moment we totally quash virtual_host and its domains. When
-            // we bring them back for gateways it means is we will need to return a vector of
-            // routes, as the rules are within them
-            for route in &virtual_host.routes {
-                rules.push(RouteRule::from_xds(route)?);
-            }
-        }
-        Ok(Route { target, rules })
-    }
-}
-
-impl RouteRule {
-    pub fn from_xds(route: &xds_route::Route) -> Result<Self, crate::xds::Error> {
-        let Some(matches) = route.r#match.as_ref().and_then(RouteMatch::from_xds) else {
-            return Err(crate::xds::Error::InvalidXds {
-                resource_type: "Route",
-                resource_name: route.name.to_string(),
-                message: "Unable to parse route".to_string(),
-            });
-        };
-        let Some(xds_route::route::Action::Route(action)) = route.action.as_ref() else {
-            return Err(crate::xds::Error::InvalidXds {
-                resource_type: "Route",
-                resource_name: route.name.to_string(),
-                message: "Unable to parse route action".to_string(),
-            });
-        };
-
-        let timeouts: Option<RouteTimeouts> = RouteTimeouts::from_xds(action);
-
-        let retry = action.retry_policy.as_ref().map(RouteRetry::from_xds);
-
-        let session_affinity = SessionAffinity::from_xds(&action.hash_policy);
-
-        let backends = WeightedTarget::from_xds(action.cluster_specifier.as_ref())?;
-
-        Ok(RouteRule {
-            matches: vec![matches],
-            retry,
-            filters: vec![],
-            session_affinity,
-            timeouts,
-            backends,
-        })
-    }
-}
-
-impl RouteTimeouts {
-    pub fn from_xds(r: &xds_route::RouteAction) -> Option<Self> {
-        let request = r.timeout.clone().map(|x| x.try_into().unwrap());
-        let mut backend_request: Option<Duration> = None;
-        if let Some(r1) = &r.retry_policy {
-            backend_request = r1.per_try_timeout.clone().map(|x| x.try_into().unwrap());
-        }
-        if request.is_some() || backend_request.is_some() {
-            Some(RouteTimeouts {
-                backend_request,
-                request,
-            })
-        } else {
-            None
-        }
-    }
-}
-
-impl RouteMatch {
-    pub fn from_xds(r: &xds_route::RouteMatch) -> Option<Self> {
-        let path = r.path_specifier.as_ref().and_then(PathMatch::from_xds);
-
-        // with xds, any method match is converted into a match on a ":method" header. it does not
-        // have a way of specifying a method match otherwise. to keep the "before and after" xDS as
-        // similar as possible then we pull this out of the headers list if it exists
-        let mut method: Option<Method> = None;
-        let mut headers = vec![];
-        for header in &r.headers {
-            let Some(header_match) = HeaderMatch::from_xds(header) else {
-                continue;
-            };
-
-            match header_match {
-                HeaderMatch::Exact { name, value } if name == ":method" => {
-                    method = Some(value);
-                }
-                _ => {
-                    headers.push(header_match);
-                }
-            }
-        }
-
-        let query_params = r
-            .query_parameters
-            .iter()
-            .filter_map(QueryParamMatch::from_xds)
-            .collect();
-
-        Some(RouteMatch {
-            headers,
-            method,
-            path,
-            query_params,
-        })
-    }
-}
-
-fn parse_xds_regex(p: &xds_api::pb::envoy::r#type::matcher::v3::RegexMatcher) -> Option<Regex> {
-    //FIXME: check the regex type
-    match Regex::from_str(&p.regex) {
-        Ok(e) => Some(e),
-        Err(_) => None, //FIXME: log/record we can't parse the regex
-    }
-}
-
-impl QueryParamMatch {
-    pub fn from_xds(matcher: &xds_route::QueryParameterMatcher) -> Option<Self> {
-        let name = matcher.name.clone();
-        match matcher.query_parameter_match_specifier.as_ref()? {
-            QueryParameterMatchSpecifier::StringMatch(s) => match s.match_pattern.as_ref() {
-                Some(MatchPattern::Exact(s)) => Some(QueryParamMatch::Exact {
-                    name,
-                    value: s.clone(),
-                }),
-                Some(MatchPattern::SafeRegex(pfx)) => Some(QueryParamMatch::RegularExpression {
-                    name,
-                    value: parse_xds_regex(pfx)?,
-                }),
-                Some(_) | None => {
-                    //fixme: raise an error that config is being thrown away
-                    None
-                }
-            },
-            _ => {
-                // FIXME: log/record that we are throwing away config
-                None
-            }
-        }
-    }
-}
-
-impl HeaderMatch {
-    fn from_xds(header_matcher: &xds_route::HeaderMatcher) -> Option<Self> {
-        let name = header_matcher.name.clone();
-        match header_matcher.header_match_specifier.as_ref()? {
-            xds_route::header_matcher::HeaderMatchSpecifier::ExactMatch(value) => {
-                Some(HeaderMatch::Exact {
-                    name,
-                    value: value.clone(),
-                })
-            }
-            xds_route::header_matcher::HeaderMatchSpecifier::SafeRegexMatch(regex) => {
-                Some(HeaderMatch::RegularExpression {
-                    name,
-                    value: parse_xds_regex(regex)?,
-                })
-            }
-            _ => {
-                // FIXME: log/record that we are throwing away config
-                None
-            }
-        }
-    }
-}
-
-impl PathMatch {
-    fn from_xds(path_spec: &xds_route::route_match::PathSpecifier) -> Option<Self> {
-        match path_spec {
-            xds_route::route_match::PathSpecifier::Prefix(p) => {
-                Some(PathMatch::Prefix { value: p.clone() })
-            }
-            xds_route::route_match::PathSpecifier::Path(p) => {
-                Some(PathMatch::Exact { value: p.clone() })
-            }
-            xds_route::route_match::PathSpecifier::SafeRegex(p) => {
-                Some(PathMatch::RegularExpression {
-                    value: parse_xds_regex(p)?,
-                })
-            }
-            _ => {
-                // FIXME: log/record that we are throwing away config
-                None
-            }
-        }
-    }
-}
-
-impl RouteRetry {
-    pub fn from_xds(r: &xds_route::RetryPolicy) -> Self {
-        let codes = r.retriable_status_codes.clone();
-        let attempts = Some(1 + r.num_retries.clone().map_or(0, |v| v.into()));
-        let backoff = r
-            .retry_back_off
-            .as_ref()
-            .and_then(|r2| r2.base_interval.clone().map(|x| x.try_into().unwrap()));
-        Self {
-            codes,
-            attempts,
-            backoff,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -770,14 +584,20 @@ mod tests {
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
-    use super::{Route, RouteRetry};
+    use super::*;
     use crate::{
-        http::{HeaderMatch, RouteRule, SessionAffinity},
-        shared::{
-            Regex, ServiceTarget, SessionAffinityHashParam, SessionAffinityHashParamType, Target,
-            WeightedTarget,
-        },
+        http::{HeaderMatch, RouteRule},
+        shared::{DNSTarget, Regex, ServiceTarget, Target, WeightedTarget},
     };
+
+    #[test]
+    fn test_passthrough_route() {
+        let route = Route::passthrough_route(Target::DNS(DNSTarget {
+            hostname: "example.com".to_string(),
+            port: None,
+        }));
+        assert!(route.is_passthrough_route())
+    }
 
     #[test]
     fn test_header_matcher() {
@@ -876,7 +696,6 @@ mod tests {
                     matches: vec![],
                     filters: vec![],
                     timeouts: None,
-                    session_affinity: None,
                     retry: None,
                     backends: vec![WeightedTarget {
                         target: Target::Service(ServiceTarget {
@@ -901,34 +720,6 @@ mod tests {
                 }
             ]
         }));
-    }
-
-    #[test]
-    fn session_affinity() {
-        assert_deserialize(
-            json!({
-                "hashParams": [
-                    {"type": "Header", "name": "x-foo"},
-                    {"type": "Header", "name": "x-foo2", "terminal": true}
-                    ],
-            }),
-            SessionAffinity {
-                hash_params: vec![
-                    SessionAffinityHashParam {
-                        matcher: SessionAffinityHashParamType::Header {
-                            name: "x-foo".to_string(),
-                        },
-                        terminal: false,
-                    },
-                    SessionAffinityHashParam {
-                        matcher: SessionAffinityHashParamType::Header {
-                            name: "x-foo2".to_string(),
-                        },
-                        terminal: true,
-                    },
-                ],
-            },
-        );
     }
 
     fn assert_deserialize<T: DeserializeOwned + PartialEq + std::fmt::Debug>(

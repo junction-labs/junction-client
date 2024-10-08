@@ -1,15 +1,15 @@
-/// An error that occurred while handling an XDS message.
-///
-/// These errors are built while decoding, validating, and transforming XDS and may be exposed to
-/// clients via debug outputs or ADS servers via XDS NACKs.
-#[derive(Clone, Debug, thiserror::Error)]
-// TODO: unsupported xds as a variant? TODO: might be nice to include some constructors that do type
-// URL things with type magic
-pub enum Error {
-    #[error("invalid xds: {resource_name} '{resource_type}': {message}")]
-    InvalidXds {
-        resource_type: &'static str,
-        resource_name: String,
-        message: String,
-    },
+mod backend;
+mod http;
+mod shared;
+
+use xds_api::pb::envoy::config::core::v3 as xds_core;
+
+pub(crate) fn ads_config_source() -> xds_core::ConfigSource {
+    xds_core::ConfigSource {
+        config_source_specifier: Some(xds_core::config_source::ConfigSourceSpecifier::Ads(
+            xds_core::AggregatedConfigSource {},
+        )),
+        resource_api_version: xds_core::ApiVersion::V3 as i32,
+        ..Default::default()
+    }
 }

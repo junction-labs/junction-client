@@ -6,8 +6,11 @@ use crate::xds::ResourceType;
 use xds_api::pb::{
     envoy::{
         config::{
-            cluster::v3 as xds_cluster, core::v3 as xds_core, endpoint::v3 as xds_endpoint,
-            listener::v3 as xds_listener, route::v3 as xds_route,
+            cluster::v3::{self as xds_cluster, cluster::RingHashLbConfig},
+            core::v3 as xds_core,
+            endpoint::v3 as xds_endpoint,
+            listener::v3 as xds_listener,
+            route::v3::{self as xds_route, route_action::hash_policy::Header},
         },
         service::discovery::v3::{DiscoveryRequest, DiscoveryResponse},
     },
@@ -43,7 +46,10 @@ pub(crate) use vhost;
 
 macro_rules! cluster {
     (eds $cluster_name:expr) => {{
-        crate::xds::test::cluster_eds($cluster_name)
+        crate::xds::test::cluster_eds($cluster_name, None)
+    }};
+    (ring_hash eds $cluster_name:expr) => {{
+        crate::xds::test::cluster_eds($cluster_name, Some(xds_cluster::cluster::LbPolicy::RingHash))
     }};
     (inline $cluster_name:expr => { $($region:expr => [$($addr:expr),*]),* }) => {{
         let cla = crate::xds::test::cluster_load_assignment($cluster_name, vec![$(
@@ -87,26 +93,29 @@ pub(crate) use route_config;
 
 macro_rules! route {
     (default $cluster:expr) => {{
-        crate::xds::test::route!(_INTERNAL path Some("/"), header None => $cluster)
+        crate::xds::test::route!(_INTERNAL path Some("/"), ring_hash None, header None => $cluster)
+    }};
+    (default ring_hash = $header:expr, $cluster:expr) => {{
+        crate::xds::test::route!(_INTERNAL path Some("/"), ring_hash Some($header), header None => $cluster)
     }};
     (header $header_name:expr => $cluster:expr) => {{
-        crate::xds::test::route!(_INTERNAL path None, header Some($header_name) => $cluster)
+        crate::xds::test::route!(_INTERNAL path None, ring_hash None, header Some($header_name) => $cluster)
     }};
     (path $path:expr => $cluster:expr) => {{
         crate::xds::test::route!(_INTERNAL path Some($path), header None => $cluster)
     }};
-    (_INTERNAL path $path:expr, header $header_name:expr => $cluster:expr) => {
-        crate::xds::test::route_to_cluster($path, $header_name, $cluster)
+    (_INTERNAL path $path:expr, ring_hash $hash_header:expr, header $header_name:expr => $cluster:expr) => {
+        crate::xds::test::route_to_cluster($path, $hash_header, $header_name, $cluster)
     };
 }
 
 pub(crate) use route;
 
 macro_rules! req {
-    (t = $ty:expr, rs = $names:expr) => {
+    (t = $ty:expr, rs = $names:expr $(,)*) => {
         crate::xds::test::req!(t = $ty, v = "", n = "", rs = $names)
     };
-    (t = $r:expr, v = $v:expr, n = $n:expr, rs = $names:expr) => {{
+    (t = $r:expr, v = $v:expr, n = $n:expr, rs = $names:expr $(,)*) => {{
         crate::xds::test::discovery_request($r, $v, $n, $names)
     }};
 }
@@ -214,7 +223,8 @@ pub fn api_listener_inline_routes(
 
 pub fn route_to_cluster(
     path: Option<&str>,
-    header_name: Option<&str>,
+    hash_header: Option<&str>,
+    match_header: Option<&str>,
     cluster_name: &str,
 ) -> xds_route::Route {
     let mut route_match = xds_route::RouteMatch {
@@ -227,7 +237,7 @@ pub fn route_to_cluster(
         ));
     }
 
-    if let Some(header_name) = header_name {
+    if let Some(header_name) = match_header {
         let header_matcher = xds_route::HeaderMatcher {
             name: header_name.to_string(),
             header_match_specifier: Some(
@@ -238,7 +248,23 @@ pub fn route_to_cluster(
         route_match.headers = vec![header_matcher];
     }
 
+    let hash_policy = hash_header
+        .map(|header_name| {
+            let hash_policy = xds_route::route_action::HashPolicy {
+                policy_specifier: Some(
+                    xds_route::route_action::hash_policy::PolicySpecifier::Header(Header {
+                        header_name: header_name.to_string(),
+                        regex_rewrite: None,
+                    }),
+                ),
+                terminal: true,
+            };
+            vec![hash_policy]
+        })
+        .unwrap_or_default();
+
     let action = xds_route::route::Action::Route(xds_route::RouteAction {
+        hash_policy,
         cluster_specifier: Some(xds_route::route_action::ClusterSpecifier::Cluster(
             cluster_name.to_string(),
         )),
@@ -264,9 +290,24 @@ pub fn virtual_host(
     }
 }
 
-pub fn cluster_eds(name: &'static str) -> xds_cluster::Cluster {
+pub fn cluster_eds(
+    name: &'static str,
+    lb_policy: Option<xds_cluster::cluster::LbPolicy>,
+) -> xds_cluster::Cluster {
+    let (lb_policy, lb_config) = match lb_policy {
+        Some(xds_cluster::cluster::LbPolicy::RingHash) => (
+            xds_cluster::cluster::LbPolicy::RingHash,
+            Some(xds_cluster::cluster::LbConfig::RingHashLbConfig(
+                RingHashLbConfig::default(),
+            )),
+        ),
+        _ => (xds_cluster::cluster::LbPolicy::RoundRobin, None),
+    };
+
     xds_cluster::Cluster {
         name: name.to_string(),
+        lb_policy: lb_policy.into(),
+        lb_config,
         cluster_discovery_type: Some(xds_cluster::cluster::ClusterDiscoveryType::Type(
             xds_cluster::cluster::DiscoveryType::Eds as i32,
         )),
