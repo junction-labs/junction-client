@@ -1,21 +1,15 @@
+## We don't do any of the clever incremtal stuff as it makes
+## the initial build take 1 minute longer, and the major purpose
+## of this container is in a github action where its always an 
+## initial build
+
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
 RUN apt update
 RUN apt install -y python3 python3-pip python3.11-venv python-is-python3
 RUN apt install -y 
 
-FROM chef AS planner
-COPY ./junction-python ./junction-python
-COPY ./xtask ./xtask
-COPY ./Cargo.toml ./Cargo.toml
-COPY ./Cargo.lock ./Cargo.lock
-COPY ./crates ./crates
-COPY ./.cargo ./.cargo
-RUN cargo chef prepare --recipe-path recipe.json
-
 FROM chef AS builder 
-COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
 COPY ./junction-python ./junction-python
 COPY ./xtask ./xtask
 COPY ./Cargo.toml ./Cargo.toml
