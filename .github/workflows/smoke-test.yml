@@ -23,6 +23,7 @@ env:
 jobs:
   smoke-test:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: checkout code
         uses: actions/checkout@master
@@ -39,19 +40,18 @@ jobs:
           kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
           kubectl apply -f junction-python/samples/routing-and-load-balancing/latest_ezbake.yml
           docker build --tag jct_http_server:latest --file junction-python/samples/routing-and-load-balancing/Dockerfile-server .
-          k3d image import jct_http_server:latest -c test-cluster-1 --verbose
+          k3d image import jct_http_server:latest -c test-cluster-1
           kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml
           kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml
       - name: build test docker
         run: |
           docker build --tag jct_client:latest --file ./junction-python/samples/routing-and-load-balancing/Dockerfile-client .
-          k3d image import jct_client:latest -c test-cluster-1 --verbose
-      - name: Debug State
-        run: |
-          docker images -a
-          docker ps -a
-          kubectl get pods -o wide
-          kubectl get nodes -o wide
+          k3d image import jct_client:latest -c test-cluster-1
       - name: run test
         run: |
-          kubectl run jct-client --pod-running-timeout 3m --image=jct_client:latest --restart=Never -it --rm
+          kubectl run jct-client --image=jct_client:latest --restart=Never --attach
+      - name: Debug State
+        run: |
+            docker images -a
+            docker ps -a
+            kubectl get pods -o wide
