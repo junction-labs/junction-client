@@ -26,34 +26,23 @@ jobs:
     steps:
       - name: checkout code
         uses: actions/checkout@master
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: "Create single k3d Cluster with imported Registry"
-        uses: AbsaOSS/k3d-action@v2
+      - name: k3s
+        uses: debianmaster/actions-k3s@master
+        id: k3s
         with:
-          cluster-name: test-cluster-1
-          args: >-
-            --agents 5
-            --no-lb
-            --k3s-arg "--no-deploy=traefik,servicelb,metrics-server@server:*"
-
+          version: 'latest'
       - name: set up ezbake and server
         run: |
           kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
           kubectl apply -f junction-python/samples/routing-and-load-balancing/latest_ezbake.yml
-          docker build --tag jct_http_server/latest --file junction-python/samples/routing-and-load-balancing/Dockerfile-server --load .
-          k3d image import jct_http_server/latest -c test-cluster-1
-
-          kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml 
-          kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml 
-
+          docker build --tag jct_http_server:latest --file junction-python/samples/routing-and-load-balancing/Dockerfile-server --load .
+          kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml
+          kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml
       - name: build test docker
         run: |
-            docker build --tag jct_client/latest --file ./junction-python/samples/routing-and-load-balancing/Dockerfile-client --load .
-            k3d image import jct_client/latest -c test-cluster-1
-
+            docker build --tag jct_client:latest --file ./junction-python/samples/routing-and-load-balancing/Dockerfile-client --load .
       - name: run test
         run: |
             kubectl run jct-client --image=jct_client:latest --env="JUNCTION_ADS_SERVER=grpc://ezbake.junction.svc.cluster.local:8008" --restart=Never --image-pull-policy=IfNotPresent --attach --rm
