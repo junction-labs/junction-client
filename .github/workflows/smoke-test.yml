@@ -31,7 +31,7 @@ jobs:
         with:
           cluster-name: test-cluster-1
           args: >-
-            --agents 3
+            --agents 1
             --no-lb
             --k3s-arg "--no-deploy=traefik,servicelb,metrics-server@server:*"
       - name: set up ezbake and server
@@ -46,13 +46,11 @@ jobs:
         run: |
             docker build --tag jct_client:latest --file ./junction-python/samples/routing-and-load-balancing/Dockerfile-client .
             k3d image import jct_client:latest -c test-cluster-1 --verbose
-      - name: run test
-        run: |
-            kubectl run jct-client --image=jct_client:latest --env="JUNCTION_ADS_SERVER=grpc://ezbake.junction.svc.cluster.local:8008" --restart=Never -it --rm
-      - name: Nodes
+      - name: Debug State
         run: |
             docker ps -a
-            kubectl config use-context k3d-test-cluster-1
+            kubectl get pods -o wide
             kubectl get nodes -o wide
-      - name: Network
-        run: docker network inspect k3d-test-cluster-1
+      - name: run test
+        run: |
+            kubectl run jct-client --image=jct_client:latest --restart=Never -it --rm
