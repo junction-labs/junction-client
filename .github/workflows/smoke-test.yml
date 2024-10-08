@@ -30,7 +30,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: k3s
-        uses: yellowmegaman/k3s-gha@master
+        uses: debianmaster/actions-k3s@master
+        id: k3s
+        with:
+          version: 'latest'
       - name: set up ezbake and server
         run: |
           kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
