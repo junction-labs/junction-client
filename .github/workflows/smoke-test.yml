@@ -50,7 +50,7 @@ jobs:
       - name: run test
         continue-on-error: true
         run: |
-          kubectl run jct-client --image=jct_client:latest --restart=Never --attach
+          kubectl run jct-client --image=jct_client:latest --image-pull-policy=IfNotPresent --restart=Never --attach
       - name: Debug State
         run: |
             docker images -a
