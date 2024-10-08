@@ -44,13 +44,14 @@ jobs:
           kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml
       - name: build test docker
         run: |
-            docker build --tag jct_client:latest --file ./junction-python/samples/routing-and-load-balancing/Dockerfile-client .
-            k3d image import jct_client:latest -c test-cluster-1 --verbose
+          docker build --tag jct_client:latest --file ./junction-python/samples/routing-and-load-balancing/Dockerfile-client .
+          k3d image import jct_client:latest -c test-cluster-1 --verbose
       - name: Debug State
         run: |
-            docker ps -a
-            kubectl get pods -o wide
-            kubectl get nodes -o wide
+          docker images -a
+          docker ps -a
+          kubectl get pods -o wide
+          kubectl get nodes -o wide
       - name: run test
         run: |
-            kubectl run jct-client --image=jct_client:latest --restart=Never -it --rm
+          kubectl run jct-client --image=jct_client:latest --restart=Never -it --rm
