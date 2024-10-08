@@ -49,7 +49,7 @@ jobs:
           k3d image import jct_client:latest -c test-cluster-1
       - name: run test
         run: |
-          kubectl run jct-client --image=jct_client:latest --image-pull-policy=IfNotPresent --restart=Never --attach
+          kubectl run jct-client --image=jct_client:latest --image-pull-policy=IfNotPresent --env="JUNCTION_ADS_SERVER=grpc://ezbake.junction.svc.cluster.local:8008" --restart=Never --attach
       - name: Debug State
         if: ${{ ! cancelled() }}
         run: |
