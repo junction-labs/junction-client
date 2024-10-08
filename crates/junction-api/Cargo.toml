@@ -4,18 +4,31 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-k8s-openapi = { workspace = true, features = ["v1_29"] }
-kube = { workspace = true, features = ["derive"] }
 http = { workspace = true }
 regex = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, default-features = false }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-xds-api = { workspace = true, default-features = false }
 once_cell = { workspace = true }
 
+# typeinfo
 junction-typeinfo = { workspace = true, optional = true }
 
+# xds
+xds-api = { workspace = true, default-features = false, optional = true }
+
+# kube
+# TODO: have to remove dependencies on Duration to make these optional
+k8s-openapi = { workspace = true, features = ["v1_29"] }
+kube = { workspace = true, features = ["derive"] }
+gateway-api = { version = "0.10.0", optional = true }
+
+[dev-dependencies]
+serde_yml = "0.0.12"
+
 [features]
+default = ["kube", "xds"]
 typeinfo = ["dep:junction-typeinfo"]
+kube = ["dep:gateway-api"]
+xds = ["dep:xds-api"]

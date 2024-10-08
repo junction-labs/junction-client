@@ -24,15 +24,15 @@ pub(crate) trait ConfigCache {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StaticConfig {
-    pub routes: HashMap<String, Arc<Route>>,
-    pub backends: HashMap<String, Arc<BackendLb>>,
+    pub routes: HashMap<Target, Arc<Route>>,
+    pub backends: HashMap<Target, Arc<BackendLb>>,
 }
 
 impl StaticConfig {
     pub(crate) fn new(routes: Vec<Route>, backends: Vec<Backend>) -> Self {
         let routes = routes
             .into_iter()
-            .map(|x| (x.target.as_listener_xds_name(), Arc::new(x)))
+            .map(|x| (x.target.clone(), Arc::new(x)))
             .collect();
 
         let backends = backends
@@ -40,7 +40,7 @@ impl StaticConfig {
             .map(|config| {
                 let load_balancer = LoadBalancer::from_config(&config.lb);
                 (
-                    config.target.as_cluster_xds_name(),
+                    config.target.clone(),
                     Arc::new(BackendLb {
                         config,
                         load_balancer,
@@ -55,13 +55,10 @@ impl StaticConfig {
 
 impl ConfigCache for StaticConfig {
     fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
-        self.routes.get(&target.as_listener_xds_name()).cloned()
+        self.routes.get(target).cloned()
     }
 
     fn get_backend(&self, target: &Target) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
-        (
-            self.backends.get(&target.as_cluster_xds_name()).cloned(),
-            None,
-        )
+        (self.backends.get(target).cloned(), None)
     }
 }

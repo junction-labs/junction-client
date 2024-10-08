@@ -88,9 +88,9 @@ impl Client {
     }
 
     fn subscribe_to_defaults(&self, defaults: &StaticConfig) {
-        for (route_name, route) in &defaults.routes {
+        for (target, route) in &defaults.routes {
             self.ads
-                .subscribe(xds::ResourceType::Listener, route_name.clone())
+                .subscribe(xds::ResourceType::Listener, target.xds_listener_name())
                 .unwrap();
 
             for rule in &route.rules {
@@ -98,16 +98,16 @@ impl Client {
                     self.ads
                         .subscribe(
                             xds::ResourceType::Cluster,
-                            backend.target.as_cluster_xds_name(),
+                            backend.target.xds_cluster_name(),
                         )
                         .unwrap();
                 }
             }
         }
 
-        for backend_name in defaults.backends.keys() {
+        for target in defaults.backends.keys() {
             self.ads
-                .subscribe(xds::ResourceType::Cluster, backend_name.clone())
+                .subscribe(xds::ResourceType::Cluster, target.xds_cluster_name())
                 .unwrap();
         }
     }
@@ -139,16 +139,16 @@ impl Client {
         let mut defaults: BTreeSet<_> = self.defaults.routes.keys().collect();
 
         for route in self.ads.cache.iter_routes() {
-            let route = if route.is_default_route() {
+            let route = if route.is_passthrough_route() {
                 self.defaults
                     .routes
-                    .get(&route.target.as_listener_xds_name())
+                    .get(&route.target)
                     .cloned()
                     .unwrap_or(route)
             } else {
                 route
             };
-            defaults.remove(&route.target.as_listener_xds_name());
+            defaults.remove(&route.target);
             routes.push(route);
         }
 
@@ -171,14 +171,14 @@ impl Client {
             let backend = if backend.config.lb.is_unspecified() {
                 self.defaults
                     .backends
-                    .get(&backend.config.target.as_cluster_xds_name())
+                    .get(&backend.config.target)
                     .cloned()
                     .unwrap_or(backend)
             } else {
                 backend
             };
 
-            defaults.remove(&backend.config.target.as_cluster_xds_name());
+            defaults.remove(&backend.config.target);
             backends.push(backend);
         }
 
@@ -295,7 +295,7 @@ pub(crate) fn resolve_routes(
 
     let matching_route = match (default_route, configured_route) {
         (Some(default_route), Some(configured_route)) => {
-            if configured_route.is_default_route() {
+            if configured_route.is_passthrough_route() {
                 default_route.clone()
             } else {
                 configured_route

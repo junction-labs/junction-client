@@ -1,8 +1,16 @@
+mod error;
+
+pub use error::Error;
+
 pub mod backend;
-pub mod crd;
 pub mod http;
 pub mod shared;
+
+#[cfg(feature = "xds")]
 pub mod xds;
+
+#[cfg(feature = "kube")]
+pub mod kube;
 
 macro_rules! value_or_default {
     ($value:expr, $default:expr) => {

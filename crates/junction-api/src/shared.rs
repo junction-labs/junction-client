@@ -7,12 +7,11 @@ use serde::de::{self, Visitor};
 use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
 use std::time::Duration as StdDuration;
-use xds_api::pb::envoy::config::route::v3 as xds_route;
-
-use crate::value_or_default;
 
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
+
+use crate::error::Error;
 
 /// The fully qualified domain name of a network host. This matches the RFC 1123 definition of a
 /// hostname with 1 notable exception that numeric IP addresses are not allowed.
@@ -53,6 +52,17 @@ impl std::ops::Deref for Regex {
 impl AsRef<regex::Regex> for Regex {
     fn as_ref(&self) -> &regex::Regex {
         &self.0
+    }
+}
+
+impl FromStr for Regex {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match regex::Regex::try_from(s) {
+            Ok(e) => Ok(Self(e)),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
@@ -107,17 +117,6 @@ impl PartialEq for Regex {
     }
 }
 
-impl FromStr for Regex {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match regex::Regex::try_from(s) {
-            Ok(e) => Ok(Self(e)),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-}
-
 /// A duration type where parsing and formatting obey the k8s Gateway API GEP-2257
 /// (https://gateway-api.sigs.k8s.io/geps/gep-2257).
 ///
@@ -157,6 +156,12 @@ fn is_valid(duration: StdDuration) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+impl From<Duration> for StdDuration {
+    fn from(val: Duration) -> Self {
+        val.0
+    }
 }
 
 /// Converting from `std::time::Duration` to `gateway_api::Duration` is allowed, but we need to make
@@ -560,13 +565,28 @@ impl<'de> Deserialize<'de> for Duration {
     }
 }
 
+#[cfg(feature = "xds")]
 impl TryFrom<xds_api::pb::google::protobuf::Duration> for Duration {
-    type Error = String;
+    type Error = Error;
 
     fn try_from(pbduration: xds_api::pb::google::protobuf::Duration) -> Result<Self, Self::Error> {
-        let duration = pbduration.try_into().unwrap();
-        is_valid(duration)?;
+        let duration: StdDuration = pbduration
+            .try_into()
+            .map_err(|e| Error::new(format!("invalid duration: {e}")))?;
+
+        is_valid(duration).map_err(Error::new)?;
         Ok(Duration(duration))
+    }
+}
+
+#[cfg(feature = "xds")]
+impl TryFrom<Duration> for xds_api::pb::google::protobuf::Duration {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(value: Duration) -> Result<Self, Self::Error> {
+        let seconds = value.as_secs().try_into()?;
+        let nanos = value.subsec_nanos().try_into()?;
+        Ok(xds_api::pb::google::protobuf::Duration { seconds, nanos })
     }
 }
 
@@ -838,7 +858,9 @@ mod test_duration {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
+#[derive(
+    Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, JsonSchema, PartialOrd, Ord,
+)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct ServiceTarget {
     ///
@@ -865,7 +887,9 @@ pub struct ServiceTarget {
     pub port: Option<PortNumber>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
+#[derive(
+    Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, JsonSchema, PartialOrd, Ord,
+)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct DNSTarget {
     ///
@@ -886,7 +910,9 @@ pub struct DNSTarget {
     pub port: Option<PortNumber>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(
+    Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, JsonSchema, PartialOrd, Ord,
+)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum Target {
@@ -952,7 +978,7 @@ impl Target {
 
     // FIXME(DNS): no reason we cannot support DNS here, but likely it should be determined by whats
     // in the cluster config so passed as a extra parameter
-    pub fn from_cluster_xds_name(name: &str) -> Result<Self, crate::xds::Error> {
+    pub fn from_cluster_xds_name(name: &str) -> Result<Self, Error> {
         let parts: Vec<&str> = name.split('/').collect();
         if parts.len() == 3 && parts[2].eq("cluster") {
             Ok(Target::Service(ServiceTarget {
@@ -961,18 +987,23 @@ impl Target {
                 port: None,
             }))
         } else {
-            Err(crate::xds::Error::InvalidXds {
-                resource_type: "Cluster",
-                resource_name: name.to_string(),
-                message: "Unable to parse name".to_string(),
-            })
+            Err(Error::new_static("unable to cluster name"))
         }
     }
 
-    pub fn as_cluster_xds_name(&self) -> String {
+    pub fn xds_cluster_name(&self) -> String {
         match self {
+            // FIXME: this is wrong
             Target::DNS(c) => c.hostname.clone(),
             Target::Service(c) => format!("{}/{}/cluster", c.namespace, c.name),
+        }
+    }
+
+    pub fn xds_endpoints_name(&self) -> String {
+        match self {
+            // FIXME: this is wrong
+            Target::DNS(c) => c.hostname.clone(),
+            Target::Service(c) => format!("{}/{}/endpoints", c.namespace, c.name),
         }
     }
 
@@ -981,9 +1012,18 @@ impl Target {
         Some(Self::from_hostname(name, None))
     }
 
-    pub fn as_listener_xds_name(&self) -> String {
+    pub fn xds_listener_name(&self) -> String {
         //FIXME(ports): for now this is just the hostname, with no support for port
         self.as_hostname()
+    }
+
+    pub fn xds_default_listener_name(&self) -> String {
+        match self {
+            Target::DNS(c) => format!("{hostname}/default", hostname = c.hostname),
+            Target::Service(c) => {
+                format!("{}.{}.junction.default", c.name, c.namespace)
+            }
+        }
     }
 
     pub fn port(&self) -> Option<u16> {
@@ -1010,15 +1050,14 @@ impl Target {
     }
 }
 
-const WEIGHT_DEFAULT: u32 = 1;
-fn weight_default() -> u32 {
-    WEIGHT_DEFAULT
+const fn default_weight() -> u32 {
+    1
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct WeightedTarget {
-    #[serde(default = "weight_default")]
+    #[serde(default = "default_weight")]
     pub weight: u32,
 
     #[serde(flatten)]
@@ -1027,33 +1066,27 @@ pub struct WeightedTarget {
     // decide whether this is one where its simpler just to drop it.
 }
 
-impl WeightedTarget {
-    pub(crate) fn from_xds(
-        xds: Option<&xds_route::route_action::ClusterSpecifier>,
-    ) -> Result<Vec<Self>, crate::xds::Error> {
-        match xds {
-            Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => Ok(vec![Self {
-                target: Target::from_cluster_xds_name(name)?,
-                weight: 1,
-            }]),
-            Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(weighted_cluster)) => {
-                let mut ret: Vec<_> = vec![];
-                for w in &weighted_cluster.clusters {
-                    ret.push(Self {
-                        target: Target::from_cluster_xds_name(&w.name)?,
-                        weight: value_or_default!(w.weight, 1),
-                    })
-                }
-                Ok(ret)
-            }
-            _ => {
-                Err(crate::xds::Error::InvalidXds {
-                    resource_type: "Cluster",
-                    resource_name: "".to_string(), //ideally the xds enum would support a to_string here
-                    message: "Unable to parse specifier".to_string(),
-                })
-            }
-        }
+#[cfg(test)]
+mod test_target {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parses_target() {
+        let target = json!({
+            "type": "service",
+            "name": "foo",
+            "namespace": "potato",
+        });
+
+        assert_eq!(
+            serde_json::from_value::<Target>(target).unwrap(),
+            Target::Service(ServiceTarget {
+                name: "foo".to_string(),
+                namespace: "potato".to_string(),
+                port: None
+            }),
+        )
     }
 }
 
@@ -1095,42 +1128,6 @@ pub struct SessionAffinity {
         alias = "HashParams"
     )]
     pub hash_params: Vec<SessionAffinityHashParam>,
-}
-
-impl SessionAffinityHashParam {
-    //only returns session affinity
-    pub fn from_xds(hash_policy: &xds_route::route_action::HashPolicy) -> Option<Self> {
-        use xds_route::route_action::hash_policy::PolicySpecifier;
-
-        match hash_policy.policy_specifier.as_ref() {
-            Some(PolicySpecifier::Header(h)) => Some(SessionAffinityHashParam {
-                terminal: hash_policy.terminal,
-                matcher: SessionAffinityHashParamType::Header {
-                    name: h.header_name.clone(),
-                },
-            }),
-            _ => {
-                //FIXME; thrown away config
-                None
-            }
-        }
-    }
-}
-
-impl SessionAffinity {
-    //only returns session affinity
-    pub fn from_xds(hash_policy: &[xds_route::route_action::HashPolicy]) -> Option<Self> {
-        let hash_params: Vec<_> = hash_policy
-            .iter()
-            .filter_map(SessionAffinityHashParam::from_xds)
-            .collect();
-
-        if hash_params.is_empty() {
-            None
-        } else {
-            Some(SessionAffinity { hash_params })
-        }
-    }
 }
 
 #[cfg(test)]

@@ -23,10 +23,7 @@ pub(crate) struct EndpointGroup {
 }
 
 impl EndpointGroup {
-    pub(crate) fn from_xds(
-        target: &Target,
-        cla: &xds_endpoint::ClusterLoadAssignment,
-    ) -> Option<Self> {
+    pub(crate) fn from_xds(target: &Target, cla: &xds_endpoint::ClusterLoadAssignment) -> Self {
         let make_address = match target {
             Target::DNS(_) => EndpointAddress::from_socket_addr,
             Target::Service(_) => EndpointAddress::from_dns_name,
@@ -47,7 +44,7 @@ impl EndpointGroup {
         }
 
         let hash = thread_local_xxhash::hash(&endpoints);
-        Some(Self { hash, endpoints })
+        Self { hash, endpoints }
     }
 
     pub(crate) fn len(&self) -> usize {
