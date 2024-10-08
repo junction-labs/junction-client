@@ -54,4 +54,4 @@ jobs:
           kubectl get nodes -o wide
       - name: run test
         run: |
-          kubectl run jct-client --image=jct_client:latest --restart=Never -it --rm
+          kubectl run jct-client --pod-running-timeout 3m --image=jct_client:latest --restart=Never -it --rm
