@@ -13,6 +13,12 @@ on:
 env:
   rust_stable: stable
 
+concurrency:
+  group: docs-${{ github.ref }}
+
+permissions:
+  contents: write
+
 jobs:
   markdown-link-check:
     runs-on: ubuntu-latest

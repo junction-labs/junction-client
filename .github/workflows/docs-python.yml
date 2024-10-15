@@ -21,7 +21,10 @@ env:
   rust_stable: stable
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: docs-${{ github.ref }}
+
+permissions:
+  contents: write
 
 jobs:
   build-python-docs:
