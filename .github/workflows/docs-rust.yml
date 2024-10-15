@@ -38,7 +38,6 @@ jobs:
         run: cargo doc --no-deps --all-features
 
       - name: Deploy Rust docs
-        if: ${{ github.ref_name == 'main' }}
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: target/doc

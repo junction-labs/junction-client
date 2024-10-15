@@ -62,7 +62,6 @@ jobs:
         run:  sphinx-build -M html source build -j auto # -W
 
       - name: Deploy Python docs for latest development version
-        if: github.event_name == 'push' && github.ref_name == 'main'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: junction-python/docs/build/html

@@ -11,9 +11,9 @@ It's the best place to look if you need information on a specific function.
 ## Python
 
 The Python API reference is built using Sphinx.
-It's available in [our docs](https://docs.junctionlabs.io/api/python/stable/reference/index.html).
+It's available in [our docs](https://docs.junctionlabs.io/api/python/dev/reference/index.html).
 
 ## Rust
 
 The Rust API reference is built using Cargo.
-It's available in [our docs](https://docs.junctionlabs.io/api/rust/latest/junction-client).
+It's available in [our docs](https://docs.junctionlabs.io/api/rust/dev/junction-client).
