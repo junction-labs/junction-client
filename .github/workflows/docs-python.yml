@@ -48,7 +48,7 @@ jobs:
         working-directory: junction-python/docs
         env:
           JUNCTION_VERSION: ${{ github.event.client_payload.tag || 'main' }}
-        run:  sphinx-build -M source build -j auto # -W
+        run:  sphinx-build -M html source build -j auto # -W
 
       - name: Deploy Python docs for latest development version
         if: github.event_name == 'push' && github.ref_name == 'main'
