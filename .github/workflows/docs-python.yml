@@ -44,6 +44,15 @@ jobs:
         working-directory: junction-python/docs
         run: uv pip install -r requirements-docs.txt
 
+      - name: Set up Rust
+        run: rustup show
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build and install junction python
+        run: cargo xtask python-build
+
       - name: Build Python documentation
         working-directory: junction-python/docs
         env:

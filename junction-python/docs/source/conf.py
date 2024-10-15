@@ -100,7 +100,9 @@ html_css_files = ["css/custom.css"]  # relative to html_static_path
 html_show_sourcelink = False
 
 # key site root paths
-static_assets_root = "https://raw.githubusercontent.com/junction-labs/junction-static/master"
+static_assets_root = (
+    "https://raw.githubusercontent.com/junction-labs/junction-static/master"
+)
 github_root = "https://github.com/junction-labs/junction-client"
 web_root = "https://docs.junctionlabs.io"
 
@@ -167,6 +169,7 @@ favicons = [
         "href": f"{static_assets_root}/icons/touchicon-180x180.png",
     },
 ]
+
 
 # sphinx-ext-linkcode - Add external links to source code
 # https://www.sphinx-doc.org/en/master/usage/extensions/linkcode.html
@@ -235,9 +238,7 @@ def process_signature(  # noqa: D103
     sig: str,
     ret: str,
 ) -> tuple[str, str]:
-    return (
-        sig, ret
-    )
+    return (sig, ret)
 
 
 def setup(app: Any) -> None:  # noqa: D103
