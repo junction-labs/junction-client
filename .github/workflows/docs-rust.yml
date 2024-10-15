@@ -11,7 +11,9 @@ on:
     paths:
       - crates/**
       - .github/workflows/docs-rust.yml
-
+  repository_dispatch:
+    types:
+      - rust-release
 env:
   rust_stable: stable
 

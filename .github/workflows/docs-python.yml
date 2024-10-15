@@ -50,7 +50,7 @@ jobs:
           echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> $GITHUB_ENV
 
       - name: Install Python dependencies
-        run: uv pip install r junction-python/requirements-dev.txt -r junction-python/docs/requirements-docs.txt
+        run: uv pip install -r junction-python/requirements-dev.txt -r junction-python/docs/requirements.txt
 
       - name: Build and install junction python
         run: cargo xtask python-build
