@@ -12,6 +12,9 @@ on:
       - crates/**
       - .github/workflows/docs-rust.yml
 
+env:
+  rust_stable: stable
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
 
@@ -21,13 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Rust
-        run: rustup component add rust-docs
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
         with:
-          save-if: ${{ github.ref_name == 'main' }}
+            toolchain: ${{ env.rust_stable }}
+      - uses: Swatinem/rust-cache@v2
 
       - name: Build Rust documentation
         env:

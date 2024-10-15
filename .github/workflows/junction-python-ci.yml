@@ -34,6 +34,7 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: check
       run: cargo check -p junction-python
+
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -45,6 +46,7 @@ jobs:
     - uses: Swatinem/rust-cache@v2
     - name: clippy
       run: cargo clippy -p junction-python --tests --all-features --no-deps -- -D warnings -D clippy::dbg_macro
+
   rustfmt:
     runs-on: ubuntu-latest
     steps:
@@ -60,6 +62,7 @@ jobs:
           echo "rustfmt found un-formatted files" >&2
           exit 1
         fi
+
   # Python CI steps
   #
   # these lean on xtask tasks so they're similar to what you'd run locally
@@ -67,13 +70,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
     - name: "Install Rust @ ${{ env.rust_stable }}"
       uses: dtolnay/rust-toolchain@stable
       with:
           toolchain: ${{ env.rust_stable }}
+          
     - uses: Swatinem/rust-cache@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
     - name: build python
       run: cargo xtask python-build
+
     - name: check for uncommitted changes
       run: |
           if [[ -n $(git status --porcelain) ]]; then
@@ -81,10 +93,13 @@ jobs:
               git diff
               exit 1
           fi
+
     - name: run rust tests
       run: cargo test -p junction-python
+
     - name: run python tests
       run: cargo xtask python-test
+
   lint-python:
     runs-on: ubuntu-latest
     steps:
