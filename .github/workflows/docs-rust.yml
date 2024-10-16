@@ -18,7 +18,7 @@ env:
   rust_stable: stable
 
 concurrency:
-  group: docs-${{ github.ref }}
+  group: ${{ github.job }}-${{ github.ref }} 
 
 permissions:
   contents: write
