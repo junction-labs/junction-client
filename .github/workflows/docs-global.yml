@@ -1,14 +1,21 @@
-name: Build documentation
+name: Build global documentation
 
 on:
   pull_request:
     paths:
       - docs/**
+      - crates/**
+      - .github/workflows/docs-global.yml
+  push:
+    branches:
+      - main
+    paths:
+      - docs/**
+      - crates/**
       - .github/workflows/docs-global.yml
   repository_dispatch:
     types:
       - python-release-docs
-  workflow_dispatch:
 
 env:
   rust_stable: stable
