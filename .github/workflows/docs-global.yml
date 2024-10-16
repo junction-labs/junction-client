@@ -100,7 +100,6 @@ jobs:
         run: touch .nojekyll
 
       - name: Deploy docs
-        if: github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: docs/site

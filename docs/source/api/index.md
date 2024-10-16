@@ -16,4 +16,6 @@ It's available in [our docs](https://docs.junctionlabs.io/api/python/dev/referen
 ## Rust
 
 The Rust API reference is built using Cargo.
-It's available in [our docs](https://docs.junctionlabs.io/api/rust/dev/junction-client).
+It's available in our docs:
+- [API Types](https://docs.junctionlabs.io/api/rust/dev/junction-client/src/junction_api/)
+- [Core API](https://docs.junctionlabs.io/api/rust/dev/junction-client/src/junction_core/)

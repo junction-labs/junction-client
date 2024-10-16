@@ -38,7 +38,7 @@ jobs:
       - name: Build Rust documentation
         env:
           RUSTDOCFLAGS: --cfg docsrs --allow=rustdoc::redundant-explicit-links
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --no-deps -p junction-api -p junction-core
 
       - name: Deploy Rust docs
         uses: JamesIves/github-pages-deploy-action@v4
