@@ -198,12 +198,12 @@ class Session(requests.Session):
     ) -> None:
         super().__init__()
 
-        if not junction_client:
-            junction_client = junction._get_client(
+        if junction_client:
+            self.junction = junction_client
+        else:
+            self.junction = junction._default_client(
                 default_routes=default_routes, default_backends=default_backends
             )
 
-        self.junction = junction_client
-
-        self.mount("https://", HTTPAdapter(junction_client=junction_client))
-        self.mount("http://", HTTPAdapter(junction_client=junction_client))
+        self.mount("https://", HTTPAdapter(junction_client=self.junction))
+        self.mount("http://", HTTPAdapter(junction_client=self.junction))

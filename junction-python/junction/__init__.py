@@ -1,17 +1,25 @@
 import typing
-from junction.junction import Junction, default_client, check_route
+from junction.junction import (
+    Junction,
+    default_client,
+    check_route,
+    dump_kube_backend,
+    dump_kube_route,
+)
 
 from . import config, requests, urllib3
 
 
-##
-## Purpose of this function is to convert between the non-pyo3
-## route and backend structs by passing them as kwargs
-##
-def _get_client(
+def _default_client(
     default_routes: typing.List[config.Route] | None,
     default_backends: typing.List[config.Backend] | None,
 ) -> Junction:
+    """
+    Return a Junction client with default Routes and Backends.
+
+    Uses the passed defaults to create a new client with default Routes
+    and Backends.
+    """
     client_kwargs = {}
     if default_routes:
         # This check is just in case the user does something dumb as otherwise
@@ -28,4 +36,13 @@ def _get_client(
     return default_client(**client_kwargs)
 
 
-__all__ = (Junction, config, urllib3, requests, check_route, default_client)
+__all__ = (
+    Junction,
+    config,
+    urllib3,
+    requests,
+    check_route,
+    default_client,
+    dump_kube_backend,
+    dump_kube_route,
+)

@@ -86,69 +86,6 @@ where
     buf
 }
 
-/// Parse a path string into a vec of [PathEntry], returning an [Error] with a
-/// message (and no path!) if something goes wrong.
-pub(crate) fn path_from_str(s: &str) -> Result<Vec<PathEntry>, Error> {
-    // this is a small parser, and is probably missing some important edge
-    // case testing. sorry in advance.
-
-    let mut entries = vec![];
-    let mut s = s;
-
-    // strip a prefix off the front. everything in front of the first slash is
-    // the prefix.
-    if let Some(idx) = s.find('/') {
-        s = &s[(idx + 1)..]
-    };
-
-    // parse either field or index entries until the string is empty.
-    for _ in 0..10 {
-        if s.is_empty() {
-            break;
-        }
-        if s.starts_with('.') {
-            s = &s[1..];
-        }
-
-        match s.starts_with('[') {
-            // index entry
-            true => {
-                // find the closing `[` or this is malformed.
-                let Some(entry_end) = s.find(']') else {
-                    return Err(Error::new_static(
-                        "invalid index entry: missing closing bracket",
-                    ));
-                };
-
-                // parse the index as a number
-                let idx_str = &s[1..entry_end];
-                let idx = idx_str
-                    .parse()
-                    .map_err(|_| Error::new_static("index entry must be numeric"))?;
-                entries.push(PathEntry::Index(idx));
-
-                // start the next field after the closing bracket
-                s = &s[(entry_end + 1)..];
-            }
-            // field entry
-            false => {
-                // the entry content starts at the beginning of the string and
-                // goes until the next `.` or `[` or the end of the string.
-
-                let idx = s.find(['.', '[']).unwrap_or(s.len());
-                let field = &s[..idx];
-                entries.push(PathEntry::from(field.to_string()));
-
-                // the next entry starts at the delimiter. for field entries,
-                // we strip leading dots, for index entries the `[` is required.
-                s = &s[idx..];
-            }
-        }
-    }
-
-    Ok(entries)
-}
-
 /// Add field-path context to an error by appending an entry to its path. Because
 /// Context is added at the callsite this means a function can add its own fields
 /// and the path ends up in the appropriate order.
@@ -280,7 +217,6 @@ mod test {
         ];
         let string = "[0].hi.dr[2].nick";
         assert_eq!(path_str(None, path), string);
-        assert_eq!(path_from_str(string).unwrap(), path);
 
         let path = &[
             PathEntry::from("hi"),
@@ -289,6 +225,5 @@ mod test {
         ];
         let string = "prefix/hi.dr.nick";
         assert_eq!(path_str(Some("prefix"), path), string);
-        assert_eq!(path_from_str(string).unwrap(), path);
     }
 }

@@ -1051,6 +1051,7 @@ dependencies = [
  "pythonize",
  "serde",
  "serde_json",
+ "serde_yml 0.0.10",
  "tokio",
  "xds-api",
 ]
