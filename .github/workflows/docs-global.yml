@@ -4,14 +4,12 @@ on:
   pull_request:
     paths:
       - docs/**
-      - crates/**
       - .github/workflows/docs-global.yml
   push:
     branches:
       - main
     paths:
       - docs/**
-      - crates/**
       - .github/workflows/docs-global.yml
   repository_dispatch:
     types:
@@ -103,6 +101,7 @@ jobs:
         run: touch .nojekyll
 
       - name: Deploy docs
+        if: github.event_name == 'push' && github.ref_name == 'main'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: docs/site
@@ -113,4 +112,5 @@ jobs:
 
       # Make sure documentation artifacts are not cached
       - name: Clean up documentation artifacts
+        if: ${{ github.ref_name == 'main' }}
         run: rm -rf docs/site
