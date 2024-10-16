@@ -41,6 +41,7 @@ jobs:
         run: cargo doc --no-deps -p junction-api -p junction-core
 
       - name: Deploy Rust docs
+        if: github.event_name == 'push' && github.ref_name == 'main'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: target/doc
