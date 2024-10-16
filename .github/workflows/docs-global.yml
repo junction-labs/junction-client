@@ -97,6 +97,7 @@ jobs:
         run: mkdocs build
 
       - name: Add .nojekyll
+        if: github.event_name == 'push' && github.ref_name == 'main'
         working-directory: docs/site
         run: touch .nojekyll
 
