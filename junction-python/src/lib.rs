@@ -10,7 +10,7 @@ use pyo3::{
     },
     wrap_pyfunction, Bound, Py, PyAny, PyResult, Python,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{env, net::IpAddr, str::FromStr};
 use xds_api::pb::google::protobuf;
 
@@ -19,6 +19,8 @@ fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Junction>()?;
     m.add_function(wrap_pyfunction!(default_client, m)?)?;
     m.add_function(wrap_pyfunction!(check_route, m)?)?;
+    m.add_function(wrap_pyfunction!(dump_kube_route, m)?)?;
+    m.add_function(wrap_pyfunction!(dump_kube_backend, m)?)?;
 
     Ok(())
 }
@@ -268,59 +270,29 @@ fn kwarg_string(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Optio
     Ok(py_str.map(|s| s.to_string()))
 }
 
+fn kwarg_depythonize<T>(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<T>>
+where
+    T: for<'a> Deserialize<'a>,
+{
+    let Some(kwargs) = kwargs else {
+        return Ok(None);
+    };
+
+    let value = match kwargs.get_item(key)? {
+        Some(value) => Some(pythonize::depythonize_bound(value)?),
+        None => None,
+    };
+    Ok(value)
+}
+
+#[inline]
 fn default_routes(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Route>> {
-    let Some(kwargs) = kwargs else {
-        return Ok(Vec::new());
-    };
-    let routes = match kwargs.get_item("default_routes")? {
-        Some(default_routes) => pythonize::depythonize_bound(default_routes)?,
-        None => Vec::new(),
-    };
-    Ok(routes)
+    kwarg_depythonize("default_routes", kwargs).map(|v| v.unwrap_or_default())
 }
 
+#[inline]
 fn default_backends(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Backend>> {
-    let Some(kwargs) = kwargs else {
-        return Ok(Vec::new());
-    };
-    let backends = match kwargs.get_item("default_backends")? {
-        Some(default_backends) => pythonize::depythonize_bound(default_backends)?,
-        None => Vec::new(),
-    };
-    Ok(backends)
-}
-
-static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
-    let ads = default_ads_server(None)?;
-    let (node, cluster) = default_node_info(None)?;
-    new_client(ads, node, cluster)
-});
-
-/// Return a reference to a default Junction client. This client will be used by
-/// library integrations if they're not explicitly constructed with a client.
-///
-/// This client can be configured with an ADS server address and node info by
-/// setting the JUNCTION_ADS_SERVER, JUNCTION_NODE, and JUNCTION_CLUSTER
-/// environment variables.
-///
-/// Calls to this function accept `default_routes` and `default_backends`
-/// kwargs, to set defaults for the routing done by this client while still
-/// using the dynamic config cache shared with all other default clients.
-#[pyfunction]
-#[pyo3(signature = (**kwargs))]
-fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
-    let routes = default_routes(kwargs)?;
-    let backends = default_backends(kwargs)?;
-    match DEFAULT_CLIENT.as_ref() {
-        Ok(default_client) => {
-            let core = default_client
-                .clone()
-                .with_defaults(routes, backends)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok(Junction { core })
-        }
-        Err(e) => Err(PyRuntimeError::new_err(e)),
-    }
+    kwarg_depythonize("default_backends", kwargs).map(|v| v.unwrap_or_default())
 }
 
 /// Check route resolution.
@@ -353,6 +325,93 @@ fn check_route(
     let backend = pythonize::pythonize(py, &backend)?;
 
     Ok((route, rule_idx, backend))
+}
+
+/// Dump a Route as Kubernetes YAML.
+///
+/// The route is dumped as a Gateway API HTTPRoute, ready to be applied and
+/// updated. Routes with a Service target have their namespace and name
+/// inferred, but routes with other targets need to have namespace and name
+/// kwargs set explicitly.
+#[pyfunction]
+fn dump_kube_route(
+    route: Bound<'_, PyAny>,
+    kwargs: Option<&Bound<'_, PyDict>>,
+) -> PyResult<String> {
+    let route: Route = pythonize::depythonize_bound(route)?;
+
+    let (namespace, name) = match &route.target {
+        junction_api::shared::Target::Service(svc) => {
+            (Some(svc.namespace.clone()), Some(svc.name.clone()))
+        }
+        _ => (None, None),
+    };
+
+    let namespace = kwarg_string("namespace", kwargs)?.or(namespace);
+    let name = kwarg_string("name", kwargs)?.or(name);
+    let Some((namespace, name)) = namespace.zip(name) else {
+        return Err(PyValueError::new_err(
+            "namespace and name are required but can't be inferred for this Route",
+        ));
+    };
+
+    let route = route
+        .to_gateway_httproute(&namespace, &name)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    Ok(serde_yml::to_string(&route)
+        .expect("Serialization failed. This is a bug in Junction, not your code."))
+}
+
+/// Dump a Backend to Kubernetes YAML.
+///
+/// Backends are dumped as partial Service objects that can be applied as a
+/// patch with `kubectl patch`, or re-parsed and modified to include any missing
+/// information about your service.
+///
+/// Backends with a Service target will include the name and namespace of the
+/// target service as part of the patch data. Other targets can't easily
+/// infer their name and namespace.
+#[pyfunction]
+fn dump_kube_backend(backend: Bound<'_, PyAny>) -> PyResult<String> {
+    let backend: Backend = pythonize::depythonize_bound(backend)?;
+    let patch = backend.to_service_patch();
+
+    Ok(serde_yml::to_string(&patch)
+        .expect("Serialization failed. This is a bug in Junction, not your code."))
+}
+
+static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
+    let ads = default_ads_server(None)?;
+    let (node, cluster) = default_node_info(None)?;
+    new_client(ads, node, cluster)
+});
+
+/// Return a default Junction client. This client will be used by library
+/// integrations if they're not explicitly constructed with a client.
+///
+/// This client can be configured with an ADS server address and node info by
+/// setting the JUNCTION_ADS_SERVER, JUNCTION_NODE, and JUNCTION_CLUSTER
+/// environment variables.
+///
+/// Calls to this function accept `default_routes` and `default_backends`
+/// kwargs, to set defaults for the routing done by this client while still
+/// using the dynamic config cache shared with all other default clients.
+#[pyfunction]
+#[pyo3(signature = (**kwargs))]
+fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
+    let routes = default_routes(kwargs)?;
+    let backends = default_backends(kwargs)?;
+    match DEFAULT_CLIENT.as_ref() {
+        Ok(default_client) => {
+            let core = default_client
+                .clone()
+                .with_defaults(routes, backends)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            Ok(Junction { core })
+        }
+        Err(e) => Err(PyRuntimeError::new_err(e)),
+    }
 }
 
 #[pymethods]

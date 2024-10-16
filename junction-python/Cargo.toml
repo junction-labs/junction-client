@@ -17,6 +17,7 @@ junction-api = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+serde_yml = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 xds-api = { workspace = true, features = ["pbjson"] }
 pyo3 = { version = "0.21", features = ["abi3-py38", "serde"] }

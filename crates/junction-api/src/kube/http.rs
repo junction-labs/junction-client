@@ -1,11 +1,13 @@
 use std::str::FromStr;
 
 use gateway_api::apis::experimental::httproutes::{
-    HTTPRouteParentRefs, HTTPRouteRules, HTTPRouteRulesBackendRefs, HTTPRouteRulesMatches,
-    HTTPRouteRulesMatchesHeaders, HTTPRouteRulesMatchesHeadersType, HTTPRouteRulesMatchesMethod,
-    HTTPRouteRulesMatchesPath, HTTPRouteRulesMatchesPathType, HTTPRouteRulesMatchesQueryParams,
-    HTTPRouteRulesMatchesQueryParamsType, HTTPRouteRulesTimeouts, HTTPRouteSpec,
+    HTTPRoute, HTTPRouteParentRefs, HTTPRouteRules, HTTPRouteRulesBackendRefs,
+    HTTPRouteRulesMatches, HTTPRouteRulesMatchesHeaders, HTTPRouteRulesMatchesHeadersType,
+    HTTPRouteRulesMatchesMethod, HTTPRouteRulesMatchesPath, HTTPRouteRulesMatchesPathType,
+    HTTPRouteRulesMatchesQueryParams, HTTPRouteRulesMatchesQueryParamsType, HTTPRouteRulesTimeouts,
+    HTTPRouteSpec,
 };
+use kube::api::ObjectMeta;
 
 use crate::error::{Error, ErrorContext};
 use crate::shared::Regex;
@@ -13,19 +15,38 @@ use crate::shared::Regex;
 impl crate::http::Route {
     /// Convert an [HTTPRouteSpec] into a [Route][crate::http::Route].
     ///
-    /// This is an alias for `HTTPRouteSpec::try_into` or `Self::try_from`.
+    /// This is an alias for [HTTPRouteSpec::try_into] or [Self::try_from].
     #[inline]
-    pub fn from_gateway_api(route_spec: &HTTPRouteSpec) -> Result<crate::http::Route, Error> {
+    pub fn from_gateway_httproute(route_spec: &HTTPRouteSpec) -> Result<crate::http::Route, Error> {
         route_spec.try_into()
     }
 
     /// Convert this [Route][crate::http::Route] into a Gateway API
     /// [HTTPRouteSpec].
     ///
-    /// This is an alias for `HTTPRouteSpec::try_from` or `Self::try_into`.
+    /// This is an alias for [HTTPRouteSpec::try_from] or [Self::try_into].
     #[inline]
-    pub fn to_gateway_api(&self) -> Result<HTTPRouteSpec, Error> {
+    pub fn to_gateway_httproute_spec(&self) -> Result<HTTPRouteSpec, Error> {
         self.try_into()
+    }
+
+    /// Convert this [Route][crate::http::Route] into a Gateway API [HTTPRoute]
+    /// with it's `name` and `namespace` metadata set.
+    ///
+    /// This is a convenience function for creating an [HTTPRoute] with a name
+    /// you define. To create just an [HTTPRouteSpec] with other metadata, use
+    /// [Self::to_gateway_httproute_spec].
+    pub fn to_gateway_httproute(&self, namespace: &str, name: &str) -> Result<HTTPRoute, Error> {
+        let spec = self.to_gateway_httproute_spec()?;
+        Ok(HTTPRoute {
+            metadata: ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec,
+            status: None,
+        })
     }
 }
 
@@ -496,6 +517,7 @@ macro_rules! into_kube_ref {
                 group: Some("junctionlabs.io".to_string()),
                 kind: Some("DNS".to_string()),
                 name: target.hostname.clone(),
+                port: target.port.map(|p| p as i32),
                 $(
                     $extra_field: $extra_value,
                 )*
@@ -530,11 +552,13 @@ impl TryFrom<&crate::shared::WeightedTarget> for HTTPRouteRulesBackendRefs {
     fn try_from(
         target: &crate::shared::WeightedTarget,
     ) -> Result<HTTPRouteRulesBackendRefs, Error> {
-        let weight = target.weight;
-
-        Ok(into_kube_ref!(HTTPRouteRulesBackendRefs, &target.target, {
-            weight: Some(weight as i32)
-        }))
+        let mut backend_ref = into_kube_ref!(HTTPRouteRulesBackendRefs, &target.target, {
+            weight: Some(target.weight as i32)
+        });
+        // backend refs must have a port set on a Service target. force a value
+        // for the port, using the default http port if there's nothing set.
+        backend_ref.port.get_or_insert(80);
+        Ok(backend_ref)
     }
 }
 

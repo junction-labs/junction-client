@@ -50,7 +50,7 @@ class PoolManager(urllib3.PoolManager):
         if junction_client:
             self.junction = junction_client
         else:
-            self.junction = junction._get_client(
+            self.junction = junction._default_client(
                 default_routes=default_routes, default_backends=default_backends
             )
 

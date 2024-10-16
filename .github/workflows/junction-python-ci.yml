@@ -75,7 +75,6 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
           toolchain: ${{ env.rust_stable }}
-          
     - uses: Swatinem/rust-cache@v2
 
     - name: Set up Python
