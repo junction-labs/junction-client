@@ -1,0 +1,111 @@
+name: Build Python documentation
+
+on:
+  pull_request:
+    paths:
+      - junction-python/docs/**
+      - junction-python/junction/**
+      - .github/workflows/docs-python.yml
+  push:
+    branches:
+      - main
+    paths:
+      - junction-python/docs/**
+      - junction-python/junction/**
+      - .github/workflows/docs-python.yml
+  repository_dispatch:
+    types:
+      - python-release
+
+env:
+  rust_stable: stable
+
+concurrency:
+  group: docs-${{ github.ref }}
+
+permissions:
+  contents: write
+
+jobs:
+  build-python-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.sha }}
+
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
+            toolchain: ${{ env.rust_stable }}
+      - uses: Swatinem/rust-cache@v2          
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Create virtual environment
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv venv
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> $GITHUB_ENV
+
+      - name: Install Python dependencies
+        run: uv pip install -r junction-python/requirements-dev.txt -r junction-python/docs/requirements.txt
+
+      - name: Build and install junction python
+        run: cargo xtask python-build
+
+      - name: Build Python documentation
+        working-directory: junction-python/docs
+        env:
+          JUNCTION_VERSION: ${{ github.event.client_payload.tag || 'main' }}
+        run:  sphinx-build -M html source build -j auto # -W
+
+      - name: Deploy Python docs for latest development version
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: junction-python/docs/build/html
+          target-folder: api/python/dev
+          single-commit: true
+
+    #   - name: Parse the tag to find the major version
+    #     id: version
+    #     if: github.event_name == 'repository_dispatch'
+    #     shell: bash
+    #     run: |
+    #       tag="${{ github.event.client_payload.tag }}"
+    #       regex="py-([0-9]+)\.[0-9]+\.[0-9]+.*"
+    #       [[ $tag =~ $regex ]]
+    #       version=${BASH_REMATCH[1]}
+    #       echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    #   - name: Deploy Python docs for latest release version - versioned
+    #     if: github.event_name == 'repository_dispatch'
+    #     uses: JamesIves/github-pages-deploy-action@v4
+    #     with:
+    #       folder: junction-python/docs/build/html
+    #       target-folder: api/python/version/0.0.1 #  eventually should be: steps.version.outputs.version 
+    #       single-commit: true
+
+    #   - name: Deploy Python docs for latest release version - stable
+    #     if: github.event_name == 'repository_dispatch' && github.event.client_payload.is_prerelease == 'false'
+    #     uses: JamesIves/github-pages-deploy-action@v4
+    #     with:
+    #       folder: junction-python/docs/build/html
+    #       target-folder: api/python/stable
+    #       single-commit: true
+
+    #   # Build global docs _after_ this workflow to avoid contention on the gh-pages branch
+    #   - name: Trigger global docs workflow
+    #     if: github.event_name == 'repository_dispatch'
+    #     uses: peter-evans/repository-dispatch@v3
+    #     with:
+    #       event-type: python-release-docs
+    #       client-payload: >
+    #         {
+    #           "sha": "${{ github.event.client_payload.sha }}"
+    #         }

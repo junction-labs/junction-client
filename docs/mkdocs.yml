@@ -1,0 +1,92 @@
+# https://www.mkdocs.org/user-guide/configuration/
+
+# Project information
+site_name: Junction User Guide
+site_url: https://docs.junction-labs.io/
+repo_url: https://github.com/junction-labs/junction-client
+repo_name: junction-labs/junction-client
+
+docs_dir: source
+
+nav:
+  - User guide:
+    - index.md
+    - user-guide/getting-started.md
+
+  - API reference: api/index.md
+
+not_in_nav: |
+  /_build/
+validation:
+  links:
+    # Allow an absolute link to the features page for our code snippets
+    absolute_links: ignore
+
+# Build directories
+theme:
+  name: material
+  locale: en
+  custom_dir: source/_build/overrides
+  palette:
+  # Palette toggle for light mode
+  - media: "(prefers-color-scheme: light)"
+    scheme: default
+    toggle:
+      icon: material/brightness-7
+      name: Switch to dark mode
+  # Palette toggle for dark mode
+  - media: "(prefers-color-scheme: dark)"
+    scheme: slate
+    toggle:
+      icon: material/brightness-4
+      name: Switch to light mode
+  logo: _build/assets/logo.png
+  features:
+    - navigation.tracking
+    - navigation.instant
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.footer
+    - navigation.indexes
+    - content.tabs.link
+    - content.code.copy
+  icon:
+    repo: fontawesome/brands/github
+
+extra_css:
+  - _build/css/extra.css
+extra:
+  analytics:
+    provider: plausible
+    domain: guide.junctionlabs.io,combined.junctionlabs.io
+
+# Preview controls
+strict: true
+
+# Formatting options
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path: ['.','source/src/']
+      check_paths: true
+      dedent_subsections: true
+  - footnotes
+
+hooks:
+  - source/_build/scripts/people.py
+
+plugins:
+  - search:
+      lang: en
+  - markdown-exec
+  - material-plausible
+  - macros:
+      module_name: source/_build/scripts/macro
