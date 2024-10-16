@@ -105,8 +105,12 @@ jobs:
       - name: Deploy docs
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: docs/site
+          folder: target/docs/site
           clean-exclude: |
             api/python/
             api/rust/
           single-commit: true
+
+      # Make sure documentation artifacts are not cached
+      - name: Clean up documentation artifacts
+        run: rm -rf target/doc
