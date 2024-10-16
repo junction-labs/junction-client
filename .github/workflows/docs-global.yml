@@ -18,9 +18,6 @@ on:
 env:
   rust_stable: stable
 
-concurrency:
-  group: ${{ github.job }}-${{ github.ref }} 
-
 permissions:
   contents: write
 
