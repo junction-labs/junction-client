@@ -83,10 +83,7 @@ jobs:
           echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> $GITHUB_ENV
 
       - name: Install Python dependencies
-        run: uv pip install -r junction-python/requirements-dev.txt -r docs/source/requirements.txt
-
-      - name: Build and install junction python
-        run: cargo xtask python-build
+        run: uv pip install -r docs/source/requirements.txt
 
       - name: Build documentation
         env:
@@ -95,7 +92,6 @@ jobs:
         run: mkdocs build
 
       - name: Add .nojekyll
-        if: github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch'
         working-directory: docs/site
         run: touch .nojekyll
 
