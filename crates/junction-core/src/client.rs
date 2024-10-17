@@ -1,7 +1,7 @@
 use crate::{
-    config::{BackendLb, ConfigCache, StaticConfig},
+    endpoints::Endpoint,
     xds::{self, AdsClient},
-    Endpoint,
+    BackendLb, ConfigCache, StaticConfig,
 };
 use junction_api::{
     backend::Backend,
@@ -199,7 +199,7 @@ impl Client {
         method: &http::Method,
         url: crate::Url,
         headers: &http::HeaderMap,
-    ) -> crate::Result<Vec<crate::Endpoint>> {
+    ) -> crate::Result<Vec<Endpoint>> {
         // TODO: there's really no reasonable way to recover without starting a
         // new client. if you're on the default client (like FFI clients
         // probably are?) can you do anything about this?
@@ -250,7 +250,7 @@ impl Client {
         method: &http::Method,
         url: crate::Url,
         headers: &http::HeaderMap,
-    ) -> Result<Vec<crate::Endpoint>, (crate::Url, crate::Error)> {
+    ) -> Result<Vec<Endpoint>, (crate::Url, crate::Error)> {
         let (url, resolved_route) =
             resolve_routes(&self.ads.cache, &self.defaults, method, url, headers)?;
         resolve_endpoint(
@@ -424,7 +424,7 @@ fn resolve_endpoint(
     let timeouts = resolved_rule.timeouts.clone();
     let retry = resolved_rule.retry.clone();
 
-    Ok(vec![crate::Endpoint {
+    Ok(vec![Endpoint {
         url,
         timeouts,
         retry,

@@ -33,6 +33,7 @@ copyright = f"2024, {author}"
 
 extensions = [
     # Sphinx extensions
+    "sphinx.ext.napoleon",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.githubpages",

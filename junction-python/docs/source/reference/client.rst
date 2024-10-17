@@ -2,9 +2,7 @@
 Client
 ======
 
-.. currentmodule:: junction
+.. autoclass:: junction.Junction
 
-.. automodule:: junction
-    :members: Junction
-    :autosummary:
+
     

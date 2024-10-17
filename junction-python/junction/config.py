@@ -118,7 +118,7 @@ class RouteTimeouts(typing.TypedDict):
 class RouteRetry(typing.TypedDict):
     """Specifies a way of configuring client retry policy.
 
-    ( Modelled on the forthcoming Gateway API type https://gateway-api.sigs.k8s.io/geps/gep-1731/ )"""
+    ( Modelled on the forthcoming Gateway API type <https://gateway-api.sigs.k8s.io/geps/gep-1731/> )"""
 
     codes: typing.List[int]
     attempts: int
@@ -187,16 +187,16 @@ class RouteMatch(typing.TypedDict):
     together, i.e. the match will evaluate to true only if all conditions are satisfied.
 
     For example, the match below will match a HTTP request only if its path starts with `/foo` AND
-    it contains the `version: v1` header:
+    it contains the `version: v1` header::
 
-    ```yaml
-    match:
-      path:
-        value: "/foo"
-      headers:
-      - name: "version"
-        value "v1"
-    ```"""
+      ```yaml
+      match:
+        path:
+          value: "/foo"
+        headers:
+        - name: "version"
+          value "v1"
+      ```"""
 
     path: PathMatch
     """Specifies a HTTP request path matcher. If this field is not specified, a default prefix
@@ -227,18 +227,18 @@ class RouteRule(typing.TypedDict):
     """Defines conditions used for matching the rule against incoming HTTP requests. Each match is
     independent, i.e. this rule will be matched if **any** one of the matches is satisfied.
 
-    For example, take the following matches configuration:
+    For example, take the following matches configuration::
 
-    ```yaml
-    matches:
-    - path:
-        value: "/foo"
-      headers:
-      - name: "version"
-        value: "v2"
-    - path:
-        value: "/v2/foo"
-    ```
+      ```yaml
+      matches:
+      - path:
+          value: "/foo"
+        headers:
+        - name: "version"
+          value: "v2"
+      - path:
+          value: "/v2/foo"
+      ```
 
     For a request to match against this rule, a request must satisfy EITHER of the two
     conditions:
@@ -246,7 +246,7 @@ class RouteRule(typing.TypedDict):
     - path prefixed with `/foo` AND contains the header `version: v2`
     - path prefix of `/v2/foo`
 
-    See the documentation for RouteMatch on how to specify multiple match conditions that should
+    See the documentation for [RouteMatch] on how to specify multiple match conditions that should
     be ANDed together.
 
     If no matches are specified, the default is a prefix path match on "/", which has the effect

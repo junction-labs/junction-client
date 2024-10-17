@@ -107,8 +107,6 @@ use xds_api::pb::google::protobuf;
 // this is mostly a handful of DFS passes on the graph, but with an
 // early exit if we've already marked a node.
 
-use crate::config::{BackendLb, ConfigCache};
-
 use super::resources::{
     ApiListener, ApiListenerRouteConfig, Cluster, ClusterEndpointData, LoadAssignment,
     ResourceError, ResourceName, ResourceType, ResourceTypeSet, ResourceVec, RouteConfig,
@@ -302,7 +300,7 @@ impl CacheReader {
         listener_routes.chain(route_config_routes)
     }
 
-    pub(crate) fn iter_backends(&self) -> impl Iterator<Item = Arc<BackendLb>> + '_ {
+    pub(crate) fn iter_backends(&self) -> impl Iterator<Item = Arc<crate::BackendLb>> + '_ {
         self.data
             .clusters
             .iter()
@@ -341,7 +339,7 @@ impl CacheReader {
     }
 }
 
-impl ConfigCache for CacheReader {
+impl crate::ConfigCache for CacheReader {
     fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
         let listener = self.data.listeners.get(&target.xds_listener_name())?;
 
@@ -358,8 +356,8 @@ impl ConfigCache for CacheReader {
         &self,
         target: &Target,
     ) -> (
-        Option<Arc<BackendLb>>,
-        Option<Arc<crate::config::EndpointGroup>>,
+        Option<Arc<crate::BackendLb>>,
+        Option<Arc<crate::EndpointGroup>>,
     ) {
         macro_rules! tri {
             ($e:expr) => {

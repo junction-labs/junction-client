@@ -1,32 +1,31 @@
 //! An XDS-compatible HTTP Client.
 
-/// everything needs urls and error
 mod error;
 mod url;
-
-use std::sync::Arc;
-
 pub use crate::error::{Error, Result};
 pub use crate::url::Url;
 
-// rand is useful
 pub(crate) mod rand;
 
-// config needs to be public internally but should be exposed extremely
-// sparingly.
-mod config;
+mod endpoints;
+pub use endpoints::{Endpoint, EndpointAddress};
 
-pub use config::endpoints::{Endpoint, EndpointAddress};
-
-// only the client needs to be exported.
 mod client;
-mod xds;
-
 pub use client::Client;
-use config::StaticConfig;
+
+mod load_balancer;
+use load_balancer::EndpointGroup;
+pub use load_balancer::{BackendLb, LoadBalancer};
+
+mod xds;
+pub use xds::{ResourceVersion, XdsConfig};
+
+use junction_api::backend::Backend;
 use junction_api::http::Route;
 use junction_api::shared::Target;
-pub use xds::{ResourceVersion, XdsConfig};
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Check route resolution.
 ///
@@ -34,7 +33,7 @@ pub use xds::{ResourceVersion, XdsConfig};
 /// the index of the rule that matched, and the [Target] selected from the
 /// route.
 ///
-/// [Client::resolve_endpoints] resolves routes in exactly the same way as this
+/// [Client::resolve_http] resolves routes in exactly the same way as this
 /// function. Use it to test routing configuration without requiring a full
 /// client or connecting to a control plane.
 pub fn check_route(
@@ -55,4 +54,50 @@ pub fn check_route(
     std::mem::drop(config);
     let route = Arc::into_inner(resolved.route).unwrap();
     Ok((route, resolved.rule, resolved.backend))
+}
+
+pub(crate) trait ConfigCache {
+    fn get_route(&self, target: &Target) -> Option<Arc<Route>>;
+    fn get_backend(&self, target: &Target) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>);
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct StaticConfig {
+    pub routes: HashMap<Target, Arc<Route>>,
+    pub backends: HashMap<Target, Arc<BackendLb>>,
+}
+
+impl StaticConfig {
+    pub(crate) fn new(routes: Vec<Route>, backends: Vec<Backend>) -> Self {
+        let routes = routes
+            .into_iter()
+            .map(|x| (x.target.clone(), Arc::new(x)))
+            .collect();
+
+        let backends = backends
+            .into_iter()
+            .map(|config| {
+                let load_balancer = LoadBalancer::from_config(&config.lb);
+                (
+                    config.target.clone(),
+                    Arc::new(BackendLb {
+                        config,
+                        load_balancer,
+                    }),
+                )
+            })
+            .collect();
+
+        Self { routes, backends }
+    }
+}
+
+impl ConfigCache for StaticConfig {
+    fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
+        self.routes.get(target).cloned()
+    }
+
+    fn get_backend(&self, target: &Target) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
+        (self.backends.get(target).cloned(), None)
+    }
 }

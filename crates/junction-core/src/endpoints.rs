@@ -7,7 +7,7 @@ use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpo
 //
 // FIXME: Vec<Endpoints> is probably the wrong thing to return from all our
 // resolve methods. We probably need a struct that has something like a list
-// of primary endpoints to cycle through on retries, and a seprate list of
+// of primary endpoints to cycle through on retries, and a separate list of
 // endpoints to mirror traffic to. Figure that out once we support mirroring.
 
 /// An HTTP endpoint to make a request to.

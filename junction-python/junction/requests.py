@@ -63,6 +63,19 @@ class HTTPAdapter(requests.adapters.HTTPAdapter):
         cert: None | bytes | str | tuple[bytes | str, bytes | str] = None,
         proxies: Mapping[str, str] | None = None,
     ) -> requests.Response:
+        """Sends PreparedRequest object. Returns Response object.
+        
+        :param request: The :class:`PreparedRequest <PreparedRequest>` being sent.
+        :param stream: (optional) Whether to stream the request content.
+        :param timeout: (optional) How long to wait for the server to send data before giving up.
+        :type timeout: float or tuple or urllib3 Timeout object
+        :param verify: (optional) Either a boolean, in which case it controls whether
+                we verify the server's TLS certificate, or a string, in which case it
+                must be a path to a CA bundle to use
+        :param cert: (optional) Any user-provided SSL certificate to be trusted.
+        :param proxies: (optional) The proxies dictionary to apply to the request.
+        :rtype: requests.Response
+        """
         # This is overridden instead of the smaller hooks that requests provides
         # because it's where the actual load balancing takes place - for some
         # reason requests pulls connections from a PoolManager itself instead of

@@ -31,7 +31,7 @@ pub struct Fraction {
 }
 
 /// A regular expression that will be processed by Rust's standard library
-/// (https://docs.rs/regex/latest/regex/)
+/// <https://docs.rs/regex/latest/regex/>
 #[derive(Clone)]
 pub struct Regex(regex::Regex);
 
@@ -118,7 +118,7 @@ impl PartialEq for Regex {
 }
 
 /// A duration type where parsing and formatting obey the k8s Gateway API GEP-2257
-/// (https://gateway-api.sigs.k8s.io/geps/gep-2257).
+/// <https://gateway-api.sigs.k8s.io/geps/gep-2257>.
 ///
 /// This means when parsing from a string, the string must match `^([0-9]{1,5}(h|m|s|ms)){1,4}$` and
 /// is otherwise parsed the same way that Go's `time.ParseDuration` parses durations.
