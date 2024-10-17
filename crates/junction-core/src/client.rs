@@ -1,7 +1,7 @@
 use crate::{
-    config::{BackendLb, ConfigCache, StaticConfig},
+    load_balancer::BackendLb,
     xds::{self, AdsClient},
-    Endpoint,
+    ConfigCache, Endpoint, StaticConfig,
 };
 use junction_api::{
     backend::Backend,
@@ -30,6 +30,11 @@ pub struct Client {
 fn validate_defaults(_: &[Route], _: &[Backend]) -> Result<(), crate::Error> {
     Ok(())
 }
+
+// FIXME: Vec<Endpoints> is probably the wrong thing to return from all our
+// resolve methods. We probably need a struct that has something like a list
+// of primary endpoints to cycle through on retries, and a seprate list of
+// endpoints to mirror traffic to. Figure that out once we support mirroring.
 
 impl Client {
     /// Build a new client, spawning a new ADS client in the background.

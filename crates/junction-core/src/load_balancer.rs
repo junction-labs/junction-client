@@ -1,6 +1,6 @@
 use crate::EndpointAddress;
 use junction_api::{
-    backend::{LbPolicy, RingHashParams},
+    backend::{Backend, LbPolicy, RingHashParams},
     shared::{SessionAffinity, SessionAffinityHashParam, SessionAffinityHashParamType, Target},
 };
 use std::{
@@ -13,8 +13,7 @@ use std::{
 };
 use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
 
-// FIXME: Need a way to produce RequestContext from a route.
-// FIXME: include endpoint weights in EndpointGroup
+// FIXME: we ignore weights in EndpointGroup. that probably shouldn't be the case
 
 #[derive(Debug, Default, Hash)]
 pub(crate) struct EndpointGroup {
@@ -102,6 +101,13 @@ impl Locality {
             zone: locality.zone.clone(),
         })
     }
+}
+
+/// A [Backend] and the [LoadBalancer] it's configured with.
+#[derive(Debug)]
+pub struct BackendLb {
+    pub config: Backend,
+    pub load_balancer: LoadBalancer,
 }
 
 #[derive(Debug)]
