@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["SessionAffinityHashParamType","Target"],"struct":["DNSTarget","Duration","Fraction","Regex","ServiceTarget","SessionAffinity","SessionAffinityHashParam","WeightedTarget"],"type":["PortNumber","PreciseHostname"]};

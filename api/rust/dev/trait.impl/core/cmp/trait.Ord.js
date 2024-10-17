@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["junction_api",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.82.0/core/cmp/trait.Ord.html\" title=\"trait core::cmp::Ord\">Ord</a> for <a class=\"enum\" href=\"junction_api/shared/enum.Target.html\" title=\"enum junction_api::shared::Target\">Target</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.82.0/core/cmp/trait.Ord.html\" title=\"trait core::cmp::Ord\">Ord</a> for <a class=\"struct\" href=\"junction_api/shared/struct.DNSTarget.html\" title=\"struct junction_api::shared::DNSTarget\">DNSTarget</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.82.0/core/cmp/trait.Ord.html\" title=\"trait core::cmp::Ord\">Ord</a> for <a class=\"struct\" href=\"junction_api/shared/struct.ServiceTarget.html\" title=\"struct junction_api::shared::ServiceTarget\">ServiceTarget</a>"]]],["junction_core",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.82.0/core/cmp/trait.Ord.html\" title=\"trait core::cmp::Ord\">Ord</a> for <a class=\"struct\" href=\"junction_core/struct.ResourceVersion.html\" title=\"struct junction_core::ResourceVersion\">ResourceVersion</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[828,296]}

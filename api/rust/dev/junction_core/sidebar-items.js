@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["EndpointAddress","Error","LoadBalancer"],"fn":["check_route"],"struct":["BackendLb","Client","Endpoint","ResourceVersion","Url","XdsConfig"],"type":["Result"]};
