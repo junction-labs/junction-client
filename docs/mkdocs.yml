@@ -30,12 +30,14 @@ theme:
   palette:
   # Palette toggle for light mode
   - media: "(prefers-color-scheme: light)"
+    primary: deep orange
     scheme: default
     toggle:
       icon: material/brightness-7
       name: Switch to dark mode
   # Palette toggle for dark mode
   - media: "(prefers-color-scheme: dark)"
+    primary: deep orange
     scheme: slate
     toggle:
       icon: material/brightness-4
@@ -46,15 +48,11 @@ theme:
     - navigation.instant
     - navigation.tabs
     - navigation.tabs.sticky
-    - navigation.footer
-    - navigation.indexes
     - content.tabs.link
     - content.code.copy
   icon:
     repo: fontawesome/brands/github
 
-extra_css:
-  - _build/css/extra.css
 extra:
   analytics:
     provider: plausible
