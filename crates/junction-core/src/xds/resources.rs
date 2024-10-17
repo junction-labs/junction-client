@@ -21,7 +21,8 @@ use xds_api::{
     WellKnownTypes,
 };
 
-use crate::config::BackendLb;
+use crate::load_balancer::{EndpointGroup, LoadBalancer};
+use crate::BackendLb;
 
 // FIXME: validate that the all the EDS config sources use ADS instead of just assuming it everywhere.
 
@@ -444,7 +445,7 @@ pub(crate) enum ClusterEndpointData {
     #[allow(unused)]
     Inlined {
         name: String,
-        endpoint_group: Arc<crate::config::EndpointGroup>,
+        endpoint_group: Arc<EndpointGroup>,
     },
     LoadAssignment {
         name: ResourceName<LoadAssignment>,
@@ -459,7 +460,7 @@ impl Cluster {
         default_action: Option<&xds_route::RouteAction>,
     ) -> Result<Self, ResourceError> {
         let backend = Backend::from_xds(&xds, default_action)?;
-        let load_balancer = crate::config::load_balancer::LoadBalancer::from_config(&backend.lb);
+        let load_balancer = LoadBalancer::from_config(&backend.lb);
 
         let Some(discovery_type) = cluster_discovery_type(&xds) else {
             return Err(ResourceError::for_xds(
@@ -521,14 +522,12 @@ fn cluster_discovery_type(
 #[derive(Clone, Debug)]
 pub(crate) struct LoadAssignment {
     pub xds: xds_endpoint::ClusterLoadAssignment,
-    pub endpoint_group: Arc<crate::config::load_balancer::EndpointGroup>,
+    pub endpoint_group: Arc<EndpointGroup>,
 }
 
 impl LoadAssignment {
     pub(crate) fn from_xds(target: Target, xds: xds_endpoint::ClusterLoadAssignment) -> Self {
-        let endpoint_group = Arc::new(crate::config::load_balancer::EndpointGroup::from_xds(
-            &target, &xds,
-        ));
+        let endpoint_group = Arc::new(EndpointGroup::from_xds(&target, &xds));
 
         Self {
             xds,

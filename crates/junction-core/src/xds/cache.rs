@@ -107,7 +107,7 @@ use xds_api::pb::google::protobuf;
 // this is mostly a handful of DFS passes on the graph, but with an
 // early exit if we've already marked a node.
 
-use crate::config::{BackendLb, ConfigCache};
+use crate::{BackendLb, ConfigCache, EndpointGroup};
 
 use super::resources::{
     ApiListener, ApiListenerRouteConfig, Cluster, ClusterEndpointData, LoadAssignment,
@@ -354,13 +354,7 @@ impl ConfigCache for CacheReader {
         }
     }
 
-    fn get_backend(
-        &self,
-        target: &Target,
-    ) -> (
-        Option<Arc<BackendLb>>,
-        Option<Arc<crate::config::EndpointGroup>>,
-    ) {
+    fn get_backend(&self, target: &Target) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
         macro_rules! tri {
             ($e:expr) => {
                 match $e {
