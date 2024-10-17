@@ -101,7 +101,7 @@ html_show_sourcelink = False
 
 # key site root paths
 static_assets_root = (
-    "https://raw.githubusercontent.com/junction-labs/junction-static/master"
+    "https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292"
 )
 github_root = "https://github.com/junction-labs/junction-client"
 web_root = "https://docs.junctionlabs.io"
@@ -143,8 +143,8 @@ html_theme_options = {
         # },
     ],
     "logo": {
-        "image_light": f"{static_assets_root}/logos/junction-labs-logo-dark-medium.png",
-        "image_dark": f"{static_assets_root}/logos/junction-labs-logo-dimmed-medium.png",
+        "image_light": f"{static_assets_root}/67099720085278dbb34eccb2_logo-closed-orange-grey.svg",
+        "image_dark": f"{static_assets_root}/67099720085278dbb34eccb2_logo-closed-orange-grey.svg",
     },
     "switcher": {
         "json_url": f"{web_root}/api/python/dev/_static/version_switcher.json",
