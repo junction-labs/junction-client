@@ -1,3 +1,8 @@
+//! HTTP routing configuration.
+//!
+//! A [Route] specifies the all of the top-level configuration for all HTTP
+//! traffic that matches a particular URL.
+
 use crate::shared::{
     Duration, Fraction, PortNumber, PreciseHostname, Regex, Target, WeightedTarget,
 };
@@ -7,11 +12,18 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
 
+/// High level policy that describes how a request to a specific hostname should
+/// be routed.
+///
+/// Routes contain a target that describes the hostname to match and at least
+/// one [RouteRule]. When a [RouteRule] matches, it also describes where and how
+/// the traffic should be directed to a [Backend](crate::backend::Backend).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
-    /// The target for this route.
+    /// The target for this route. The target determines the hostnames that map
+    /// to this route.
     pub target: Target,
 
     /// The route rules that determine whether any URLs match.
@@ -458,6 +470,7 @@ pub enum PathModifier {
     ///
     /// ReplacePrefixMatch is only compatible with a `PathPrefix` route match.
     ///
+    /// ```plaintext,no_run
     /// Request Path | Prefix Match | Replace Prefix | Modified Path
     /// -------------|--------------|----------------|----------
     /// /foo/bar     | /foo         | /xyz           | /xyz/bar
@@ -471,6 +484,7 @@ pub enum PathModifier {
     /// /foo         | /foo         | <empty string> | /
     /// /foo/        | /foo         | /              | /
     /// /foo         | /foo         | /              | /
+    /// ```
     ReplacePrefixMatch {
         #[serde(alias = "replacePrefixMatch")]
         replace_prefix_match: String,
@@ -562,7 +576,7 @@ pub struct RequestMirrorFilter {
 
 /// Specifies a way of configuring client retry policy.
 ///
-/// ( Modelled on the forthcoming Gateway API type https://gateway-api.sigs.k8s.io/geps/gep-1731/ )
+/// Modelled on the forthcoming [Gateway API type](https://gateway-api.sigs.k8s.io/geps/gep-1731/).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]

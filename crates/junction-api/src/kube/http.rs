@@ -14,8 +14,6 @@ use crate::shared::Regex;
 
 impl crate::http::Route {
     /// Convert an [HTTPRouteSpec] into a [Route][crate::http::Route].
-    ///
-    /// This is an alias for [HTTPRouteSpec::try_into] or [Self::try_from].
     #[inline]
     pub fn from_gateway_httproute(route_spec: &HTTPRouteSpec) -> Result<crate::http::Route, Error> {
         route_spec.try_into()
@@ -23,8 +21,6 @@ impl crate::http::Route {
 
     /// Convert this [Route][crate::http::Route] into a Gateway API
     /// [HTTPRouteSpec].
-    ///
-    /// This is an alias for [HTTPRouteSpec::try_from] or [Self::try_into].
     #[inline]
     pub fn to_gateway_httproute_spec(&self) -> Result<HTTPRouteSpec, Error> {
         self.try_into()

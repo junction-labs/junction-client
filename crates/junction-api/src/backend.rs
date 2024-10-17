@@ -1,3 +1,6 @@
+//! Backends are the logical target of network traffic. They have an identity and
+//! a load-balancing policy. See [Backend] to get started.
+
 use crate::shared::{SessionAffinityHashParam, Target};
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
@@ -39,6 +42,7 @@ pub(crate) const fn default_min_ring_size() -> u32 {
 //
 // TODO: Random, Maglev
 //
+/// A policy describing how traffic to this target should be load balanced.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, JsonSchema)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
@@ -50,24 +54,33 @@ pub enum LbPolicy {
     /// Use a ketama-style consistent hashing algorithm to route this request.
     RingHash(RingHashParams),
 
-    /// No load balancing algorithm was specified.
+    /// No load balancing algorithm was specified. Clients may decide how load balancing happens
+    /// for this target.
     #[default]
     Unspecified,
 }
 
 impl LbPolicy {
+    /// Return `true` if this policy is [LbPolicy::Unspecified].
     pub fn is_unspecified(&self) -> bool {
         matches!(self, Self::Unspecified)
     }
 }
 
+/// A Backend is a logical target for network traffic.
+///
+/// A backend configures how all traffic for it's `target` is handled. Any
+/// traffic routed to this backend will use its load balancing policy to evenly
+/// spread traffic across all available endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Backend {
+    /// The target this backend represents. A target may be a Kubernetes Service
+    /// or a DNS name. See [Target] for more.
     pub target: Target,
 
-    /// The route rules that determine whether any URLs match.
+    /// How traffic to this target should be load balanced.
     pub lb: LbPolicy,
 }
 
