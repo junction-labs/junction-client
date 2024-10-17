@@ -86,18 +86,18 @@ pub struct RouteRule {
     /// Defines conditions used for matching the rule against incoming HTTP requests. Each match is
     /// independent, i.e. this rule will be matched if **any** one of the matches is satisfied.
     ///
-    /// For example, take the following matches configuration:
+    /// For example, take the following matches configuration::
     ///
-    /// ```yaml
-    /// matches:
-    /// - path:
-    ///     value: "/foo"
-    ///   headers:
-    ///   - name: "version"
-    ///     value: "v2"
-    /// - path:
-    ///     value: "/v2/foo"
-    /// ```
+    ///  ```yaml
+    ///  matches:
+    ///  - path:
+    ///      value: "/foo"
+    ///    headers:
+    ///    - name: "version"
+    ///      value: "v2"
+    ///  - path:
+    ///      value: "/v2/foo"
+    ///  ```
     ///
     /// For a request to match against this rule, a request must satisfy EITHER of the two
     /// conditions:
@@ -179,16 +179,16 @@ pub struct RouteTimeouts {
 /// together, i.e. the match will evaluate to true only if all conditions are satisfied.
 ///
 /// For example, the match below will match a HTTP request only if its path starts with `/foo` AND
-/// it contains the `version: v1` header:
+/// it contains the `version: v1` header::
 ///
-/// ```yaml
-/// match:
-///   path:
-///     value: "/foo"
-///   headers:
-///   - name: "version"
-///     value "v1"
-/// ```
+///  ```yaml
+///  match:
+///    path:
+///      value: "/foo"
+///    headers:
+///    - name: "version"
+///      value "v1"
+///  ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
@@ -468,23 +468,23 @@ pub enum PathModifier {
     /// separator. When specified, a trailing `/` is ignored. For example, the paths `/abc`,
     /// `/abc/`, and `/abc/def` would all match the prefix `/abc`, but the path `/abcd` would not.
     ///
-    /// ReplacePrefixMatch is only compatible with a `PathPrefix` route match.
+    /// ReplacePrefixMatch is only compatible with a `PathPrefix` route match::
     ///
-    /// ```plaintext,no_run
-    /// Request Path | Prefix Match | Replace Prefix | Modified Path
-    /// -------------|--------------|----------------|----------
-    /// /foo/bar     | /foo         | /xyz           | /xyz/bar
-    /// /foo/bar     | /foo         | /xyz/          | /xyz/bar
-    /// /foo/bar     | /foo/        | /xyz           | /xyz/bar
-    /// /foo/bar     | /foo/        | /xyz/          | /xyz/bar
-    /// /foo         | /foo         | /xyz           | /xyz
-    /// /foo/        | /foo         | /xyz           | /xyz/
-    /// /foo/bar     | /foo         | <empty string> | /bar
-    /// /foo/        | /foo         | <empty string> | /
-    /// /foo         | /foo         | <empty string> | /
-    /// /foo/        | /foo         | /              | /
-    /// /foo         | /foo         | /              | /
-    /// ```
+    ///  ```plaintext,no_run
+    ///  Request Path | Prefix Match | Replace Prefix | Modified Path
+    ///  -------------|--------------|----------------|----------
+    ///  /foo/bar     | /foo         | /xyz           | /xyz/bar
+    ///  /foo/bar     | /foo         | /xyz/          | /xyz/bar
+    ///  /foo/bar     | /foo/        | /xyz           | /xyz/bar
+    ///  /foo/bar     | /foo/        | /xyz/          | /xyz/bar
+    ///  /foo         | /foo         | /xyz           | /xyz
+    ///  /foo/        | /foo         | /xyz           | /xyz/
+    ///  /foo/bar     | /foo         | <empty string> | /bar
+    ///  /foo/        | /foo         | <empty string> | /
+    ///  /foo         | /foo         | <empty string> | /
+    ///  /foo/        | /foo         | /              | /
+    ///  /foo         | /foo         | /              | /
+    ///  ```
     ReplacePrefixMatch {
         #[serde(alias = "replacePrefixMatch")]
         replace_prefix_match: String,

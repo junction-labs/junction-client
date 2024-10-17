@@ -118,7 +118,7 @@ class RouteTimeouts(typing.TypedDict):
 class RouteRetry(typing.TypedDict):
     """Specifies a way of configuring client retry policy.
 
-    ( Modelled on the forthcoming Gateway API type https://gateway-api.sigs.k8s.io/geps/gep-1731/ )"""
+    Modelled on the forthcoming [Gateway API type](https://gateway-api.sigs.k8s.io/geps/gep-1731/)."""
 
     codes: typing.List[int]
     attempts: int
@@ -187,16 +187,16 @@ class RouteMatch(typing.TypedDict):
     together, i.e. the match will evaluate to true only if all conditions are satisfied.
 
     For example, the match below will match a HTTP request only if its path starts with `/foo` AND
-    it contains the `version: v1` header:
+    it contains the `version: v1` header::
 
-    ```yaml
-    match:
-      path:
-        value: "/foo"
-      headers:
-      - name: "version"
-        value "v1"
-    ```"""
+     ```yaml
+     match:
+       path:
+         value: "/foo"
+       headers:
+       - name: "version"
+         value "v1"
+     ```"""
 
     path: PathMatch
     """Specifies a HTTP request path matcher. If this field is not specified, a default prefix
@@ -227,18 +227,18 @@ class RouteRule(typing.TypedDict):
     """Defines conditions used for matching the rule against incoming HTTP requests. Each match is
     independent, i.e. this rule will be matched if **any** one of the matches is satisfied.
 
-    For example, take the following matches configuration:
+    For example, take the following matches configuration::
 
-    ```yaml
-    matches:
-    - path:
-        value: "/foo"
-      headers:
-      - name: "version"
-        value: "v2"
-    - path:
-        value: "/v2/foo"
-    ```
+     ```yaml
+     matches:
+     - path:
+         value: "/foo"
+       headers:
+       - name: "version"
+         value: "v2"
+     - path:
+         value: "/v2/foo"
+     ```
 
     For a request to match against this rule, a request must satisfy EITHER of the two
     conditions:
@@ -261,8 +261,16 @@ class RouteRule(typing.TypedDict):
 
 
 class Route(typing.TypedDict):
+    """High level policy that describes how a request to a specific hostname should
+    be routed.
+
+    Routes contain a target that describes the hostname to match and at least
+    one [RouteRule]. When a [RouteRule] matches, it also describes where and how
+    the traffic should be directed to a [Backend](crate::backend::Backend)."""
+
     target: Target
-    """The target for this route."""
+    """The target for this route. The target determines the hostnames that map
+    to this route."""
 
     rules: typing.List[RouteRule]
     """The route rules that determine whether any URLs match."""
@@ -298,6 +306,15 @@ LbPolicy = LbPolicyRoundRobin | LbPolicyRingHash | LbPolicyUnspecified
 
 
 class Backend(typing.TypedDict):
+    """A Backend is a logical target for network traffic.
+
+    A backend configures how all traffic for it's `target` is handled. Any
+    traffic routed to this backend will use its load balancing policy to evenly
+    spread traffic across all available endpoints."""
+
     target: Target
+    """The target this backend represents. A target may be a Kubernetes Service
+    or a DNS name. See [Target] for more."""
+
     lb: LbPolicy
-    """The route rules that determine whether any URLs match."""
+    """How traffic to this target should be load balanced."""

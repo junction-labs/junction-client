@@ -100,9 +100,7 @@ html_css_files = ["css/custom.css"]  # relative to html_static_path
 html_show_sourcelink = False
 
 # key site root paths
-static_assets_root = (
-    "https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292"
-)
+static_assets_root = "https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292"
 github_root = "https://github.com/junction-labs/junction-client"
 web_root = "https://docs.junctionlabs.io"
 

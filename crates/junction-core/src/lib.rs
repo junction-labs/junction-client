@@ -22,9 +22,9 @@ use junction_api::shared::Target;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::load_balancer::BackendLb;
+pub use crate::load_balancer::BackendLb;
 use crate::load_balancer::EndpointGroup;
-use crate::load_balancer::LoadBalancer;
+pub use crate::load_balancer::LoadBalancer;
 use junction_api::backend::Backend;
 
 /// Check route resolution.
@@ -33,7 +33,7 @@ use junction_api::backend::Backend;
 /// the index of the rule that matched, and the [Target] selected from the
 /// route.
 ///
-/// [Client::resolve_endpoints] resolves routes in exactly the same way as this
+/// [Client::resolve_http] resolves routes in exactly the same way as this
 /// function. Use it to test routing configuration without requiring a full
 /// client or connecting to a control plane.
 pub fn check_route(
