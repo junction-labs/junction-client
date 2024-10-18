@@ -6,7 +6,7 @@ use crate::{
 use junction_api::{
     backend::Backend,
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
-    shared::Target,
+    Target,
 };
 use std::future::Future;
 use std::time::Duration;

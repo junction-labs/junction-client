@@ -3,8 +3,9 @@
 //! A [Route] specifies the all of the top-level configuration for all HTTP
 //! traffic that matches a particular URL.
 
-use crate::shared::{
-    Duration, Fraction, PortNumber, PreciseHostname, Regex, Target, WeightedTarget,
+use crate::{
+    shared::{Duration, Fraction, Regex},
+    PortNumber, PreciseHostname, Target,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -591,6 +592,22 @@ pub struct RouteRetry {
     pub backoff: Option<Duration>,
 }
 
+const fn default_weight() -> u32 {
+    1
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct WeightedTarget {
+    #[serde(default = "default_weight")]
+    pub weight: u32,
+
+    #[serde(flatten)]
+    pub target: Target,
+    //Todo: gateway API also allows filters here under an extended support condition we need to
+    // decide whether this is one where its simpler just to drop it.
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -601,7 +618,8 @@ mod tests {
     use super::*;
     use crate::{
         http::{HeaderMatch, RouteRule},
-        shared::{DNSTarget, Regex, ServiceTarget, Target, WeightedTarget},
+        shared::Regex,
+        DNSTarget, ServiceTarget, Target,
     };
 
     #[test]

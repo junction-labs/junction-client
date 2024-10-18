@@ -1,11 +1,12 @@
 //! Backends are the logical target of network traffic. They have an identity and
 //! a load-balancing policy. See [Backend] to get started.
 
-use crate::shared::{SessionAffinityHashParam, Target};
-#[cfg(feature = "typeinfo")]
-use junction_typeinfo::TypeInfo;
+use crate::Target;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "typeinfo")]
+use junction_typeinfo::TypeInfo;
 
 /// Policy for configuring a ketama-style consistent hashing algorithm.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -121,6 +122,65 @@ mod tests {
             },
         });
         let obj: Backend = serde_json::from_value(test_json.clone()).unwrap();
+        let output_json = serde_json::to_value(obj).unwrap();
+        assert_eq!(test_json, output_json);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[serde(tag = "type")]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub enum SessionAffinityHashParamType {
+    /// Hash the value of a header. If the header has multiple values, they will all be used as hash
+    /// input.
+    #[serde(alias = "header")]
+    Header {
+        /// The name of the header to use as hash input.
+        name: String,
+    },
+}
+
+// FIXME: Ben votes to skip the extra "affinity" naming here as its redundant
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct SessionAffinityHashParam {
+    /// Whether to stop immediately after hashing this value.
+    ///
+    /// This is useful if you want to try to hash a value, and then fall back to another as a
+    /// default if it wasn't set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terminal: bool,
+
+    #[serde(flatten)]
+    pub matcher: SessionAffinityHashParamType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct SessionAffinity {
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        alias = "hashParams",
+        alias = "HashParams"
+    )]
+    pub hash_params: Vec<SessionAffinityHashParam>,
+}
+
+#[cfg(test)]
+mod test_session_affinity {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_session_affinity_policy() {
+        let test_json = json!({
+            "hash_params": [
+                { "type": "Header", "name": "FOO",  "terminal": true },
+                { "type": "Header", "name": "FOO"}
+            ]
+        });
+        let obj: SessionAffinity = serde_json::from_value(test_json.clone()).unwrap();
         let output_json = serde_json::to_value(obj).unwrap();
         assert_eq!(test_json, output_json);
     }

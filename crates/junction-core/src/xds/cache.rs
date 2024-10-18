@@ -76,7 +76,7 @@
 use crossbeam_skiplist::SkipMap;
 use enum_map::EnumMap;
 use junction_api::http::Route;
-use junction_api::shared::Target;
+use junction_api::Target;
 use petgraph::{
     graph::{DiGraph, NodeIndex},
     visit::{self, Visitable},
@@ -1005,7 +1005,7 @@ impl Cache {
 
 #[cfg(test)]
 mod test {
-    use junction_api::{backend::LbPolicy, shared::ServiceTarget};
+    use junction_api::{backend::LbPolicy, ServiceTarget};
 
     use super::*;
     use crate::xds::test as xds_test;

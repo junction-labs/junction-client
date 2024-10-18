@@ -5,7 +5,7 @@ use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 use enum_map::EnumMap;
 use junction_api::backend::Backend;
 use junction_api::http::Route;
-use junction_api::shared::Target;
+use junction_api::Target;
 use smol_str::SmolStr;
 use xds_api::pb::google::protobuf;
 use xds_api::{

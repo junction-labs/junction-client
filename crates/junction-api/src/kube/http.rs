@@ -84,7 +84,7 @@ impl TryFrom<&HTTPRouteSpec> for crate::http::Route {
     type Error = Error;
 
     fn try_from(spec: &HTTPRouteSpec) -> Result<Self, Error> {
-        use crate::shared::Target;
+        use crate::Target;
 
         // build a target from the parent ref. forbid having more than one parent ref.
         //
@@ -256,7 +256,7 @@ fn port_from_gateway(port: &Option<i32>) -> Result<Option<u16>, Error> {
         .transpose()
 }
 
-impl TryFrom<&HTTPRouteParentRefs> for crate::shared::Target {
+impl TryFrom<&HTTPRouteParentRefs> for crate::Target {
     type Error = Error;
     fn try_from(parent_ref: &HTTPRouteParentRefs) -> Result<Self, Error> {
         let group = parent_ref
@@ -265,25 +265,21 @@ impl TryFrom<&HTTPRouteParentRefs> for crate::shared::Target {
             .unwrap_or("gateway.networking.k8s.io");
 
         match (group, parent_ref.kind.as_deref()) {
-            ("junctionlabs.io", Some("DNS")) => {
-                Ok(crate::shared::Target::DNS(crate::shared::DNSTarget {
-                    hostname: parent_ref.name.clone(),
-                    port: port_from_gateway(&parent_ref.port).with_field("port")?,
-                }))
-            }
+            ("junctionlabs.io", Some("DNS")) => Ok(crate::Target::DNS(crate::DNSTarget {
+                hostname: parent_ref.name.clone(),
+                port: port_from_gateway(&parent_ref.port).with_field("port")?,
+            })),
             ("", Some("Service")) => {
                 let namespace = parent_ref
                     .namespace
                     .clone()
                     .unwrap_or_else(|| "default".to_string());
 
-                Ok(crate::shared::Target::Service(
-                    crate::shared::ServiceTarget {
-                        name: parent_ref.name.clone(),
-                        namespace,
-                        port: port_from_gateway(&parent_ref.port).with_field("port")?,
-                    },
-                ))
+                Ok(crate::Target::Service(crate::ServiceTarget {
+                    name: parent_ref.name.clone(),
+                    namespace,
+                    port: port_from_gateway(&parent_ref.port).with_field("port")?,
+                }))
             }
             (group, Some(kind)) => Err(Error::new(format!(
                 "unsupported parent ref: {group}/{kind}"
@@ -293,7 +289,7 @@ impl TryFrom<&HTTPRouteParentRefs> for crate::shared::Target {
     }
 }
 
-impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::shared::WeightedTarget {
+impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::http::WeightedTarget {
     type Error = Error;
     fn try_from(backend_ref: &HTTPRouteRulesBackendRefs) -> Result<Self, Error> {
         let group = backend_ref.group.as_deref().unwrap_or("");
@@ -308,7 +304,7 @@ impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::shared::WeightedTarget {
         let target = match (group, kind) {
             ("junctionlabs.io", "DNS") => {
                 let port = port_from_gateway(&backend_ref.port).with_field("port")?;
-                crate::shared::Target::DNS(crate::shared::DNSTarget {
+                crate::Target::DNS(crate::DNSTarget {
                     hostname: backend_ref.name.clone(),
                     port,
                 })
@@ -319,7 +315,7 @@ impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::shared::WeightedTarget {
                     .namespace
                     .clone()
                     .unwrap_or_else(|| "default".to_string());
-                crate::shared::Target::Service(crate::shared::ServiceTarget {
+                crate::Target::Service(crate::ServiceTarget {
                     name: backend_ref.name.clone(),
                     port,
                     namespace,
@@ -332,7 +328,7 @@ impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::shared::WeightedTarget {
             }
         };
 
-        Ok(crate::shared::WeightedTarget { weight, target })
+        Ok(crate::http::WeightedTarget { weight, target })
     }
 }
 
@@ -509,7 +505,7 @@ impl TryFrom<&crate::http::HeaderMatch> for HTTPRouteRulesMatchesHeaders {
 macro_rules! into_kube_ref {
     ($target_type:ident, $target:expr, { $($extra_field:ident: $extra_value:expr)*$(,)? }) => {
         match $target {
-            crate::shared::Target::DNS(target) => $target_type {
+            crate::Target::DNS(target) => $target_type {
                 group: Some("junctionlabs.io".to_string()),
                 kind: Some("DNS".to_string()),
                 name: target.hostname.clone(),
@@ -519,7 +515,7 @@ macro_rules! into_kube_ref {
                 )*
                 ..Default::default()
             },
-            crate::shared::Target::Service(target) => $target_type {
+            crate::Target::Service(target) => $target_type {
                 group: Some(String::new()),
                 kind: Some("Service".to_string()),
                 name: target.name.clone(),
@@ -534,20 +530,18 @@ macro_rules! into_kube_ref {
     };
 }
 
-impl TryFrom<&crate::shared::Target> for HTTPRouteParentRefs {
+impl TryFrom<&crate::Target> for HTTPRouteParentRefs {
     type Error = Error;
 
-    fn try_from(target: &crate::shared::Target) -> Result<HTTPRouteParentRefs, Error> {
+    fn try_from(target: &crate::Target) -> Result<HTTPRouteParentRefs, Error> {
         Ok(into_kube_ref!(HTTPRouteParentRefs, target, {}))
     }
 }
 
-impl TryFrom<&crate::shared::WeightedTarget> for HTTPRouteRulesBackendRefs {
+impl TryFrom<&crate::http::WeightedTarget> for HTTPRouteRulesBackendRefs {
     type Error = Error;
 
-    fn try_from(
-        target: &crate::shared::WeightedTarget,
-    ) -> Result<HTTPRouteRulesBackendRefs, Error> {
+    fn try_from(target: &crate::http::WeightedTarget) -> Result<HTTPRouteRulesBackendRefs, Error> {
         let mut backend_ref = into_kube_ref!(HTTPRouteRulesBackendRefs, &target.target, {
             weight: Some(target.weight as i32)
         });
@@ -588,7 +582,7 @@ spec:
 
         let gateway_route: HTTPRoute = serde_yml::from_str(gateway_yaml).unwrap();
         let route = crate::http::Route {
-            target: crate::shared::Target::Service(crate::shared::ServiceTarget {
+            target: crate::Target::Service(crate::ServiceTarget {
                 name: "example-gateway".to_string(),
                 namespace: "default".to_string(),
                 port: None,
@@ -600,9 +594,9 @@ spec:
                     }),
                     ..Default::default()
                 }],
-                backends: vec![crate::shared::WeightedTarget {
+                backends: vec![crate::http::WeightedTarget {
                     weight: 1,
-                    target: crate::shared::Target::Service(crate::shared::ServiceTarget {
+                    target: crate::Target::Service(crate::ServiceTarget {
                         name: "foo-svc".to_string(),
                         namespace: "default".to_string(),
                         port: Some(8080),
@@ -631,7 +625,7 @@ spec:
     #[test]
     fn test_roundtrip() {
         let route = crate::http::Route {
-            target: crate::shared::Target::Service(crate::shared::ServiceTarget {
+            target: crate::Target::Service(crate::ServiceTarget {
                 name: "example-gateway".to_string(),
                 namespace: "default".to_string(),
                 port: None,
@@ -643,9 +637,9 @@ spec:
                     }),
                     ..Default::default()
                 }],
-                backends: vec![crate::shared::WeightedTarget {
+                backends: vec![crate::http::WeightedTarget {
                     weight: 1,
-                    target: crate::shared::Target::Service(crate::shared::ServiceTarget {
+                    target: crate::Target::Service(crate::ServiceTarget {
                         name: "foo-svc".to_string(),
                         namespace: "default".to_string(),
                         port: Some(8080),
