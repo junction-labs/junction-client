@@ -336,8 +336,6 @@ impl QueryParamMatch {
     }
 
     pub fn to_xds(&self) -> xds_route::QueryParameterMatcher {
-        use xds_route::query_parameter_matcher::QueryParameterMatchSpecifier;
-
         let (name, matcher) = match self {
             QueryParamMatch::RegularExpression { name, value } => {
                 let name = name.clone();
