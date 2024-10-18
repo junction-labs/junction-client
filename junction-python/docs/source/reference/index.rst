@@ -20,6 +20,6 @@ methods. All classes and functions exposed in the ``junction.*`` namespace are p
         .. toctree::
            :maxdepth: 2
 
-           client
+           junction
            requests
            urllib3

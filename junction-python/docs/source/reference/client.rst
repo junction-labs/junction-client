@@ -1,5 +1,0 @@
-======
-Client
-======
-
-.. autoclass:: junction.Junction
