@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 use crate::backend::{Backend, LbPolicy};
 use crate::error::{Error, ErrorContext};
-use crate::{ServiceTarget, Target};
+use crate::{Name, ServiceTarget, Target};
 
 use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
 use kube::api::ObjectMeta;
@@ -34,14 +35,14 @@ impl Backend {
             Target::DNS(dns) => {
                 svc.spec = Some(ServiceSpec {
                     type_: Some("ExternalName".to_string()),
-                    external_name: Some(dns.hostname.clone()),
+                    external_name: Some(dns.hostname.to_string()),
                     ..Default::default()
                 })
             }
             Target::Service(service) => {
                 let meta = svc.meta_mut();
-                meta.name = Some(service.name.clone());
-                meta.namespace = Some(service.namespace.clone());
+                meta.name = Some(service.name.to_string());
+                meta.namespace = Some(service.namespace.to_string());
 
                 svc.spec = Some(ServiceSpec {
                     ports: Some(vec![ServicePort {
@@ -94,8 +95,8 @@ impl Backend {
                 };
 
                 let target = Target::Service(ServiceTarget {
-                    name: name.to_string(),
-                    namespace: namespace.to_string(),
+                    name: Name::from_str(name).with_fields("meta", "name")?,
+                    namespace: Name::from_str(namespace).with_fields("meta", "namespace")?,
                     port,
                 });
                 backends.push(Backend { target, lb })
@@ -107,8 +108,8 @@ impl Backend {
                         .with_field_index("ports", i)?;
 
                     let target = Target::Service(ServiceTarget {
-                        name: name.to_string(),
-                        namespace: namespace.to_string(),
+                        name: Name::from_str(name).with_fields("meta", "name")?,
+                        namespace: Name::from_str(namespace).with_fields("meta", "namespace")?,
                         port: Some(port),
                     });
                     backends.push(Backend {
@@ -139,7 +140,7 @@ mod test {
     use k8s_openapi::api::core::v1::{ServicePort, ServiceSpec};
     use kube::api::ObjectMeta;
 
-    use crate::DNSTarget;
+    use crate::{DNSTarget, Hostname};
 
     use super::*;
 
@@ -157,8 +158,8 @@ mod test {
     fn test_to_service_patch() {
         let backend = Backend {
             target: Target::Service(ServiceTarget {
-                name: "foo".to_string(),
-                namespace: "bar".to_string(),
+                name: Name::from_static("foo"),
+                namespace: Name::from_static("bar"),
                 port: None,
             }),
             lb: LbPolicy::RoundRobin,
@@ -189,7 +190,7 @@ mod test {
 
         let backend = Backend {
             target: Target::DNS(DNSTarget {
-                hostname: "example.com".to_string(),
+                hostname: Hostname::from_static("example.com"),
                 port: None,
             }),
             lb: LbPolicy::RoundRobin,
@@ -237,8 +238,8 @@ mod test {
             Backend::from_service(&svc).unwrap(),
             vec![Backend {
                 target: Target::Service(ServiceTarget {
-                    name: "foo".to_string(),
-                    namespace: "bar".to_string(),
+                    name: Name::from_static("foo"),
+                    namespace: Name::from_static("bar"),
                     port: None,
                 }),
                 lb: LbPolicy::Unspecified,
@@ -282,16 +283,16 @@ mod test {
             vec![
                 Backend {
                     target: Target::Service(ServiceTarget {
-                        name: "foo".to_string(),
-                        namespace: "bar".to_string(),
+                        name: Name::from_static("foo"),
+                        namespace: Name::from_static("bar"),
                         port: Some(80),
                     }),
                     lb: LbPolicy::RoundRobin,
                 },
                 Backend {
                     target: Target::Service(ServiceTarget {
-                        name: "foo".to_string(),
-                        namespace: "bar".to_string(),
+                        name: Name::from_static("foo"),
+                        namespace: Name::from_static("bar"),
                         port: Some(443),
                     }),
                     lb: LbPolicy::RoundRobin,
@@ -304,8 +305,8 @@ mod test {
     fn test_svc_patch_roundtrip() {
         let backend = Backend {
             target: Target::Service(ServiceTarget {
-                name: "foo".to_string(),
-                namespace: "bar".to_string(),
+                name: Name::from_static("foo"),
+                namespace: Name::from_static("bar"),
                 port: None,
             }),
             lb: LbPolicy::RoundRobin,
