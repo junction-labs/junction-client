@@ -39,8 +39,8 @@ impl Route {
     pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, Error> {
         // try to parse the target as a backend name in case it's a passthrough
         // route, and then try parsing it as a regular target.
-        let target = Target::from_backend_name(&xds.name)
-            .or_else(|_| Target::from_route_name(&xds.name))
+        let target = Target::from_passthrough_route_name(&xds.name)
+            .or_else(|_| Target::from_name(&xds.name))
             .with_field("name")?;
 
         let mut rules = vec![];
@@ -80,7 +80,7 @@ impl Route {
             ..Default::default()
         }];
 
-        let name = self.target.route_name();
+        let name = self.target.name();
         xds_route::RouteConfiguration {
             name,
             virtual_hosts,
@@ -555,13 +555,13 @@ impl WeightedTarget {
         match targets {
             [] => None,
             [target] => Some(xds_route::route_action::ClusterSpecifier::Cluster(
-                target.target.backend_name(),
+                target.target.name(),
             )),
             targets => {
                 let clusters = targets
                     .iter()
                     .map(|wt| xds_route::weighted_cluster::ClusterWeight {
-                        name: wt.target.backend_name(),
+                        name: wt.target.name(),
                         weight: Some(wt.weight.into()),
                         ..Default::default()
                     })
@@ -582,14 +582,14 @@ impl WeightedTarget {
     ) -> Result<Vec<Self>, Error> {
         match xds {
             Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => Ok(vec![Self {
-                target: Target::from_backend_name(name).with_field("cluster")?,
+                target: Target::from_name(name).with_field("cluster")?,
                 weight: 1,
             }]),
             Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(
                 weighted_clusters,
             )) => {
                 let clusters = weighted_clusters.clusters.iter().enumerate().map(|(i, w)| {
-                    let target = Target::from_backend_name(&w.name).with_field_index("name", i)?;
+                    let target = Target::from_name(&w.name).with_field_index("name", i)?;
                     let weight = crate::value_or_default!(w.weight, 1);
 
                     Ok(Self { target, weight })

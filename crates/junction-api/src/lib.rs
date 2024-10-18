@@ -348,20 +348,20 @@ pub enum Target {
 
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.write_route_name(f)
+        self.write_name(f)
     }
 }
 
 impl Target {
     const BACKEND_SUBDOMAIN: &'static str = ".lb.jct";
 
-    pub fn route_name(&self) -> String {
+    pub fn name(&self) -> String {
         let mut buf = String::new();
-        self.write_route_name(&mut buf).unwrap();
+        self.write_name(&mut buf).unwrap();
         buf
     }
 
-    fn write_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
         match self {
             Target::DNS(dns) => {
                 w.write_str(&dns.hostname)?;
@@ -388,13 +388,14 @@ impl Target {
         Ok(())
     }
 
-    pub fn backend_name(&self) -> String {
+    #[doc(hidden)]
+    pub fn passthrough_route_name(&self) -> String {
         let mut buf = String::new();
-        self.write_backend_name(&mut buf).unwrap();
+        self.write_passthrough_route_name(&mut buf).unwrap();
         buf
     }
 
-    fn write_backend_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_passthrough_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
         match self {
             Target::DNS(dns) => {
                 write!(w, "{}{}", dns.hostname, Target::BACKEND_SUBDOMAIN)?;
@@ -422,7 +423,7 @@ impl Target {
         Ok(())
     }
 
-    pub fn from_route_name(name: &str) -> Result<Self, Error> {
+    pub fn from_name(name: &str) -> Result<Self, Error> {
         let (name, port) = parse_port(name)?;
         let hostname = Hostname::from_str(name)?;
 
@@ -448,7 +449,8 @@ impl Target {
         Ok(target)
     }
 
-    pub fn from_backend_name(name: &str) -> Result<Self, Error> {
+    #[doc(hidden)]
+    pub fn from_passthrough_route_name(name: &str) -> Result<Self, Error> {
         let (name, port) = parse_port(name)?;
         let hostname = Hostname::from_str(name)?;
 
@@ -456,7 +458,7 @@ impl Target {
             return Err(Error::new_static("expected a Junction backend name"));
         };
 
-        let mut target = Self::from_route_name(hostname)?;
+        let mut target = Self::from_name(hostname)?;
         if let Some(port) = port {
             target = target.with_port(port);
         }
@@ -577,8 +579,8 @@ mod test {
 
     #[track_caller]
     fn assert_route_name(target: Target, str: &'static str) {
-        assert_eq!(&target.route_name(), str);
-        let parsed = Target::from_route_name(str).unwrap();
+        assert_eq!(&target.name(), str);
+        let parsed = Target::from_name(str).unwrap();
         assert_eq!(parsed, target);
     }
 
@@ -621,8 +623,8 @@ mod test {
 
     #[track_caller]
     fn assert_backend_name(target: Target, str: &'static str) {
-        assert_eq!(&target.backend_name(), str);
-        let parsed = Target::from_backend_name(str).unwrap();
+        assert_eq!(&target.passthrough_route_name(), str);
+        let parsed = Target::from_passthrough_route_name(str).unwrap();
         assert_eq!(parsed, target);
     }
 

@@ -18,7 +18,7 @@ impl Backend {
         route_action: Option<&xds_route::RouteAction>,
     ) -> Result<Self, Error> {
         let lb = LbPolicy::from_xds(cluster, route_action)?;
-        let target = Target::from_backend_name(&cluster.name)?;
+        let target = Target::from_name(&cluster.name)?;
         Ok(Backend { target, lb })
     }
 
@@ -38,13 +38,13 @@ impl Backend {
         };
 
         xds_cluster::Cluster {
-            name: self.target.backend_name(),
+            name: self.target.name(),
             lb_policy: lb_policy.into(),
             lb_config,
             cluster_discovery_type: Some(cluster_discovery_type),
             eds_cluster_config: Some(EdsClusterConfig {
                 eds_config: Some(crate::xds::ads_config_source()),
-                service_name: self.target.backend_name(),
+                service_name: self.target.name(),
             }),
             ..Default::default()
         }
@@ -56,7 +56,7 @@ impl Backend {
         use xds_route::route_match::PathSpecifier;
 
         let default_action = Action::Route(xds_route::RouteAction {
-            cluster_specifier: Some(ClusterSpecifier::Cluster(self.target.backend_name())),
+            cluster_specifier: Some(ClusterSpecifier::Cluster(self.target.name())),
             hash_policy: self.to_xds_hash_policies(),
             ..Default::default()
         });
@@ -82,7 +82,7 @@ impl Backend {
         // it's incorrect literally everywhere else, but should be done here to
         // indicate that this is the passthrough route.
         xds_route::RouteConfiguration {
-            name: self.target.backend_name(),
+            name: self.target.passthrough_route_name(),
             virtual_hosts: vec![vhost],
             ..Default::default()
         }

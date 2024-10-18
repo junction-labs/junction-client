@@ -1,8 +1,6 @@
 use http::HeaderValue;
 use junction_api::{
-    backend::{Backend, LbPolicy},
-    http::{HeaderMatch, Route, RouteMatch, RouteRule, WeightedTarget},
-    Regex, ServiceTarget, Target,
+    backend::{Backend, LbPolicy}, http::{HeaderMatch, Route, RouteMatch, RouteRule, WeightedTarget}, Name, Regex, ServiceTarget, Target
 };
 use junction_core::Client;
 use std::{env, str::FromStr, time::Duration};
@@ -27,13 +25,13 @@ async fn main() {
     tokio::spawn(client.csds_server(8009));
 
     let nginx = Target::Service(ServiceTarget {
-        name: "nginx".to_string(),
-        namespace: "default".to_string(),
+        name: Name::from_static("nginx"),
+        namespace: Name::from_static("default"),
         port: Some(80),
     });
     let nginx_staging = Target::Service(ServiceTarget {
-        name: "nginx-staging".to_string(),
-        namespace: "default".to_string(),
+        name: Name::from_static("nginx-staging"),
+        namespace: Name::from_static("default"),
         port: Some(80),
     });
 

@@ -360,7 +360,7 @@ pub(crate) struct RouteConfig {
     pub xds: xds_route::RouteConfiguration,
     pub route: Arc<Route>,
     pub clusters: Vec<ResourceName<Cluster>>,
-    pub default_action: Option<(ResourceName<Cluster>, xds_route::RouteAction)>,
+    pub passthrough_action: Option<(ResourceName<Cluster>, xds_route::RouteAction)>,
 }
 
 impl RouteConfig {
@@ -427,7 +427,7 @@ impl RouteConfig {
             xds,
             route,
             clusters,
-            default_action,
+            passthrough_action: default_action,
         })
     }
 }

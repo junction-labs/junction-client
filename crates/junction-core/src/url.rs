@@ -99,7 +99,11 @@ impl Url {
         self.authority.host()
     }
 
-    pub fn port(&self) -> u16 {
+    pub fn port(&self) -> Option<u16> {
+        self.authority.port_u16()
+    }
+
+    pub fn default_port(&self) -> u16 {
         self.authority
             .port_u16()
             .unwrap_or_else(|| match self.scheme.as_ref() {

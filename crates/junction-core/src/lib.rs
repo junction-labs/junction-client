@@ -59,6 +59,16 @@ pub fn check_route(
 pub(crate) trait ConfigCache {
     fn get_route(&self, target: &Target) -> Option<Arc<Route>>;
     fn get_backend(&self, target: &Target) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>);
+
+    fn get_route_with_fallbacks(&self, targets: &[Target]) -> Option<Arc<Route>> {
+        for target in targets {
+            if let Some(route) = self.get_route(target) {
+                return Some(route);
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Clone, Debug, Default)]

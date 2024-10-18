@@ -95,16 +95,13 @@ impl Client {
     fn subscribe_to_defaults(&self, defaults: &StaticConfig) {
         for (target, route) in &defaults.routes {
             self.ads
-                .subscribe(xds::ResourceType::Listener, target.xds_listener_name())
+                .subscribe(xds::ResourceType::Listener, target.name())
                 .unwrap();
 
             for rule in &route.rules {
                 for backend in &rule.backends {
                     self.ads
-                        .subscribe(
-                            xds::ResourceType::Cluster,
-                            backend.target.xds_cluster_name(),
-                        )
+                        .subscribe(xds::ResourceType::Cluster, backend.target.name())
                         .unwrap();
                 }
             }
@@ -112,7 +109,7 @@ impl Client {
 
         for target in defaults.backends.keys() {
             self.ads
-                .subscribe(xds::ResourceType::Cluster, target.xds_cluster_name())
+                .subscribe(xds::ResourceType::Cluster, target.name())
                 .unwrap();
         }
     }
@@ -284,20 +281,23 @@ pub(crate) fn resolve_routes(
 ) -> Result<(crate::Url, ResolvedRoute), (crate::Url, crate::Error)> {
     use rand::seq::SliceRandom;
 
-    let key_with_port = Target::from_hostname(url.hostname(), Some(url.port()));
-    let key_no_port = Target::from_hostname(url.hostname(), None);
+    let target = match Target::from_name(url.hostname()) {
+        Ok(target) => target,
+        Err(e) => return Err((url, crate::Error::invalid_url(e.to_string()))),
+    };
+
+    let targets = match url.port() {
+        Some(port) => vec![target.with_port(port), target],
+        None => vec![target],
+    };
+
+    let default_route = defaults.get_route_with_fallbacks(&targets);
+    let configured_route = cache.get_route_with_fallbacks(&targets);
 
     // FIXME: for now, the default routes are only looked up if there is no
     // route coming from XDS. Whereas in reality we likely want to merge the
     // values. However that requires some thinking about what it means at
     // the rule equivalence level and is so left for later.
-    let default_route = defaults
-        .get_route(&key_with_port)
-        .or_else(|| defaults.get_route(&key_no_port));
-    let configured_route = cache
-        .get_route(&key_with_port)
-        .or_else(|| cache.get_route(&key_no_port));
-
     let matching_route = match (default_route, configured_route) {
         (Some(default_route), Some(configured_route)) => {
             if configured_route.is_passthrough_route() {
@@ -308,14 +308,7 @@ pub(crate) fn resolve_routes(
         }
         (None, Some(configured_route)) => configured_route,
         (Some(default_route), None) => default_route.clone(),
-        _ => {
-            return Err((
-                url,
-                crate::Error::NoRouteMatched {
-                    routes: vec![key_with_port, key_no_port],
-                },
-            ))
-        }
+        _ => return Err((url, crate::Error::NoRouteMatched { routes: targets })),
     };
 
     // if we got here, we have resolved to a list of routes

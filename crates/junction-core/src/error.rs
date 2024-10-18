@@ -52,6 +52,10 @@ fn format_targets(targets: &[Target]) -> String {
 }
 
 impl Error {
+    pub(crate) fn invalid_url(message: String) -> Self {
+        Self::InvalidUrl(Cow::Owned(message))
+    }
+
     pub(crate) fn is_temporary(&self) -> bool {
         matches!(
             self,
