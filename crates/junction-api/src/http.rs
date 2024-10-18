@@ -7,7 +7,6 @@ use crate::{
     shared::{Duration, Fraction, Regex},
     PortNumber, PreciseHostname, Target,
 };
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "typeinfo")]
@@ -578,7 +577,7 @@ pub struct RequestMirrorFilter {
 /// Specifies a way of configuring client retry policy.
 ///
 /// Modelled on the forthcoming [Gateway API type](https://gateway-api.sigs.k8s.io/geps/gep-1731/).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRetry {

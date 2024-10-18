@@ -2,14 +2,13 @@
 //! a load-balancing policy. See [Backend] to get started.
 
 use crate::Target;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
 
 /// Policy for configuring a ketama-style consistent hashing algorithm.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RingHashParams {
@@ -44,7 +43,7 @@ pub(crate) const fn default_min_ring_size() -> u32 {
 // TODO: Random, Maglev
 //
 /// A policy describing how traffic to this target should be load balanced.
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum LbPolicy {
@@ -127,7 +126,7 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum SessionAffinityHashParamType {
@@ -141,7 +140,7 @@ pub enum SessionAffinityHashParamType {
 }
 
 // FIXME: Ben votes to skip the extra "affinity" naming here as its redundant
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct SessionAffinityHashParam {
     /// Whether to stop immediately after hashing this value.
@@ -155,7 +154,7 @@ pub struct SessionAffinityHashParam {
     pub matcher: SessionAffinityHashParamType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct SessionAffinity {
     #[serde(
