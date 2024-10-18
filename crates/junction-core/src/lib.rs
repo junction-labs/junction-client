@@ -18,7 +18,7 @@ pub use client::Client;
 pub use xds::{ResourceVersion, XdsConfig};
 
 use junction_api::http::Route;
-use junction_api::shared::Target;
+use junction_api::Target;
 use std::collections::HashMap;
 use std::sync::Arc;
 

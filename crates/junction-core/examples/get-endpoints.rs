@@ -1,8 +1,8 @@
 use http::HeaderValue;
 use junction_api::{
     backend::{Backend, LbPolicy},
-    http::*,
-    shared::{Regex, ServiceTarget, Target, WeightedTarget},
+    http::{HeaderMatch, Route, RouteMatch, RouteRule, WeightedTarget},
+    Regex, ServiceTarget, Target,
 };
 use junction_core::Client;
 use std::{env, str::FromStr, time::Duration};

@@ -4,10 +4,12 @@ use xds_api::pb::envoy::config::{
 };
 
 use crate::{
-    backend::{Backend, LbPolicy, RingHashParams},
+    backend::{
+        Backend, LbPolicy, RingHashParams, SessionAffinity, SessionAffinityHashParam,
+        SessionAffinityHashParamType,
+    },
     error::{Error, ErrorContext},
-    shared::{SessionAffinityHashParam, SessionAffinityHashParamType, Target},
-    value_or_default,
+    value_or_default, Target,
 };
 
 impl Backend {
@@ -195,15 +197,13 @@ impl SessionAffinityHashParam {
         use xds_route::route_action::hash_policy::PolicySpecifier;
 
         match &self.matcher {
-            crate::shared::SessionAffinityHashParamType::Header { name } => {
-                xds_route::route_action::HashPolicy {
-                    terminal: self.terminal,
-                    policy_specifier: Some(PolicySpecifier::Header(Header {
-                        header_name: name.clone(),
-                        regex_rewrite: None,
-                    })),
-                }
-            }
+            SessionAffinityHashParamType::Header { name } => xds_route::route_action::HashPolicy {
+                terminal: self.terminal,
+                policy_specifier: Some(PolicySpecifier::Header(Header {
+                    header_name: name.clone(),
+                    regex_rewrite: None,
+                })),
+            },
         }
     }
 
@@ -225,10 +225,29 @@ impl SessionAffinityHashParam {
     }
 }
 
+impl SessionAffinity {
+    pub fn from_xds(
+        hash_policy: &[xds_route::route_action::HashPolicy],
+    ) -> Result<Option<Self>, Error> {
+        if hash_policy.is_empty() {
+            return Ok(None);
+        }
+
+        let hash_params = hash_policy
+            .iter()
+            .enumerate()
+            .map(|(i, h)| SessionAffinityHashParam::from_xds(h).with_index(i))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        debug_assert!(!hash_params.is_empty(), "hash params must not be empty");
+        Ok(Some(Self { hash_params }))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::shared::ServiceTarget;
+    use crate::ServiceTarget;
 
     #[test]
     fn test_unspecified_lb_roundtrips() {

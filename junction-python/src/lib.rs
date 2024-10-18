@@ -341,9 +341,7 @@ fn dump_kube_route(
     let route: Route = pythonize::depythonize_bound(route)?;
 
     let (namespace, name) = match &route.target {
-        junction_api::shared::Target::Service(svc) => {
-            (Some(svc.namespace.clone()), Some(svc.name.clone()))
-        }
+        junction_api::Target::Service(svc) => (Some(svc.namespace.clone()), Some(svc.name.clone())),
         _ => (None, None),
     };
 

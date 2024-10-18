@@ -8,37 +8,6 @@ Duration = str | int | float
 """A duration expressed as a number of seconds or a string like '1h30m27s42ms'"""
 
 
-class Fraction(typing.TypedDict):
-    """A fraction, expressed as a numerator and a denominator."""
-
-    numerator: int
-    denominator: int
-
-
-class WeightedTarget(typing.TypedDict):
-    weight: int
-    hostname: str
-    """The DNS Name to target/attach to"""
-
-    name: str
-    """The name of the Kubernetes Service"""
-
-    namespace: str
-    """The namespace of the Kubernetes service. FIXME(namespace): what should the semantic be when
-    this is not specified: default, namespace of client, namespace of EZbake?"""
-
-    port: int
-    """The port number to target/attach to.
-
-    When attaching policies, if it is not specified, the target will apply to all connections
-    that don't have a specific port specified.
-
-    When being used to lookup a backend after a matched rule, if it is not specified then it
-    will use the same port as the incoming request"""
-
-    type: typing.Literal["DNS"] | typing.Literal["Service"]
-
-
 class TargetDNS(typing.TypedDict):
     type: typing.Literal["DNS"]
     hostname: str
@@ -76,17 +45,35 @@ class TargetService(typing.TypedDict):
 Target = TargetDNS | TargetService
 
 
-class SessionAffinityHashParam(typing.TypedDict):
-    terminal: bool
-    """Whether to stop immediately after hashing this value.
+class Fraction(typing.TypedDict):
+    """A fraction, expressed as a numerator and a denominator."""
 
-    This is useful if you want to try to hash a value, and then fall back to another as a
-    default if it wasn't set."""
+    numerator: int
+    denominator: int
+
+
+class WeightedTarget(typing.TypedDict):
+    weight: int
+    hostname: str
+    """The DNS Name to target/attach to"""
 
     name: str
-    """The name of the header to use as hash input."""
+    """The name of the Kubernetes Service"""
 
-    type: typing.Literal["Header"]
+    namespace: str
+    """The namespace of the Kubernetes service. FIXME(namespace): what should the semantic be when
+    this is not specified: default, namespace of client, namespace of EZbake?"""
+
+    port: int
+    """The port number to target/attach to.
+
+    When attaching policies, if it is not specified, the target will apply to all connections
+    that don't have a specific port specified.
+
+    When being used to lookup a backend after a matched rule, if it is not specified then it
+    will use the same port as the incoming request"""
+
+    type: typing.Literal["DNS"] | typing.Literal["Service"]
 
 
 class RouteTimeouts(typing.TypedDict):
@@ -215,10 +202,6 @@ class RouteMatch(typing.TypedDict):
     request has the specified method."""
 
 
-class SessionAffinity(typing.TypedDict):
-    hash_params: typing.List[SessionAffinityHashParam]
-
-
 class RouteRule(typing.TypedDict):
     """Defines semantics for matching an HTTP request based on conditions (matches), processing it
     (filters), and forwarding the request to an API object (backendRefs)."""
@@ -274,6 +257,23 @@ class Route(typing.TypedDict):
 
     rules: typing.List[RouteRule]
     """The route rules that determine whether any URLs match."""
+
+
+class SessionAffinityHashParam(typing.TypedDict):
+    terminal: bool
+    """Whether to stop immediately after hashing this value.
+
+    This is useful if you want to try to hash a value, and then fall back to another as a
+    default if it wasn't set."""
+
+    name: str
+    """The name of the header to use as hash input."""
+
+    type: typing.Literal["Header"]
+
+
+class SessionAffinity(typing.TypedDict):
+    hash_params: typing.List[SessionAffinityHashParam]
 
 
 class LbPolicyRoundRobin(typing.TypedDict):

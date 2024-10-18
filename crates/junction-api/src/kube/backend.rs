@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::backend::{Backend, LbPolicy};
 use crate::error::{Error, ErrorContext};
-use crate::shared::{ServiceTarget, Target};
+use crate::{ServiceTarget, Target};
 
 use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
 use kube::api::ObjectMeta;
@@ -139,6 +139,8 @@ mod test {
     use k8s_openapi::api::core::v1::{ServicePort, ServiceSpec};
     use kube::api::ObjectMeta;
 
+    use crate::DNSTarget;
+
     use super::*;
 
     macro_rules! annotations {
@@ -186,7 +188,7 @@ mod test {
         );
 
         let backend = Backend {
-            target: Target::DNS(crate::shared::DNSTarget {
+            target: Target::DNS(DNSTarget {
                 hostname: "example.com".to_string(),
                 port: None,
             }),
