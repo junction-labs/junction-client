@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 http = { workspace = true }
 regex = { workspace = true }
-schemars = { workspace = true }
 serde = { workspace = true, default-features = false }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

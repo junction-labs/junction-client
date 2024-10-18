@@ -3,7 +3,6 @@
 use core::fmt;
 use kube::core::Duration as KubeDuration;
 use once_cell::sync::Lazy;
-use schemars::JsonSchema;
 use serde::de::{self, Visitor};
 use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
@@ -122,7 +121,7 @@ impl PartialEq for Regex {
 /// When formatting as a string, zero-valued durations must always be formatted as `0s`, and
 /// non-zero durations must be formatted to with only one instance of each applicable unit, greatest
 /// unit first.
-#[derive(Copy, Clone, PartialEq, Eq, JsonSchema)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct Duration(StdDuration);
 
 /// Regex pattern defining valid strings.

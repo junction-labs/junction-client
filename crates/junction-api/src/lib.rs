@@ -29,7 +29,6 @@ mod kube;
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "xds")]
@@ -49,9 +48,7 @@ pub type PreciseHostname = String;
 /// Defines a network port.
 pub type PortNumber = u16;
 
-#[derive(
-    Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, JsonSchema, PartialOrd, Ord,
-)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct ServiceTarget {
     ///
@@ -78,9 +75,7 @@ pub struct ServiceTarget {
     pub port: Option<PortNumber>,
 }
 
-#[derive(
-    Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, JsonSchema, PartialOrd, Ord,
-)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct DNSTarget {
     ///
@@ -101,9 +96,7 @@ pub struct DNSTarget {
     pub port: Option<PortNumber>,
 }
 
-#[derive(
-    Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, JsonSchema, PartialOrd, Ord,
-)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum Target {
