@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["junction_api",[["impl JsonSchema for <a class=\"enum\" href=\"junction_api/backend/enum.LbPolicy.html\" title=\"enum junction_api::backend::LbPolicy\">LbPolicy</a>"],["impl JsonSchema for <a class=\"enum\" href=\"junction_api/backend/enum.SessionAffinityHashParamType.html\" title=\"enum junction_api::backend::SessionAffinityHashParamType\">SessionAffinityHashParamType</a>"],["impl JsonSchema for <a class=\"enum\" href=\"junction_api/enum.Target.html\" title=\"enum junction_api::Target\">Target</a>"],["impl JsonSchema for <a class=\"struct\" href=\"junction_api/backend/struct.RingHashParams.html\" title=\"struct junction_api::backend::RingHashParams\">RingHashParams</a>"],["impl JsonSchema for <a class=\"struct\" href=\"junction_api/backend/struct.SessionAffinity.html\" title=\"struct junction_api::backend::SessionAffinity\">SessionAffinity</a>"],["impl JsonSchema for <a class=\"struct\" href=\"junction_api/backend/struct.SessionAffinityHashParam.html\" title=\"struct junction_api::backend::SessionAffinityHashParam\">SessionAffinityHashParam</a>"],["impl JsonSchema for <a class=\"struct\" href=\"junction_api/http/struct.RouteRetry.html\" title=\"struct junction_api::http::RouteRetry\">RouteRetry</a>"],["impl JsonSchema for <a class=\"struct\" href=\"junction_api/struct.DNSTarget.html\" title=\"struct junction_api::DNSTarget\">DNSTarget</a>"],["impl JsonSchema for <a class=\"struct\" href=\"junction_api/struct.Duration.html\" title=\"struct junction_api::Duration\">Duration</a>"],["impl JsonSchema for <a class=\"struct\" href=\"junction_api/struct.ServiceTarget.html\" title=\"struct junction_api::ServiceTarget\">ServiceTarget</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[1661]}
