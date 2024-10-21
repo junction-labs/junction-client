@@ -403,19 +403,14 @@ fn resolve_endpoint(
         }
     };
 
-    let endpoint = match backend.load_balancer.load_balance(
-        request.url,
-        request.headers,
-        &None, /* FIXME */
-        &endpoints,
-    ) {
-        Some(e) => e,
-        None => {
-            return Err(crate::Error::NoReachableEndpoints {
-                route: resolved.route.target.clone(),
-                backend: resolved.backend,
-            })
-        }
+    let endpoint = backend
+        .load_balancer
+        .load_balance(request.url, request.headers, &endpoints);
+    let Some(endpoint) = endpoint else {
+        return Err(crate::Error::NoReachableEndpoints {
+            route: resolved.route.target.clone(),
+            backend: resolved.backend,
+        });
     };
 
     let resolved_rule = &resolved.route.rules[resolved.rule];
