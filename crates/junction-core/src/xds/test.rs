@@ -195,7 +195,7 @@ pub fn api_listener_inline_routes(
 
     let http_router_filter = Router::default();
     let route_specifier = RouteSpecifier::RouteConfig(xds_route::RouteConfiguration {
-        name: "test_routes".to_string(),
+        name: name.to_string(),
         virtual_hosts,
         ..Default::default()
     });

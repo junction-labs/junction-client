@@ -343,7 +343,7 @@ impl CacheReader {
 
 impl ConfigCache for CacheReader {
     fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
-        let listener = self.data.listeners.get(&target.xds_listener_name())?;
+        let listener = self.data.listeners.get(&target.name())?;
 
         match &listener.data()?.route_config {
             ApiListenerRouteConfig::RouteConfig { name } => {
@@ -364,7 +364,7 @@ impl ConfigCache for CacheReader {
             };
         }
 
-        let cluster = tri!(self.data.clusters.get(&target.xds_cluster_name()));
+        let cluster = tri!(self.data.clusters.get(&target.name()));
         let cluster_data = tri!(cluster.data());
 
         let backend_and_lb = Some(cluster_data.backend_lb.clone());
@@ -374,7 +374,10 @@ impl ConfigCache for CacheReader {
                 (backend_and_lb, Some(endpoint_group.clone()))
             }
             ClusterEndpointData::LoadAssignment { name } => {
-                let load_assignment = tri!(self.data.load_assignments.get(name.as_str()));
+                let load_assignment = match self.data.load_assignments.get(name.as_str()) {
+                    Some(load_assignment) => load_assignment,
+                    None => return (backend_and_lb, None),
+                };
                 let endpoint_group = load_assignment.data().map(|d| d.endpoint_group.clone());
                 (backend_and_lb, endpoint_group)
             }
@@ -663,9 +666,9 @@ impl Cache {
             to_remove.remove(&cluster.name);
 
             if self.data.clusters.is_changed(&cluster.name, &cluster) {
-                let default_action = self.cluster_default_action(&cluster.name);
+                let action = self.find_passthrough_action(&cluster.name);
                 if let Err(e) =
-                    self.insert_cluster(&mut changed, &version, cluster, default_action.as_ref())
+                    self.insert_cluster(&mut changed, &version, cluster, action.as_ref())
                 {
                     errors.push(e);
                 }
@@ -729,7 +732,7 @@ impl Cache {
 
                 // if this looks like the default RouteConfiguration for a
                 // Cluster, rebuild it.
-                if let Some((cluster, route_action)) = &route_config.default_action {
+                if let Some((cluster, route_action)) = &route_config.passthrough_action {
                     if let Err(e) = self.rebuild_cluster(&mut changed, cluster, route_action) {
                         errors.push(e);
                     }
@@ -880,11 +883,11 @@ impl Cache {
             self.refs.update_edge(node, cla_node, ());
         }
 
-        // try to subscribe to the default Listener for this Cluster if it
+        // try to subscribe to the passthrough Listener for this Cluster if it
         // doesn't already exist in the GC graph.
-        let default_listener_name = cluster.backend_lb.config.target.xds_default_listener_name();
+        let passthrough_listener_name = cluster.backend_lb.config.target.passthrough_route_name();
         let (default_listener_node, created) =
-            self.find_or_create_ref(ResourceType::Listener, &default_listener_name);
+            self.find_or_create_ref(ResourceType::Listener, &passthrough_listener_name);
         if created {
             changed.insert(ResourceType::Listener);
         }
@@ -936,20 +939,16 @@ impl Cache {
     // so that the borrow never drops.
     //
     // if we hit clone as a bottleneck, come back and fuck with this.
-    fn cluster_default_action(&self, name: &str) -> Option<xds_route::RouteAction> {
-        // ignore any error parsing the target. the actual building of the
-        // cluster can report that error down the line.
-        let target = Target::from_cluster_xds_name(name).ok()?;
-
-        let listener = self
-            .data
-            .listeners
-            .get(&target.xds_default_listener_name())?;
+    fn find_passthrough_action(&self, cluster_name: &str) -> Option<xds_route::RouteAction> {
+        // don't even parse the cluster name as a target, assume that the
+        // passthrough listener has the same name as the cluster.
+        let target = Target::from_name(cluster_name).ok()?;
+        let listener = self.data.listeners.get(&target.passthrough_route_name())?;
 
         match &listener.data()?.route_config {
             ApiListenerRouteConfig::RouteConfig { name } => {
                 let route = self.data.route_configs.get(name.as_str())?;
-                let default_action = &route.data()?.default_action;
+                let default_action = &route.data()?.passthrough_action;
                 default_action.as_ref().map(|(_, a)| a.clone())
             }
             ApiListenerRouteConfig::Inlined { default_action, .. } => {
@@ -1019,11 +1018,13 @@ mod test {
         assert_sync::<CacheReader>();
     }
 
+    #[track_caller]
     fn assert_insert((changed, errors): (ResourceTypeSet, Vec<ResourceError>)) -> ResourceTypeSet {
         assert!(errors.is_empty(), "first error = {}", errors[0]);
         changed
     }
 
+    #[track_caller]
     fn assert_subscribe_insert(
         cache: &mut Cache,
         version: ResourceVersion,
@@ -1046,7 +1047,7 @@ mod test {
                 "listener.example.svc.cluster.local" => [xds_test::vhost!(
                     "vhost1.example.svc.cluster.local",
                     ["listener.example.svc.cluster.local"],
-                    [xds_test::route!(default "local/example/cluster")],
+                    [xds_test::route!(default "cluster.example")],
                 )],
             )]),
         );
@@ -1118,7 +1119,7 @@ mod test {
                 [xds_test::vhost!(
                     "vhost1.example.svc.cluster.local",
                     ["listener.example.svc.cluster.local"],
-                    [xds_test::route!(default "example/cluster1/cluster")],
+                    [xds_test::route!(default "cluster1.example")],
                 )]
             )]),
         ));
@@ -1142,7 +1143,7 @@ mod test {
                 [xds_test::vhost!(
                     "vhost1.example.svc.cluster.local",
                     ["listener.example.svc.cluster.local"],
-                    [xds_test::route!(default "example/cluster1/cluster")],
+                    [xds_test::route!(default "cluster1.example")],
                 )]
             )]),
         ));
@@ -1170,16 +1171,12 @@ mod test {
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(eds "example/cluster1/cluster")]),
+            ResourceVec::Cluster(vec![xds_test::cluster!(eds "cluster1.example")]),
         );
 
         assert!(cache.data.listeners.is_empty());
         assert!(cache.data.route_configs.is_empty());
-        assert!(cache
-            .data
-            .clusters
-            .get("example/cluster1/cluster")
-            .is_some());
+        assert!(cache.data.clusters.get("cluster1.example").is_some());
         assert!(cache.data.load_assignments.is_empty());
     }
 
@@ -1191,15 +1188,15 @@ mod test {
             &mut cache,
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "example/cluster1/cluster"),
-                xds_test::cluster!(eds "example/cluster2/cluster"),
+                xds_test::cluster!(eds "cluster1.example"),
+                xds_test::cluster!(eds "cluster2.example"),
             ]),
         );
 
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::ClusterLoadAssignment(vec![xds_test::cla!(
-                "example/cluster1/cluster" => {
+                "cluster1.example" => {
                     "zone1" => ["1.1.1.1"]
                 }
             )]),
@@ -1209,17 +1206,17 @@ mod test {
         assert!(cache.data.route_configs.is_empty());
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
         assert_eq!(
             cache.data.load_assignments.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster"],
+            vec!["cluster1.example"],
         );
 
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::ClusterLoadAssignment(vec![xds_test::cla!(
-                "example/cluster2/cluster" => {
+                "cluster2.example" => {
                     "zone2" => ["2.2.2.2"]
                 }
             )]),
@@ -1227,11 +1224,11 @@ mod test {
 
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
         assert_eq!(
             cache.data.load_assignments.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
     }
 
@@ -1243,14 +1240,14 @@ mod test {
             &mut cache,
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "example/cluster1/cluster"),
-                xds_test::cluster!(eds "example/cluster2/cluster"),
+                xds_test::cluster!(eds "cluster1.example"),
+                xds_test::cluster!(eds "cluster2.example"),
             ]),
         );
 
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
 
         // add a CLA referencing a cluster that doesn't exist. it should just fall on the floor
@@ -1277,7 +1274,7 @@ mod test {
                 "nginx.default.local" => [xds_test::vhost!(
                     "default",
                     ["nginx.default.local"],
-                    [xds_test::route!(default "default/nginx/cluster")],
+                    [xds_test::route!(default "nginx.default.local")],
                 )],
             )]),
         );
@@ -1303,24 +1300,24 @@ mod test {
             &mut cache,
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "example/cluster1/cluster"),
-                xds_test::cluster!(eds "example/cluster2/cluster"),
+                xds_test::cluster!(eds "cluster1.example"),
+                xds_test::cluster!(eds "cluster2.example"),
             ]),
         );
 
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
 
         assert_insert(cache.insert(
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(eds "example/cluster2/cluster")]),
+            ResourceVec::Cluster(vec![xds_test::cluster!(eds "cluster2.example")]),
         ));
 
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster2/cluster"],
+            vec!["cluster2.example"],
         );
 
         assert_insert(cache.insert("123".into(), ResourceVec::Cluster(vec![])));
@@ -1332,8 +1329,8 @@ mod test {
         let mut cache = Cache::default();
 
         cache.subscribe(ResourceType::Listener, "listener.example.svc.cluster.local");
-        cache.subscribe(ResourceType::Cluster, "example/cluster1/cluster");
-        cache.subscribe(ResourceType::Cluster, "example/cluster2/cluster");
+        cache.subscribe(ResourceType::Cluster, "cluster1.example");
+        cache.subscribe(ResourceType::Cluster, "cluster2.example");
 
         assert_insert(cache.insert(
             "123".into(),
@@ -1342,8 +1339,8 @@ mod test {
                     "default",
                     ["*"],
                     [
-                        xds_test::route!(header "x-staging" => "example/cluster2/cluster"),
-                        xds_test::route!(default "example/cluster1/cluster"),
+                        xds_test::route!(header "x-staging" => "cluster2.example"),
+                        xds_test::route!(default "cluster1.example"),
                     ],
                 )],
             )]),
@@ -1352,14 +1349,14 @@ mod test {
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "example/cluster1/cluster"),
-                xds_test::cluster!(eds "example/cluster2/cluster"),
+                xds_test::cluster!(eds "cluster1.example"),
+                xds_test::cluster!(eds "cluster2.example"),
             ]),
         ));
 
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
 
         // delete everything
@@ -1375,7 +1372,7 @@ mod test {
         );
         assert_eq!(
             cache.subscriptions(ResourceType::Cluster),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
     }
 
@@ -1402,7 +1399,7 @@ mod test {
                 "listener.example.svc.cluster.local" => [xds_test::vhost!(
                     "default",
                     ["*"],
-                    [xds_test::route!(default "example/cluster1/cluster")],
+                    [xds_test::route!(default "cluster1.example")],
                 )],
             )]),
         );
@@ -1416,22 +1413,22 @@ mod test {
     }
 
     #[test]
-    fn test_cache_cluster_finds_default_listener() {
+    fn test_cache_cluster_finds_passthrough_listener() {
         let mut cache = Cache::default();
 
         let svc = Target::Service(ServiceTarget {
-            name: "something".to_string(),
-            namespace: "default".to_string(),
+            name: junction_api::Name::from_static("something"),
+            namespace: junction_api::Name::from_static("default"),
             port: None,
         });
-        let default_listener_name = svc.xds_default_listener_name().leak();
-        let cluster_name = svc.xds_cluster_name().leak();
+        let cluster_name = svc.name().leak();
+        let passthrough_name = svc.passthrough_route_name().leak();
 
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
             ResourceVec::Listener(vec![xds_test::listener!(
-                default_listener_name => [xds_test::vhost!(
+                passthrough_name => [xds_test::vhost!(
                     "default",
                     ["listener.example.svc.cluster.local"],
                     [xds_test::route!(default ring_hash = "x-user", cluster_name)],
@@ -1462,23 +1459,23 @@ mod test {
     }
 
     #[test]
-    fn test_cache_cluster_finds_default_route() {
+    fn test_cache_cluster_finds_passthrough_route() {
         let mut cache = Cache::default();
 
         let svc = Target::Service(ServiceTarget {
-            name: "something".to_string(),
-            namespace: "default".to_string(),
+            name: junction_api::Name::from_static("something"),
+            namespace: junction_api::Name::from_static("default"),
             port: None,
         });
-        let default_listener_name = svc.xds_default_listener_name().leak();
-        let cluster_name = svc.xds_cluster_name().leak();
+        let cluster_name = svc.name().leak();
+        let passthrough_name = svc.passthrough_route_name().leak();
 
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
             ResourceVec::Listener(vec![xds_test::listener!(
-                default_listener_name,
-                "example-route-config",
+                passthrough_name,
+                "example-route-config", // NOTE: doesn't have to be the same as the listener name!
             )]),
         );
         assert_insert(cache.insert(
@@ -1520,17 +1517,17 @@ mod test {
         let mut cache = Cache::default();
 
         let svc = Target::Service(ServiceTarget {
-            name: "something".to_string(),
-            namespace: "default".to_string(),
+            name: junction_api::Name::from_static("something"),
+            namespace: junction_api::Name::from_static("default"),
             port: None,
         });
-        let cluster_name = svc.xds_cluster_name().leak();
+        let cluster_name = svc.passthrough_route_name().leak();
 
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
             ResourceVec::Listener(vec![xds_test::listener!(
-                "some-listener.svc.cluster.local"=> [xds_test::vhost!(
+                "listener.example.svc.cluster.local"=> [xds_test::vhost!(
                     "default",
                     ["listener.example.svc.cluster.local"],
                     [xds_test::route!(default cluster_name)],
@@ -1559,19 +1556,18 @@ mod test {
             "should have empty hash params before Listener insert"
         );
 
-        let default_listener_name = svc.xds_default_listener_name().leak();
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Listener(vec![
                 xds_test::listener!(
-                    "some-listener.svc.cluster.local"=> [xds_test::vhost!(
+                    "listener.example.svc.cluster.local"=> [xds_test::vhost!(
                         "default",
                         ["listener.example.svc.cluster.local"],
                         [xds_test::route!(default cluster_name)],
                     )],
                 ),
                 xds_test::listener!(
-                    default_listener_name => [xds_test::vhost!(
+                    cluster_name => [xds_test::vhost!(
                         "default",
                         ["listener.example.svc.cluster.local"],
                         [xds_test::route!(default ring_hash = "x-user", cluster_name)],
@@ -1603,18 +1599,17 @@ mod test {
         let mut cache = Cache::default();
 
         let svc = Target::Service(ServiceTarget {
-            name: "something".to_string(),
-            namespace: "default".to_string(),
+            name: junction_api::Name::from_static("something"),
+            namespace: junction_api::Name::from_static("default"),
             port: None,
         });
-        let default_listener_name = svc.xds_default_listener_name().leak();
-        let cluster_name = svc.xds_cluster_name().leak();
+        let cluster_name = svc.passthrough_route_name().leak();
 
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
             ResourceVec::Listener(vec![xds_test::listener!(
-                default_listener_name,
+                cluster_name,
                 "example-route-config",
             )]),
         );
@@ -1702,8 +1697,8 @@ mod test {
                     "vhost1.example.svc.cluster.local",
                     ["listener.example.svc.cluster.local"],
                     [
-                        xds_test::route!(header "x-staging" => "example/cluster2/cluster"),
-                        xds_test::route!(default "example/cluster1/cluster"),
+                        xds_test::route!(header "x-staging" => "cluster2.example"),
+                        xds_test::route!(default "cluster1.example"),
                     ],
                 )]
             )]),
@@ -1712,8 +1707,8 @@ mod test {
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "example/cluster1/cluster"),
-                xds_test::cluster!(eds "example/cluster2/cluster"),
+                xds_test::cluster!(eds "cluster1.example"),
+                xds_test::cluster!(eds "cluster2.example"),
             ]),
         ));
 
@@ -1727,7 +1722,7 @@ mod test {
         );
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
         assert!(cache.data.load_assignments.is_empty());
 
@@ -1770,8 +1765,8 @@ mod test {
                     "vhost1.example.svc.cluster.local",
                     ["listener.example.svc.cluster.local"],
                     [
-                        xds_test::route!(header "x-staging" => "example/cluster2/cluster"),
-                        xds_test::route!(default "example/cluster1/cluster"),
+                        xds_test::route!(header "x-staging" => "cluster2.example"),
+                        xds_test::route!(default "cluster1.example"),
                     ],
                 )]
             )]),
@@ -1780,8 +1775,8 @@ mod test {
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "example/cluster1/cluster"),
-                xds_test::cluster!(eds "example/cluster2/cluster"),
+                xds_test::cluster!(eds "cluster1.example"),
+                xds_test::cluster!(eds "cluster2.example"),
             ]),
         ));
 
@@ -1796,7 +1791,7 @@ mod test {
         );
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
         assert!(cache.data.load_assignments.is_empty());
 
@@ -1810,7 +1805,7 @@ mod test {
                 [xds_test::vhost!(
                     "vhost1.example.svc.cluster.local",
                     ["listener.example.svc.cluster.local"],
-                    [xds_test::route!(default "example/cluster1/cluster"),],
+                    [xds_test::route!(default "cluster1.example")],
                 )]
             )]),
         ));
@@ -1825,7 +1820,7 @@ mod test {
         );
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster"],
+            vec!["cluster1.example"],
         );
         assert!(cache.data.load_assignments.is_empty());
     }
@@ -1835,19 +1830,19 @@ mod test {
         let mut cache = Cache::default();
 
         // pinning should let us insert a cluster, but only that cluster
-        cache.subscribe(ResourceType::Cluster, "example/cluster1/cluster");
+        cache.subscribe(ResourceType::Cluster, "cluster1.example");
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "example/cluster1/cluster"),
-                xds_test::cluster!(eds "example/cluster2/cluster"),
+                xds_test::cluster!(eds "cluster1.example"),
+                xds_test::cluster!(eds "cluster2.example"),
             ]),
         ));
 
         assert!(cache.data.listeners.is_empty());
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster"],
+            vec!["cluster1.example"],
         );
 
         // add a listener that references both cluster1 and cluster2
@@ -1859,8 +1854,8 @@ mod test {
                     "default",
                     ["*"],
                     [
-                        xds_test::route!(header "x-staging" => "example/cluster2/cluster"),
-                        xds_test::route!(default "example/cluster1/cluster"),
+                        xds_test::route!(header "x-staging" => "cluster2.example"),
+                        xds_test::route!(default "cluster1.example"),
                     ],
                 )],
             )]),
@@ -1872,15 +1867,15 @@ mod test {
         );
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster"],
+            vec!["cluster1.example"],
         );
 
         // add both clusters
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "example/cluster1/cluster"),
-                xds_test::cluster!(eds "example/cluster2/cluster"),
+                xds_test::cluster!(eds "cluster1.example"),
+                xds_test::cluster!(eds "cluster2.example"),
             ]),
         ));
 
@@ -1890,7 +1885,7 @@ mod test {
         );
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster", "example/cluster2/cluster"],
+            vec!["cluster1.example", "cluster2.example"],
         );
 
         // remove the listener, cluster1 should stay pinned
@@ -1899,7 +1894,7 @@ mod test {
         assert!(cache.data.listeners.is_empty());
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
-            vec!["example/cluster1/cluster"],
+            vec!["cluster1.example"],
         );
     }
 }

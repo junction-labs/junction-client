@@ -18,11 +18,8 @@ impl Backend {
         route_action: Option<&xds_route::RouteAction>,
     ) -> Result<Self, Error> {
         let lb = LbPolicy::from_xds(cluster, route_action)?;
-        Ok(Backend {
-            //FIXME(DNS): if discovery_type is logical dns, we should do this with dns
-            target: Target::from_cluster_xds_name(&cluster.name)?,
-            lb,
-        })
+        let target = Target::from_name(&cluster.name)?;
+        Ok(Backend { target, lb })
     }
 
     pub fn to_xds_cluster(&self) -> xds_cluster::Cluster {
@@ -35,28 +32,31 @@ impl Backend {
             None => (xds_cluster::cluster::LbPolicy::default(), None),
         };
 
-        // FIXME: this needs to be DNS if the target is a DNS target.
-        let cluster_discovery_type = ClusterDiscoveryType::Type(DiscoveryType::Eds.into());
+        let cluster_discovery_type = match &self.target {
+            Target::DNS(_) => ClusterDiscoveryType::Type(DiscoveryType::LogicalDns.into()),
+            Target::Service(_) => ClusterDiscoveryType::Type(DiscoveryType::Eds.into()),
+        };
+
         xds_cluster::Cluster {
-            name: self.target.xds_cluster_name(),
+            name: self.target.name(),
             lb_policy: lb_policy.into(),
             lb_config,
             cluster_discovery_type: Some(cluster_discovery_type),
             eds_cluster_config: Some(EdsClusterConfig {
                 eds_config: Some(crate::xds::ads_config_source()),
-                service_name: self.target.xds_endpoints_name(),
+                service_name: self.target.name(),
             }),
             ..Default::default()
         }
     }
 
-    pub fn to_xds_default_vhost(&self) -> xds_route::VirtualHost {
+    pub fn to_xds_passthrough_route(&self) -> xds_route::RouteConfiguration {
         use xds_route::route::Action;
         use xds_route::route_action::ClusterSpecifier;
         use xds_route::route_match::PathSpecifier;
 
         let default_action = Action::Route(xds_route::RouteAction {
-            cluster_specifier: Some(ClusterSpecifier::Cluster(self.target.xds_cluster_name())),
+            cluster_specifier: Some(ClusterSpecifier::Cluster(self.target.name())),
             hash_policy: self.to_xds_hash_policies(),
             ..Default::default()
         });
@@ -69,9 +69,21 @@ impl Backend {
             action: Some(default_action),
             ..Default::default()
         };
-        xds_route::VirtualHost {
+
+        let vhost = xds_route::VirtualHost {
             domains: vec!["*".to_string()],
             routes: vec![default_route],
+            ..Default::default()
+        };
+
+        // NOTE: this is the only place where we use `backend_name` to name a
+        // RouteConfiguration.
+        //
+        // it's incorrect literally everywhere else, but should be done here to
+        // indicate that this is the passthrough route.
+        xds_route::RouteConfiguration {
+            name: self.target.passthrough_route_name(),
+            virtual_hosts: vec![vhost],
             ..Default::default()
         }
     }
@@ -247,13 +259,13 @@ impl SessionAffinity {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::ServiceTarget;
+    use crate::{http::Route, Name, ServiceTarget};
 
     #[test]
     fn test_unspecified_lb_roundtrips() {
         let web = Target::Service(ServiceTarget {
-            name: "web".to_string(),
-            namespace: "prod".to_string(),
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
             port: None,
         });
 
@@ -271,8 +283,8 @@ mod test {
     #[test]
     fn test_round_robin_lb_roundtrips() {
         let web = Target::Service(ServiceTarget {
-            name: "web".to_string(),
-            namespace: "prod".to_string(),
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
             port: None,
         });
 
@@ -290,8 +302,8 @@ mod test {
     #[test]
     fn test_ringhash_roundtrip() {
         let web = Target::Service(ServiceTarget {
-            name: "web".to_string(),
-            namespace: "prod".to_string(),
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
             port: None,
         });
 
@@ -328,5 +340,66 @@ mod test {
         )
         .unwrap();
         assert_eq!(parsed, backend);
+    }
+
+    #[test]
+    fn test_passthrough_route_is_passthrough() {
+        let web = Target::Service(ServiceTarget {
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
+            port: None,
+        });
+
+        let backend = Backend {
+            target: web,
+            lb: LbPolicy::RoundRobin,
+        };
+
+        let route = Route::from_xds(&backend.to_xds_passthrough_route()).unwrap();
+        assert!(route.is_passthrough_route());
+    }
+
+    #[test]
+    fn test_passthrough_route_roundtrip() {
+        let web = Target::Service(ServiceTarget {
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
+            port: None,
+        });
+
+        let backend = Backend {
+            target: web,
+            lb: LbPolicy::RingHash(RingHashParams {
+                min_ring_size: 1024,
+                hash_params: vec![
+                    SessionAffinityHashParam {
+                        terminal: false,
+                        matcher: SessionAffinityHashParamType::Header {
+                            name: "x-user".to_string(),
+                        },
+                    },
+                    SessionAffinityHashParam {
+                        terminal: false,
+                        matcher: SessionAffinityHashParamType::Header {
+                            name: "x-env".to_string(),
+                        },
+                    },
+                ],
+            }),
+        };
+
+        let cluster = backend.to_xds_cluster();
+        let passthrough_route = backend.to_xds_passthrough_route();
+
+        let parsed = Backend::from_xds(&cluster, {
+            let vhost = passthrough_route.virtual_hosts.first().unwrap();
+            let route = vhost.routes.first().unwrap();
+            route.action.as_ref().map(|action| match action {
+                xds_route::route::Action::Route(action) => action,
+                _ => panic!("invalid route"),
+            })
+        })
+        .unwrap();
+        assert_eq!(backend, parsed);
     }
 }

@@ -11,35 +11,35 @@ Duration = str | int | float
 class TargetDNS(typing.TypedDict):
     type: typing.Literal["DNS"]
     hostname: str
-    """The DNS Name to target/attach to"""
+    """The DNS name to target."""
 
     port: int
     """The port number to target/attach to.
 
-    When attaching policies, if it is not specified, the target will apply to all connections
-    that don't have a specific port specified.
+    When attaching policies, if it is not specified, the target will apply
+    to all connections that don't have a specific port specified.
 
-    When being used to lookup a backend after a matched rule, if it is not specified then it
-    will use the same port as the incoming request"""
+    When being used to lookup a backend after a matched rule, if it is not
+    specified then it will use the same port as the incoming request"""
 
 
 class TargetService(typing.TypedDict):
     type: typing.Literal["Service"]
     name: str
-    """The name of the Kubernetes Service"""
+    """The name of the Kubernetes Service to target."""
 
     namespace: str
-    """The namespace of the Kubernetes service. FIXME(namespace): what should the semantic be when
-    this is not specified: default, namespace of client, namespace of EZbake?"""
+    """The namespace of the Kubernetes service to target. This must be explicitly
+    specified, and won't be inferred from context."""
 
     port: int
     """The port number of the Kubernetes service to target/ attach to.
 
-    When attaching policies, if it is not specified, the target will apply to all connections
-    that don't have a specific port specified.
+    When attaching policies, if it is not specified, the target will apply
+    to all connections that don't have a specific port specified.
 
-    When being used to lookup a backend after a matched rule, if it is not specified then it
-    will use the same port as the incoming request"""
+    When being used to lookup a backend after a matched rule, if it is not
+    specified then it will use the same port as the incoming request"""
 
 
 Target = TargetDNS | TargetService
@@ -55,23 +55,23 @@ class Fraction(typing.TypedDict):
 class WeightedTarget(typing.TypedDict):
     weight: int
     hostname: str
-    """The DNS Name to target/attach to"""
+    """The DNS name to target."""
 
     name: str
-    """The name of the Kubernetes Service"""
+    """The name of the Kubernetes Service to target."""
 
     namespace: str
-    """The namespace of the Kubernetes service. FIXME(namespace): what should the semantic be when
-    this is not specified: default, namespace of client, namespace of EZbake?"""
+    """The namespace of the Kubernetes service to target. This must be explicitly
+    specified, and won't be inferred from context."""
 
     port: int
     """The port number to target/attach to.
 
-    When attaching policies, if it is not specified, the target will apply to all connections
-    that don't have a specific port specified.
+    When attaching policies, if it is not specified, the target will apply
+    to all connections that don't have a specific port specified.
 
-    When being used to lookup a backend after a matched rule, if it is not specified then it
-    will use the same port as the incoming request"""
+    When being used to lookup a backend after a matched rule, if it is not
+    specified then it will use the same port as the incoming request"""
 
     type: typing.Literal["DNS"] | typing.Literal["Service"]
 
