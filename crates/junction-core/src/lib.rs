@@ -14,7 +14,7 @@ mod client;
 mod load_balancer;
 mod xds;
 
-pub use client::Client;
+pub use client::{Client, ConfigMode, HttpRequest, ResolvedRoute};
 pub use xds::{ResourceVersion, XdsConfig};
 
 use junction_api::http::Route;
@@ -33,33 +33,28 @@ use junction_api::backend::Backend;
 /// the index of the rule that matched, and the [Target] selected from the
 /// route.
 ///
-/// [Client::resolve_http] resolves routes in exactly the same way as this
-/// function. Use it to test routing configuration without requiring a full
-/// client or connecting to a control plane.
+/// Use this function to test routing configuration without requiring a full
+/// client or a live connection to a control plane. For actual route resolution,
+/// see [Client::resolve_http].
 pub fn check_route(
     routes: Vec<Route>,
     method: &http::Method,
     url: &crate::Url,
     headers: &http::HeaderMap,
-) -> Result<(Route, usize, Target)> {
-    let config = StaticConfig::new(routes, Vec::new());
-
+) -> Result<ResolvedRoute> {
     let request = client::HttpRequest {
         method,
         url,
         headers,
     };
 
-    let targets = client::targets_for_url(url)?;
-    let resolved = client::resolve_routes(&StaticConfig::default(), &config, request, targets)?;
-
-    // Drop the other copies of the resolved routes and unwrap the Arc.
+    // resolve with an empty cache and the passed config used as defaults and a
+    // no-op subscribe fn.
     //
-    // safety: we completely own these routes, and the only copies should be
-    // the one returned and the one in `config` we're dropping here.
-    std::mem::drop(config);
-    let route = Arc::into_inner(resolved.route).unwrap();
-    Ok((route, resolved.rule, resolved.backend))
+    // TODO: do we actually want that or do we want to treat the passed routes
+    // as the primary config?
+    let config = StaticConfig::new(routes, Vec::new());
+    client::resolve_routes(&StaticConfig::default(), &config, request, |_| {})
 }
 
 pub(crate) trait ConfigCache {

@@ -1,5 +1,5 @@
 use junction_api::{backend::Backend, http::Route};
-use junction_core::ResourceVersion;
+use junction_core::{ConfigMode, ResourceVersion};
 use once_cell::sync::Lazy;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -293,13 +293,13 @@ fn check_route(
     let headers = headers_from_py(headers)?;
 
     let routes: Vec<Route> = pythonize::depythonize_bound(routes)?;
-    let (route, rule_idx, backend) = junction_core::check_route(routes, &method, &url, &headers)
+    let resolved = junction_core::check_route(routes, &method, &url, &headers)
         .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
-    let route = pythonize::pythonize(py, &route)?;
-    let backend = pythonize::pythonize(py, &backend)?;
+    let route = pythonize::pythonize(py, &resolved.route)?;
+    let backend = pythonize::pythonize(py, &resolved.backend)?;
 
-    Ok((route, rule_idx, backend))
+    Ok((route, resolved.rule, backend))
 }
 
 /// Dump a Route as Kubernetes YAML.
@@ -411,6 +411,47 @@ impl Junction {
         }
     }
 
+    /// Perform the route resolution half of resolve_http, returning the
+    /// matched route, the index of the matching rule, and the backend that
+    /// was selected. Use it as a lower level method to debug route resolution,
+    /// or to look up Routes without making a full request.
+    ///
+    /// If `dynamic=False` is passed as a kwarg, the resolution happens without
+    /// fetching any new routing data over the network.
+    #[pyo3(signature = (method, url, headers, dynamic=true))]
+    fn resolve_route(
+        &mut self,
+        py: Python<'_>,
+        method: &str,
+        url: &str,
+        headers: &Bound<PyMapping>,
+        dynamic: bool,
+    ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
+        let method = method_from_py(method)?;
+        let url =
+            junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
+        let headers = headers_from_py(headers)?;
+
+        let request = junction_core::HttpRequest {
+            method: &method,
+            url: &url,
+            headers: &headers,
+        };
+        let config_mode = match dynamic {
+            true => ConfigMode::Dynamic,
+            false => ConfigMode::Static,
+        };
+
+        let resolved = self
+            .core
+            .resolve_routes(config_mode, request)
+            .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
+
+        let route = pythonize::pythonize(py, &resolved.route)?;
+        let backend = pythonize::pythonize(py, &resolved.backend)?;
+        Ok((route, resolved.rule, backend))
+    }
+
     /// Resolve an endpoint based on an HTTP method, url, and headers.
     ///
     /// Returns the list of endpoints that traffic should be directed to, taking
@@ -425,7 +466,6 @@ impl Junction {
     ) -> PyResult<Vec<Endpoint>> {
         let url =
             junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
-
         let method = method_from_py(method)?;
         let headers = headers_from_py(headers)?;
 
@@ -583,8 +623,7 @@ where
         return Ok(None);
     };
 
-    let item = kwargs.get_item(key)?;
-    match item {
+    match kwargs.get_item(key)? {
         Some(val) => {
             let py_str = val.str()?;
             let value = T::try_from(py_str.to_string())
