@@ -39,6 +39,25 @@ fn validate_defaults(_: &[Route], _: &[Backend]) -> Result<(), crate::Error> {
 // of primary endpoints to cycle through on retries, and a seprate list of
 // endpoints to mirror traffic to. Figure that out once we support mirroring.
 
+/// How to resolve routes and endpoints.
+///
+/// See [Client::resolve_routes].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConfigMode {
+    /// Resolve configuration with only existing routes and backends, do not
+    /// request new ones over the network.
+    ///
+    /// This mode does not disable push-based updates to existing routes or
+    /// backends. For example, the addresses that are part of a backend or its
+    /// load balancing configuration may still change during resolution.
+    Static,
+
+    /// Update configuration dynamically as part of making this request. New
+    /// routes, backends, and addresses may fetched to make this request.
+    Dynamic,
+}
+
 impl Client {
     /// Build a new client, spawning a new ADS client in the background.
     ///
@@ -194,6 +213,39 @@ impl Client {
         backends
     }
 
+    /// Resolve an HTTP method, URL, and headers to a target backend, returning
+    /// the Route that matched, the index of the rule that matched, and the
+    /// backend that the [Target] that was selected.
+    ///
+    /// This is a lower-level method that only performs the Route matching half
+    /// of full resolution. It's intended for debugging or querying a client
+    /// for specific information. For everyday use, prefer
+    /// [Client::resolve_http].
+    pub fn resolve_routes(
+        &self,
+        config_mode: ConfigMode,
+        request: HttpRequest<'_>,
+    ) -> crate::Result<ResolvedRoute> {
+        match config_mode {
+            ConfigMode::Dynamic => {
+                // in dynamic mode, use every target as an ads client
+                // subscription. this pins every target to the ads
+                // cache.
+                let subscribe = |target: &Target| {
+                    self.ads
+                        .subscribe(xds::ResourceType::Listener, target.name())
+                        .unwrap();
+                };
+                resolve_routes(&self.ads.cache, &self.defaults, request, subscribe)
+            }
+            _ => {
+                // otherwise just no-op the subscribe fn and use the existing
+                // ads cache/defaults
+                resolve_routes(&self.ads.cache, &self.defaults, request, |_| {})
+            }
+        }
+    }
+
     /// Resolve an HTTP method, URL, and headers into a set of [Endpoint]s.
     ///
     /// When multiple endpoints are returned, a client should send traffic to
@@ -205,15 +257,11 @@ impl Client {
         url: &crate::Url,
         headers: &http::HeaderMap,
     ) -> crate::Result<Vec<crate::Endpoint>> {
-        // TODO: there's really no reasonable way to recover without starting a
-        // new client. if you're on the default client (like FFI clients
-        // probably are?) can you do anything about this?
-        //
-        // TODO: increment a metric or something if there's an error. this
-        // shouldn't be a showstopper if data is already in cache.
-        let _ = self
-            .ads
-            .subscribe(xds::ResourceType::Listener, url.authority().to_string());
+        let request = HttpRequest {
+            method,
+            url,
+            headers,
+        };
 
         // FIXME: this is deeply janky, manual exponential backoff. it should be
         // possible for the ADS client to signal when a cache entry is
@@ -230,7 +278,7 @@ impl Client {
         ];
 
         for backoff in RESOLVE_BACKOFF {
-            match self.get_endpoints(method, url, headers) {
+            match self.resolve(request) {
                 Ok(endpoints) => return Ok(endpoints),
                 Err(e) => {
                     if !e.is_temporary() {
@@ -240,31 +288,11 @@ impl Client {
                 }
             }
         }
-
-        self.get_endpoints(method, url, headers)
+        self.resolve(request)
     }
-}
 
-impl Client {
-    fn get_endpoints(
-        &self,
-        method: &http::Method,
-        url: &crate::Url,
-        headers: &http::HeaderMap,
-    ) -> Result<Vec<crate::Endpoint>, crate::Error> {
-        let request = HttpRequest {
-            method,
-            url,
-            headers,
-        };
-        let targets = targets_for_url(url)?;
-        for target in &targets {
-            self.ads
-                .subscribe(xds::ResourceType::Listener, target.name())
-                .unwrap();
-        }
-
-        let resolved_route = resolve_routes(&self.ads.cache, &self.defaults, request, targets)?;
+    fn resolve(&self, request: HttpRequest<'_>) -> Result<Vec<crate::Endpoint>, crate::Error> {
+        let resolved_route = self.resolve_routes(ConfigMode::Dynamic, request)?;
         resolve_endpoint(&self.ads.cache, &self.defaults, resolved_route, request)
     }
 }
@@ -284,26 +312,48 @@ pub(crate) fn targets_for_url(url: &crate::Url) -> Result<Vec<Target>, crate::Er
     Ok(vec![default_target.with_port(port), default_target])
 }
 
+/// A view into an HTTP Request, before any rewrites or modifications have been
+/// made while sending or processing a response.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct HttpRequest<'a> {
+pub struct HttpRequest<'a> {
+    /// The HTTP Method of the request.
     pub method: &'a http::Method,
+
+    /// The request URL, before any rewrites or modifications have been made.
     pub url: &'a crate::Url,
+
+    /// The request headers, before
     pub headers: &'a http::HeaderMap,
 }
 
-pub(crate) struct ResolvedRoute {
+/// The result of [resolving a route][Client::resolve_routes].
+#[derive(Debug, Clone)]
+pub struct ResolvedRoute {
+    /// The resolved route.
     pub route: Arc<Route>,
+
+    /// The index of the rule that matched the request.
     pub rule: usize,
+
+    /// The backend selected as part of route resolution.
     pub backend: Target,
 }
 
-pub(crate) fn resolve_routes(
+pub(crate) fn resolve_routes<F>(
     cache: &impl ConfigCache,
     defaults: &impl ConfigCache,
     request: HttpRequest<'_>,
-    targets: Vec<Target>,
-) -> Result<ResolvedRoute, crate::Error> {
+    subscribe: F,
+) -> Result<ResolvedRoute, crate::Error>
+where
+    F: Fn(&Target),
+{
     use rand::seq::SliceRandom;
+
+    let targets = targets_for_url(request.url)?;
+    for target in &targets {
+        subscribe(target);
+    }
 
     let default_route = defaults.get_route_with_fallbacks(&targets);
     let configured_route = cache.get_route_with_fallbacks(&targets);
