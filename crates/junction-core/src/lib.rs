@@ -39,13 +39,19 @@ use junction_api::backend::Backend;
 pub fn check_route(
     routes: Vec<Route>,
     method: &http::Method,
-    url: crate::Url,
+    url: &crate::Url,
     headers: &http::HeaderMap,
 ) -> Result<(Route, usize, Target)> {
     let config = StaticConfig::new(routes, Vec::new());
-    let (_, resolved) =
-        client::resolve_routes(&StaticConfig::default(), &config, method, url, headers)
-            .map_err(|(_, e)| e)?;
+
+    let request = client::HttpRequest {
+        method,
+        url,
+        headers,
+    };
+
+    let targets = client::targets_for_url(url)?;
+    let resolved = client::resolve_routes(&StaticConfig::default(), &config, request, targets)?;
 
     // Drop the other copies of the resolved routes and unwrap the Arc.
     //
@@ -59,6 +65,16 @@ pub fn check_route(
 pub(crate) trait ConfigCache {
     fn get_route(&self, target: &Target) -> Option<Arc<Route>>;
     fn get_backend(&self, target: &Target) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>);
+
+    fn get_route_with_fallbacks(&self, targets: &[Target]) -> Option<Arc<Route>> {
+        for target in targets {
+            if let Some(route) = self.get_route(target) {
+                return Some(route);
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Clone, Debug, Default)]

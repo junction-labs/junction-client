@@ -24,7 +24,45 @@ def test_check_basic_route(nginx):
         {},
     )
 
-    assert matched_backend == nginx
+    assert matched_backend == {**nginx, "port": 80}
+
+
+def test_check_basic_route_url_port(nginx):
+    route: config.Route = {"target": nginx, "rules": [{"backends": [nginx]}]}
+
+    (_, _, matched_backend) = junction.check_route(
+        [route],
+        "GET",
+        "http://nginx.default.svc.cluster.local:8910",
+        {},
+    )
+
+    assert matched_backend == {**nginx, "port": 8910}
+
+
+def test_check_basic_route_with_port(nginx):
+    route: config.Route = {
+        "target": {**nginx, "port": 1234},
+        "rules": [{"backends": [nginx]}],
+    }
+
+    # explicitly specifying a different port should work
+    with pytest.raises(RuntimeError, match="no routing info is available"):
+        (_, _, matched_backend) = junction.check_route(
+            [route],
+            "GET",
+            "http://nginx.default.svc.cluster.local:5678",
+            {},
+        )
+
+    # explicitly specifying the right port should work
+    (_, _, matched_backend) = junction.check_route(
+        [route],
+        "GET",
+        "http://nginx.default.svc.cluster.local:1234",
+        {},
+    )
+    assert matched_backend == {**nginx, "port": 1234}
 
 
 def test_check_retry_and_timeouts(nginx):
@@ -63,7 +101,7 @@ def test_check_redirect_route(nginx, nginx_staging):
         {},
     )
 
-    assert matched_backend == nginx_staging
+    assert matched_backend == {**nginx_staging, "port": 80}
 
 
 def test_no_fallthrough(nginx, nginx_staging):
@@ -139,7 +177,7 @@ def test_check_headers_matches_default(headers, nginx, nginx_staging):
         headers,
     )
 
-    assert matched_backend == nginx
+    assert {**nginx, "port": 80} == matched_backend
     assert [nginx] == route["rules"][matched_rule_idx]["backends"]
 
 
@@ -163,7 +201,7 @@ def test_check_headers_match(nginx, nginx_staging):
         {"x-env": "staging"},
     )
 
-    assert matched_backend == nginx_staging
+    assert {**nginx_staging, "port": 80} == matched_backend
     assert [nginx_staging] == route["rules"][matched_rule_idx]["backends"]
 
 
@@ -188,7 +226,7 @@ def test_check_path_matches_default(nginx, nginx_staging):
         {},
     )
 
-    assert matched_backend == nginx
+    assert {**nginx, "port": 80} == matched_backend
     assert [nginx] == route["rules"][matched_rule_idx]["backends"]
 
 
@@ -213,5 +251,5 @@ def test_check_path_matches(nginx, nginx_staging):
         {},
     )
 
-    assert matched_backend == nginx_staging
+    assert {**nginx_staging, "port": 80} == matched_backend
     assert [nginx_staging] == route["rules"][matched_rule_idx]["backends"]

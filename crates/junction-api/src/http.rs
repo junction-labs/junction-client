@@ -5,7 +5,7 @@
 
 use crate::{
     shared::{Duration, Fraction, Regex},
-    PortNumber, PreciseHostname, Target,
+    Hostname, Name, Target,
 };
 use serde::{Deserialize, Serialize};
 
@@ -508,7 +508,7 @@ pub struct RequestRedirectFilter {
     /// The hostname to be used in the value of the `Location` header in the response. When empty,
     /// the hostname in the `Host` header of the request is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hostname: Option<PreciseHostname>,
+    pub hostname: Option<Name>,
 
     /// Defines parameters used to modify the path of the incoming request. The modified path is
     /// then used to construct the `Location` header. When empty, the request path is used as-is.
@@ -532,7 +532,7 @@ pub struct RequestRedirectFilter {
     /// * A Location header that will use HTTPS (whether that is determined via the Listener
     ///   protocol or the Scheme field) _and_ use port 443.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<PortNumber>,
+    pub port: Option<u16>,
 
     /// The HTTP status code to be used in response.
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "statusCode")]
@@ -547,7 +547,7 @@ pub struct RequestRedirectFilter {
 pub struct UrlRewriteFilter {
     /// The value to be used to replace the Host header value during forwarding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hostname: Option<PreciseHostname>,
+    pub hostname: Option<Hostname>,
 
     /// Defines a path rewrite.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -618,13 +618,13 @@ mod tests {
     use crate::{
         http::{HeaderMatch, RouteRule},
         shared::Regex,
-        DNSTarget, ServiceTarget, Target,
+        DNSTarget, Hostname, ServiceTarget, Target,
     };
 
     #[test]
     fn test_passthrough_route() {
         let route = Route::passthrough_route(Target::DNS(DNSTarget {
-            hostname: "example.com".to_string(),
+            hostname: Hostname::from_static("example.com"),
             port: None,
         }));
         assert!(route.is_passthrough_route())
@@ -657,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_retry_policy() {
+    fn deserialize_retry_policy() {
         let test_json = json!({
             "codes":[ 1, 2 ],
             "attempts": 3,
@@ -669,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_http_route() {
+    fn deserialize_route_rule() {
         let test_json = json!({
             "matches":[
                 {
@@ -719,8 +719,8 @@ mod tests {
             }),
             Route {
                 target: Target::Service(ServiceTarget {
-                    name: "foo".to_string(),
-                    namespace: "bar".to_string(),
+                    name: Name::from_static("foo"),
+                    namespace: Name::from_static("bar"),
                     ..Default::default()
                 }),
                 rules: vec![RouteRule {
@@ -730,8 +730,8 @@ mod tests {
                     retry: None,
                     backends: vec![WeightedTarget {
                         target: Target::Service(ServiceTarget {
-                            name: "foo".to_string(),
-                            namespace: "bar".to_string(),
+                            name: Name::from_static("foo"),
+                            namespace: Name::from_static("bar"),
                             ..Default::default()
                         }),
                         weight: 1,
