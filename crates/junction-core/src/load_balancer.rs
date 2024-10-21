@@ -1,8 +1,7 @@
 use crate::EndpointAddress;
 use junction_api::{
     backend::{
-        Backend, LbPolicy, RingHashParams, SessionAffinity, SessionAffinityHashParam,
-        SessionAffinityHashParamType,
+        Backend, LbPolicy, RingHashParams, SessionAffinityHashParam, SessionAffinityHashParamType,
     },
     Target,
 };
@@ -124,21 +123,12 @@ impl LoadBalancer {
         &self,
         url: &crate::Url,
         headers: &http::HeaderMap,
-        route_affinity: &Option<SessionAffinity>,
         locality_endpoints: &'ep EndpointGroup,
     ) -> Option<&'ep crate::EndpointAddress> {
         match self {
             LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(locality_endpoints),
             LoadBalancer::RingHash(lb) => {
-                let hash_params = match (&lb.config.hash_params, route_affinity) {
-                    (lb_params, _) if !lb_params.is_empty() => lb_params,
-                    (_, Some(affinity)) if !affinity.hash_params.is_empty() => {
-                        &affinity.hash_params
-                    }
-                    // FIXME: should this be an error?
-                    _ => &Vec::new(),
-                };
-                lb.pick_endpoint(url, headers, hash_params, locality_endpoints)
+                lb.pick_endpoint(url, headers, &lb.config.hash_params, locality_endpoints)
             }
         }
     }
