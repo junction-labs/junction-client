@@ -260,31 +260,6 @@ fn default_node_info(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<(String, St
     Ok((node_name, cluster_name))
 }
 
-fn kwarg_string(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<String>> {
-    let Some(kwargs) = kwargs else {
-        return Ok(None);
-    };
-
-    let item = kwargs.get_item(key)?;
-    let py_str = item.map(|s| s.str()).transpose()?;
-    Ok(py_str.map(|s| s.to_string()))
-}
-
-fn kwarg_depythonize<T>(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<T>>
-where
-    T: for<'a> Deserialize<'a>,
-{
-    let Some(kwargs) = kwargs else {
-        return Ok(None);
-    };
-
-    let value = match kwargs.get_item(key)? {
-        Some(value) => Some(pythonize::depythonize_bound(value)?),
-        None => None,
-    };
-    Ok(value)
-}
-
 #[inline]
 fn default_routes(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Route>> {
     kwarg_depythonize("default_routes", kwargs).map(|v| v.unwrap_or_default())
@@ -318,7 +293,7 @@ fn check_route(
     let headers = headers_from_py(headers)?;
 
     let routes: Vec<Route> = pythonize::depythonize_bound(routes)?;
-    let (route, rule_idx, backend) = junction_core::check_route(routes, &method, url, &headers)
+    let (route, rule_idx, backend) = junction_core::check_route(routes, &method, &url, &headers)
         .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
     let route = pythonize::pythonize(py, &route)?;
@@ -345,8 +320,9 @@ fn dump_kube_route(
         _ => (None, None),
     };
 
-    let namespace = kwarg_string("namespace", kwargs)?.or(namespace);
-    let name = kwarg_string("name", kwargs)?.or(name);
+    let namespace = kwarg_from_string("namespace", kwargs)?.or(namespace);
+    let name = kwarg_from_string("name", kwargs)?.or(name);
+
     let Some((namespace, name)) = namespace.zip(name) else {
         return Err(PyValueError::new_err(
             "namespace and name are required but can't be inferred for this Route",
@@ -455,7 +431,7 @@ impl Junction {
 
         let endpoints = self
             .core
-            .resolve_http(&method, url, &headers)
+            .resolve_http(&method, &url, &headers)
             .map(|endpoints| endpoints.into_iter().map(|e| e.into()).collect())
             .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
@@ -585,4 +561,51 @@ fn headers_from_py(header_dict: &Bound<PyMapping>) -> PyResult<http::HeaderMap> 
     }
 
     Ok(headers)
+}
+
+fn kwarg_string(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<String>> {
+    let Some(kwargs) = kwargs else {
+        return Ok(None);
+    };
+
+    let item = kwargs.get_item(key)?;
+    let py_str = item.map(|s| s.str()).transpose()?;
+    Ok(py_str.map(|s| s.to_string()))
+}
+
+#[inline]
+fn kwarg_from_string<T>(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<T>>
+where
+    T: TryFrom<String>,
+    <T as TryFrom<String>>::Error: std::fmt::Display,
+{
+    let Some(kwargs) = kwargs else {
+        return Ok(None);
+    };
+
+    let item = kwargs.get_item(key)?;
+    match item {
+        Some(val) => {
+            let py_str = val.str()?;
+            let value = T::try_from(py_str.to_string())
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            Ok(Some(value))
+        }
+        None => Ok(None),
+    }
+}
+
+fn kwarg_depythonize<T>(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<T>>
+where
+    T: for<'a> Deserialize<'a>,
+{
+    let Some(kwargs) = kwargs else {
+        return Ok(None);
+    };
+
+    let value = match kwargs.get_item(key)? {
+        Some(value) => Some(pythonize::depythonize_bound(value)?),
+        None => None,
+    };
+    Ok(value)
 }

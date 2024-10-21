@@ -39,7 +39,7 @@ pub enum Error {
         backend: Target,
     },
 
-    #[error("{backend}: no endpoints are healthy")]
+    #[error("{backend}: no reachable endpoints")]
     NoReachableEndpoints { route: Target, backend: Target },
 }
 
@@ -52,6 +52,10 @@ fn format_targets(targets: &[Target]) -> String {
 }
 
 impl Error {
+    pub(crate) fn invalid_url(message: String) -> Self {
+        Self::InvalidUrl(Cow::Owned(message))
+    }
+
     pub(crate) fn is_temporary(&self) -> bool {
         matches!(
             self,

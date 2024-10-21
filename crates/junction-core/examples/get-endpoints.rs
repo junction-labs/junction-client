@@ -2,7 +2,7 @@ use http::HeaderValue;
 use junction_api::{
     backend::{Backend, LbPolicy},
     http::{HeaderMatch, Route, RouteMatch, RouteRule, WeightedTarget},
-    Regex, ServiceTarget, Target,
+    Name, Regex, ServiceTarget, Target,
 };
 use junction_core::Client;
 use std::{env, str::FromStr, time::Duration};
@@ -27,13 +27,13 @@ async fn main() {
     tokio::spawn(client.csds_server(8009));
 
     let nginx = Target::Service(ServiceTarget {
-        name: "nginx".to_string(),
-        namespace: "default".to_string(),
+        name: Name::from_static("nginx"),
+        namespace: Name::from_static("default"),
         port: Some(80),
     });
     let nginx_staging = Target::Service(ServiceTarget {
-        name: "nginx-staging".to_string(),
-        namespace: "default".to_string(),
+        name: Name::from_static("nginx-staging"),
+        namespace: Name::from_static("default"),
         port: Some(80),
     });
 
@@ -86,9 +86,8 @@ async fn main() {
     };
 
     loop {
-        let prod_endpoints = client.resolve_http(&http::Method::GET, url.clone(), &prod_headers);
-        let staging_endpoints =
-            client.resolve_http(&http::Method::GET, url.clone(), &staging_headers);
+        let prod_endpoints = client.resolve_http(&http::Method::GET, &url, &prod_headers);
+        let staging_endpoints = client.resolve_http(&http::Method::GET, &url, &staging_headers);
 
         let mut error = false;
         if let Err(e) = &prod_endpoints {

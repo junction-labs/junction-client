@@ -37,10 +37,11 @@ impl From<&Route> for xds_route::RouteConfiguration {
 
 impl Route {
     pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, Error> {
-        // FIXME: this isn't going to be a listener name!
-        let Some(target) = Target::from_listener_xds_name(&xds.name) else {
-            return Err(Error::new_static("invalid listener name").with_field("name"));
-        };
+        // try to parse the target as a backend name in case it's a passthrough
+        // route, and then try parsing it as a regular target.
+        let target = Target::from_passthrough_route_name(&xds.name)
+            .or_else(|_| Target::from_name(&xds.name))
+            .with_field("name")?;
 
         let mut rules = vec![];
         for (vhost_idx, vhost) in xds.virtual_hosts.iter().enumerate() {
@@ -79,8 +80,7 @@ impl Route {
             ..Default::default()
         }];
 
-        // FIXME: this shouldn't be a Listener name
-        let name = self.target.xds_listener_name();
+        let name = self.target.name();
         xds_route::RouteConfiguration {
             name,
             virtual_hosts,
@@ -555,13 +555,13 @@ impl WeightedTarget {
         match targets {
             [] => None,
             [target] => Some(xds_route::route_action::ClusterSpecifier::Cluster(
-                target.target.xds_cluster_name(),
+                target.target.name(),
             )),
             targets => {
                 let clusters = targets
                     .iter()
                     .map(|wt| xds_route::weighted_cluster::ClusterWeight {
-                        name: wt.target.xds_cluster_name(),
+                        name: wt.target.name(),
                         weight: Some(wt.weight.into()),
                         ..Default::default()
                     })
@@ -582,15 +582,14 @@ impl WeightedTarget {
     ) -> Result<Vec<Self>, Error> {
         match xds {
             Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => Ok(vec![Self {
-                target: Target::from_cluster_xds_name(name).with_field("cluster")?,
+                target: Target::from_name(name).with_field("cluster")?,
                 weight: 1,
             }]),
             Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(
                 weighted_clusters,
             )) => {
                 let clusters = weighted_clusters.clusters.iter().enumerate().map(|(i, w)| {
-                    let target =
-                        Target::from_cluster_xds_name(&w.name).with_field_index("name", i)?;
+                    let target = Target::from_name(&w.name).with_field_index("name", i)?;
                     let weight = crate::value_or_default!(w.weight, 1);
 
                     Ok(Self { target, weight })
@@ -608,7 +607,7 @@ impl WeightedTarget {
 
 #[cfg(test)]
 mod test {
-    use crate::ServiceTarget;
+    use crate::{Name, ServiceTarget};
 
     use super::*;
 
@@ -641,8 +640,8 @@ mod test {
     #[test]
     fn test_simple_route() {
         let web = Target::Service(ServiceTarget {
-            name: "web".to_string(),
-            namespace: "prod".to_string(),
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
             port: None,
         });
 
@@ -675,13 +674,13 @@ mod test {
     #[test]
     fn test_multiple_rules_roundtrip() {
         let web = Target::Service(ServiceTarget {
-            name: "web".to_string(),
-            namespace: "prod".to_string(),
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
             port: None,
         });
         let staging = Target::Service(ServiceTarget {
-            name: "web".to_string(),
-            namespace: "staging".to_string(),
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
             port: None,
         });
 
@@ -803,8 +802,8 @@ mod test {
     #[test]
     fn test_condense_rules() {
         let web = Target::Service(ServiceTarget {
-            name: "web".to_string(),
-            namespace: "prod".to_string(),
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
             port: None,
         });
 
@@ -875,8 +874,8 @@ mod test {
     #[test]
     fn test_multiple_matches_roundtrip() {
         let web = Target::Service(ServiceTarget {
-            name: "web".to_string(),
-            namespace: "prod".to_string(),
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
             port: None,
         });
 
@@ -916,8 +915,8 @@ mod test {
     #[test]
     fn test_full_route_match_roundtrips() {
         let web = Target::Service(ServiceTarget {
-            name: "web".to_string(),
-            namespace: "prod".to_string(),
+            name: Name::from_static("web"),
+            namespace: Name::from_static("prod"),
             port: None,
         });
 

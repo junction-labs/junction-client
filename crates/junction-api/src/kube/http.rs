@@ -11,6 +11,7 @@ use kube::api::ObjectMeta;
 
 use crate::error::{Error, ErrorContext};
 use crate::shared::Regex;
+use crate::{Hostname, Name};
 
 impl crate::http::Route {
     /// Convert an [HTTPRouteSpec] into a [Route][crate::http::Route].
@@ -266,17 +267,20 @@ impl TryFrom<&HTTPRouteParentRefs> for crate::Target {
 
         match (group, parent_ref.kind.as_deref()) {
             ("junctionlabs.io", Some("DNS")) => Ok(crate::Target::DNS(crate::DNSTarget {
-                hostname: parent_ref.name.clone(),
+                hostname: Hostname::from_str(&parent_ref.name).with_field("name")?,
                 port: port_from_gateway(&parent_ref.port).with_field("port")?,
             })),
             ("", Some("Service")) => {
+                // NOTE: kube doesn't require the namespace, but we do for now.
                 let namespace = parent_ref
                     .namespace
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string());
+                    .as_deref()
+                    .ok_or_else(|| Error::new_static("missing namespace"))
+                    .and_then(Name::from_str)
+                    .with_field("namespace")?;
 
                 Ok(crate::Target::Service(crate::ServiceTarget {
-                    name: parent_ref.name.clone(),
+                    name: Name::from_str(&parent_ref.name).with_field("name")?,
                     namespace,
                     port: port_from_gateway(&parent_ref.port).with_field("port")?,
                 }))
@@ -305,18 +309,22 @@ impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::http::WeightedTarget {
             ("junctionlabs.io", "DNS") => {
                 let port = port_from_gateway(&backend_ref.port).with_field("port")?;
                 crate::Target::DNS(crate::DNSTarget {
-                    hostname: backend_ref.name.clone(),
+                    hostname: Hostname::from_str(&backend_ref.name).with_field("name")?,
                     port,
                 })
             }
             ("", "Service") => {
                 let port = port_from_gateway(&backend_ref.port).with_field("port")?;
+                // NOTE: kube doesn't require the namespace, but we do for now.
                 let namespace = backend_ref
                     .namespace
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string());
+                    .as_deref()
+                    .ok_or_else(|| Error::new_static("missing namespace"))
+                    .and_then(Name::from_str)
+                    .with_field("namespace")?;
+
                 crate::Target::Service(crate::ServiceTarget {
-                    name: backend_ref.name.clone(),
+                    name: Name::from_str(&backend_ref.name).with_field("name")?,
                     port,
                     namespace,
                 })
@@ -508,7 +516,7 @@ macro_rules! into_kube_ref {
             crate::Target::DNS(target) => $target_type {
                 group: Some("junctionlabs.io".to_string()),
                 kind: Some("DNS".to_string()),
-                name: target.hostname.clone(),
+                name: target.hostname.to_string(),
                 port: target.port.map(|p| p as i32),
                 $(
                     $extra_field: $extra_value,
@@ -518,8 +526,8 @@ macro_rules! into_kube_ref {
             crate::Target::Service(target) => $target_type {
                 group: Some(String::new()),
                 kind: Some("Service".to_string()),
-                name: target.name.clone(),
-                namespace: Some(target.namespace.clone()),
+                name: target.name.to_string(),
+                namespace: Some(target.namespace.to_string()),
                 port: target.port.map(|p| p as i32),
                 $(
                     $extra_field: $extra_value,
@@ -568,6 +576,7 @@ metadata:
 spec:
   parentRefs:
   - name: example-gateway
+    namespace: prod
     group: ""
     kind: Service
   rules:
@@ -577,14 +586,15 @@ spec:
         value: /login
     backendRefs:
     - name: foo-svc
+      namespace: prod
       port: 8080
         "#;
 
         let gateway_route: HTTPRoute = serde_yml::from_str(gateway_yaml).unwrap();
         let route = crate::http::Route {
             target: crate::Target::Service(crate::ServiceTarget {
-                name: "example-gateway".to_string(),
-                namespace: "default".to_string(),
+                name: Name::from_static("example-gateway"),
+                namespace: Name::from_static("prod"),
                 port: None,
             }),
             rules: vec![crate::http::RouteRule {
@@ -597,8 +607,8 @@ spec:
                 backends: vec![crate::http::WeightedTarget {
                     weight: 1,
                     target: crate::Target::Service(crate::ServiceTarget {
-                        name: "foo-svc".to_string(),
-                        namespace: "default".to_string(),
+                        name: Name::from_static("foo-svc"),
+                        namespace: Name::from_static("prod"),
                         port: Some(8080),
                     }),
                 }],
@@ -626,8 +636,8 @@ spec:
     fn test_roundtrip() {
         let route = crate::http::Route {
             target: crate::Target::Service(crate::ServiceTarget {
-                name: "example-gateway".to_string(),
-                namespace: "default".to_string(),
+                name: Name::from_static("example-gateway"),
+                namespace: Name::from_static("default"),
                 port: None,
             }),
             rules: vec![crate::http::RouteRule {
@@ -640,8 +650,8 @@ spec:
                 backends: vec![crate::http::WeightedTarget {
                     weight: 1,
                     target: crate::Target::Service(crate::ServiceTarget {
-                        name: "foo-svc".to_string(),
-                        namespace: "default".to_string(),
+                        name: Name::from_static("foo-svc"),
+                        namespace: Name::from_static("default"),
                         port: Some(8080),
                     }),
                 }],
