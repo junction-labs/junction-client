@@ -5,7 +5,6 @@ use std::{borrow::Cow, fmt::Write as _, str::FromStr};
 /// Errors should be treated as opaque, and contain a message about what went
 /// wrong and a jsonpath style path to the field that caused problems.
 #[derive(Clone, thiserror::Error)]
-#[error("{path_str}: {message}", path_str = self.path())]
 pub struct Error {
     // an error message
     message: String,
@@ -15,6 +14,16 @@ pub struct Error {
     // the leaf of the path is built up at path[0] with the root of the
     // struct at the end. see ErrorContext for how this gets done.
     path: Vec<PathEntry>,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.path.is_empty() {
+            write!(f, "{}: ", self.path())?;
+        }
+
+        f.write_str(&self.message)
+    }
 }
 
 impl std::fmt::Debug for Error {

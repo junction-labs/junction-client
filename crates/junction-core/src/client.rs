@@ -27,6 +27,9 @@ pub struct Client {
     defaults: StaticConfig,
 }
 
+// NOTE: we've largely been ignoring this and trying to make Route and Backend
+// correct-by-construction. the hook is still here as a reminder to check back
+// on whether this is true before we release a stable version.
 fn validate_defaults(_: &[Route], _: &[Backend]) -> Result<(), crate::Error> {
     Ok(())
 }
@@ -95,16 +98,13 @@ impl Client {
     fn subscribe_to_defaults(&self, defaults: &StaticConfig) {
         for (target, route) in &defaults.routes {
             self.ads
-                .subscribe(xds::ResourceType::Listener, target.xds_listener_name())
+                .subscribe(xds::ResourceType::Listener, target.name())
                 .unwrap();
 
             for rule in &route.rules {
                 for backend in &rule.backends {
                     self.ads
-                        .subscribe(
-                            xds::ResourceType::Cluster,
-                            backend.target.xds_cluster_name(),
-                        )
+                        .subscribe(xds::ResourceType::Cluster, backend.target.name())
                         .unwrap();
                 }
             }
@@ -112,7 +112,7 @@ impl Client {
 
         for target in defaults.backends.keys() {
             self.ads
-                .subscribe(xds::ResourceType::Cluster, target.xds_cluster_name())
+                .subscribe(xds::ResourceType::Cluster, target.name())
                 .unwrap();
         }
     }
@@ -202,7 +202,7 @@ impl Client {
     pub fn resolve_http(
         &mut self,
         method: &http::Method,
-        url: crate::Url,
+        url: &crate::Url,
         headers: &http::HeaderMap,
     ) -> crate::Result<Vec<crate::Endpoint>> {
         // TODO: there's really no reasonable way to recover without starting a
@@ -213,7 +213,7 @@ impl Client {
         // shouldn't be a showstopper if data is already in cache.
         let _ = self
             .ads
-            .subscribe(xds::ResourceType::Listener, url.hostname().to_string());
+            .subscribe(xds::ResourceType::Listener, url.authority().to_string());
 
         // FIXME: this is deeply janky, manual exponential backoff. it should be
         // possible for the ADS client to signal when a cache entry is
@@ -229,23 +229,19 @@ impl Client {
             Duration::from_millis(256),
         ];
 
-        let mut url = url;
         for backoff in RESOLVE_BACKOFF {
             match self.get_endpoints(method, url, headers) {
                 Ok(endpoints) => return Ok(endpoints),
-                Err((u, e)) => {
+                Err(e) => {
                     if !e.is_temporary() {
                         return Err(e);
                     }
-
-                    url = u;
                     std::thread::sleep(*backoff);
                 }
             }
         }
 
         self.get_endpoints(method, url, headers)
-            .map_err(|(_url, e)| e)
     }
 }
 
@@ -253,20 +249,46 @@ impl Client {
     fn get_endpoints(
         &self,
         method: &http::Method,
-        url: crate::Url,
+        url: &crate::Url,
         headers: &http::HeaderMap,
-    ) -> Result<Vec<crate::Endpoint>, (crate::Url, crate::Error)> {
-        let (url, resolved_route) =
-            resolve_routes(&self.ads.cache, &self.defaults, method, url, headers)?;
-        resolve_endpoint(
-            &self.ads.cache,
-            &self.defaults,
-            resolved_route,
+    ) -> Result<Vec<crate::Endpoint>, crate::Error> {
+        let request = HttpRequest {
             method,
             url,
             headers,
-        )
+        };
+        let targets = targets_for_url(url)?;
+        for target in &targets {
+            self.ads
+                .subscribe(xds::ResourceType::Listener, target.name())
+                .unwrap();
+        }
+
+        let resolved_route = resolve_routes(&self.ads.cache, &self.defaults, request, targets)?;
+        resolve_endpoint(&self.ads.cache, &self.defaults, resolved_route, request)
     }
+}
+
+/// Generate the list of Targets that this URL maps to, taking into account the
+/// URL's `port` and any search path rules. The list of targets will be returned
+/// in the most-to-least specific order.
+///
+/// The URL's explicitly listed port or the default port for the URL's scheme
+/// will also be used to first specify a port-specific target before falling
+/// back to a port-less target.
+pub(crate) fn targets_for_url(url: &crate::Url) -> Result<Vec<Target>, crate::Error> {
+    let default_target =
+        Target::from_name(url.hostname()).map_err(|e| crate::Error::invalid_url(e.to_string()))?;
+    let port = url.default_port();
+
+    Ok(vec![default_target.with_port(port), default_target])
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HttpRequest<'a> {
+    pub method: &'a http::Method,
+    pub url: &'a crate::Url,
+    pub headers: &'a http::HeaderMap,
 }
 
 pub(crate) struct ResolvedRoute {
@@ -278,26 +300,18 @@ pub(crate) struct ResolvedRoute {
 pub(crate) fn resolve_routes(
     cache: &impl ConfigCache,
     defaults: &impl ConfigCache,
-    method: &http::Method,
-    url: crate::Url,
-    headers: &http::HeaderMap,
-) -> Result<(crate::Url, ResolvedRoute), (crate::Url, crate::Error)> {
+    request: HttpRequest<'_>,
+    targets: Vec<Target>,
+) -> Result<ResolvedRoute, crate::Error> {
     use rand::seq::SliceRandom;
 
-    let key_with_port = Target::from_hostname(url.hostname(), Some(url.port()));
-    let key_no_port = Target::from_hostname(url.hostname(), None);
+    let default_route = defaults.get_route_with_fallbacks(&targets);
+    let configured_route = cache.get_route_with_fallbacks(&targets);
 
     // FIXME: for now, the default routes are only looked up if there is no
     // route coming from XDS. Whereas in reality we likely want to merge the
     // values. However that requires some thinking about what it means at
     // the rule equivalence level and is so left for later.
-    let default_route = defaults
-        .get_route(&key_with_port)
-        .or_else(|| defaults.get_route(&key_no_port));
-    let configured_route = cache
-        .get_route(&key_with_port)
-        .or_else(|| cache.get_route(&key_no_port));
-
     let matching_route = match (default_route, configured_route) {
         (Some(default_route), Some(configured_route)) => {
             if configured_route.is_passthrough_route() {
@@ -308,67 +322,51 @@ pub(crate) fn resolve_routes(
         }
         (None, Some(configured_route)) => configured_route,
         (Some(default_route), None) => default_route.clone(),
-        _ => {
-            return Err((
-                url,
-                crate::Error::NoRouteMatched {
-                    routes: vec![key_with_port, key_no_port],
-                },
-            ))
-        }
+        _ => return Err(crate::Error::NoRouteMatched { routes: targets }),
     };
 
     // if we got here, we have resolved to a list of routes
-    let Some((matching_rule_idx, matching_rule)) =
-        find_matching_rule(&matching_route, method, &url, headers)
-    else {
-        return Err((
-            url,
-            crate::Error::NoRuleMatched {
-                route: matching_route.target.clone(),
-            },
-        ));
+    let Some((matching_rule_idx, matching_rule)) = find_matching_rule(
+        &matching_route,
+        request.method,
+        request.url,
+        request.headers,
+    ) else {
+        return Err(crate::Error::NoRuleMatched {
+            route: matching_route.target.clone(),
+        });
     };
 
     // pick a target at random from the list, respecting weights. if the target
     // has no port, then then we need to fill in the default using the request
     // URL.
-    //
-    // FIXME: this ignores the port in the request URL and the backend port. is
-    // that right?
-    let backend_id = &crate::rand::with_thread_rng(|rng| {
+    let backend = &crate::rand::with_thread_rng(|rng| {
         matching_rule.backends.choose_weighted(rng, |wc| wc.weight)
     });
-    let Ok(backend_id) = backend_id.map(|w| &w.target) else {
-        return Err((
-            url,
-            crate::Error::InvalidRoutes {
-                message: "matched rule has no backends",
-                target: matching_route.target.clone(),
-                rule: matching_rule_idx,
-            },
-        ));
+    let Ok(backend) = backend.map(|w| &w.target) else {
+        return Err(crate::Error::InvalidRoutes {
+            message: "matched rule has no backends",
+            target: matching_route.target.clone(),
+            rule: matching_rule_idx,
+        });
     };
 
-    Ok((
-        url,
-        ResolvedRoute {
-            route: matching_route.clone(),
-            rule: matching_rule_idx,
-            backend: backend_id.clone(),
-        },
-    ))
+    // force port resolution. if the backend has a port set already, use it,
+    // otherwise the port from the request.
+    let backend = backend.with_default_port(request.url.default_port());
+    Ok(ResolvedRoute {
+        route: matching_route.clone(),
+        rule: matching_rule_idx,
+        backend,
+    })
 }
 
 fn resolve_endpoint(
     cache: &impl ConfigCache,
     defaults: &impl ConfigCache,
     resolved: ResolvedRoute,
-    _method: &http::Method,
-    url: crate::Url,
-    headers: &http::HeaderMap,
-) -> Result<Vec<Endpoint>, (crate::Url, crate::Error)> {
-    // use the load
+    request: HttpRequest<'_>,
+) -> Result<Vec<Endpoint>, crate::Error> {
     let (backend, endpoints) = match cache.get_backend(&resolved.backend) {
         (Some(backend), Some(endpoints)) => {
             let lb = if backend.config.lb.is_unspecified() {
@@ -379,18 +377,17 @@ fn resolve_endpoint(
             };
             (lb, endpoints)
         }
-        (None, Some(endpoints)) => {
-            let (Some(lb), _) = defaults.get_backend(&resolved.backend) else {
-                return Err((
-                    url,
-                    crate::Error::NoBackend {
-                        route: resolved.route.target.clone(),
-                        rule: resolved.rule,
-                        backend: resolved.backend,
-                    },
-                ));
-            };
-            (lb.clone(), endpoints)
+        (Some(backend), None) => {
+            return Err(crate::Error::NoReachableEndpoints {
+                route: resolved.route.target.clone(),
+                backend: backend.config.target.clone(),
+            })
+        }
+        // FIXME: does this case even make sense?
+        (None, Some(_)) => {
+            // this is never supposed to happen - by contract you can get None,
+            // just an Lb, or both an Lb and endpoints.
+            panic!("you've hit a bug in Junction")
         }
         _ => {
             // FIXME(DNS): this might be something we want to handle
@@ -398,30 +395,26 @@ fn resolve_endpoint(
             // still need to check client defaults as its entirly possible
             // its a DNS address that xDS knows nothing about but we can
             // still route to.
-            return Err((
-                url,
-                crate::Error::NoBackend {
-                    route: resolved.route.target.clone(),
-                    rule: resolved.rule,
-                    backend: resolved.backend,
-                },
-            ));
+            return Err(crate::Error::NoBackend {
+                route: resolved.route.target.clone(),
+                rule: resolved.rule,
+                backend: resolved.backend,
+            });
         }
     };
 
-    let endpoint = match backend
-        .load_balancer
-        .load_balance(&url, headers, &None /* FIXME */, &endpoints)
-    {
+    let endpoint = match backend.load_balancer.load_balance(
+        request.url,
+        request.headers,
+        &None, /* FIXME */
+        &endpoints,
+    ) {
         Some(e) => e,
         None => {
-            return Err((
-                url,
-                crate::Error::NoReachableEndpoints {
-                    route: resolved.route.target.clone(),
-                    backend: resolved.backend,
-                },
-            ))
+            return Err(crate::Error::NoReachableEndpoints {
+                route: resolved.route.target.clone(),
+                backend: resolved.backend,
+            })
         }
     };
 
@@ -429,6 +422,7 @@ fn resolve_endpoint(
     let timeouts = resolved_rule.timeouts.clone();
     let retry = resolved_rule.retry.clone();
 
+    let url = request.url.clone();
     Ok(vec![crate::Endpoint {
         url,
         timeouts,

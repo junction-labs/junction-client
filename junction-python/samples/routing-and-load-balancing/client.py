@@ -53,19 +53,18 @@ def retry_sample(args):
                         codes=[502], attempts=2, backoff="1ms"
                     ),
                     "backends": [
-                        feature_target,
+                        {**feature_target, "port": 8008},
                     ],
                 },
                 {
                     "backends": [
-                        default_target,
+                        {**default_target, "port": 8008},
                     ]
                 },
             ],
         }
     ]
-    default_backends: List[junction.config.Backend] = []
-    session = junction.requests.Session(default_routes, default_backends)
+    session = junction.requests.Session(default_routes)
 
     results = []
     for code in [501, 502]:
@@ -157,6 +156,7 @@ def ring_hash_sample(args):
     default_target: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
+        "port": 8008,
     }
     default_routes: List[junction.config.Route] = []
     default_backends: List[junction.config.Backend] = [
@@ -311,7 +311,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Samples for Junction")
     parser.add_argument(
         "--base-url",
-        default="http://jct-http-server.default.svc.cluster.local",
+        default="http://jct-http-server.default.svc.cluster.local:8008",
         help="The base url to send requests to",
     )
     parser.add_argument(

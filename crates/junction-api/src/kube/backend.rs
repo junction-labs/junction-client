@@ -1,8 +1,10 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 use crate::backend::{Backend, LbPolicy};
 use crate::error::{Error, ErrorContext};
-use crate::{ServiceTarget, Target};
+use crate::{Name, ServiceTarget, Target};
 
 use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
 use kube::api::ObjectMeta;
@@ -25,23 +27,26 @@ impl Backend {
             ..Default::default()
         };
 
+        // If there's no port on this Backend, create a default LB config for
+        // the svc. otherwise specify it to just this port.
+        let lb_annotation = Self::lb_policy_annotation(self.target.port());
         let lb_json = serde_json::to_string(&self.lb)
             .expect("Failed to serialize Backend. this is a bug in Junction, not your code");
         svc.annotations_mut()
-            .insert(LB_ANNOTATION.to_string(), lb_json);
+            .insert(lb_annotation.to_string(), lb_json);
 
         match &self.target {
             Target::DNS(dns) => {
                 svc.spec = Some(ServiceSpec {
                     type_: Some("ExternalName".to_string()),
-                    external_name: Some(dns.hostname.clone()),
+                    external_name: Some(dns.hostname.to_string()),
                     ..Default::default()
                 })
             }
             Target::Service(service) => {
                 let meta = svc.meta_mut();
-                meta.name = Some(service.name.clone());
-                meta.namespace = Some(service.namespace.clone());
+                meta.name = Some(service.name.to_string());
+                meta.namespace = Some(service.namespace.to_string());
 
                 svc.spec = Some(ServiceSpec {
                     ports: Some(vec![ServicePort {
@@ -64,11 +69,9 @@ impl Backend {
     /// > [Service targets][Target::Service]. Support for DNS services coming soon!.
     pub fn from_service(svc: &Service) -> Result<Vec<Self>, Error> {
         // FIXME: recognize and generate DNS targets for ExternalName services.
-        let lb: LbPolicy = match svc.annotations().get(LB_ANNOTATION) {
-            Some(s) => serde_json::from_str(s)
-                .map_err(|e| Error::new(format!("failed to deserialize lb: {e}")))?,
-            None => LbPolicy::default(),
-        };
+        let default_lb_annotation = Self::lb_policy_annotation(None);
+        let default_lb_policy: LbPolicy =
+            get_lb_policy(svc.annotations(), &default_lb_annotation)?.unwrap_or_default();
 
         let (namespace, name) = (
             as_ref_or_else(&svc.meta().namespace, "missing namespace")
@@ -84,42 +87,51 @@ impl Backend {
         }
 
         let mut backends = vec![];
-        let ports = as_ref_or_else(&spec.ports, "missing ports").with_fields("spec", "ports")?;
-        match &ports.as_slice() {
-            [svc_port] => {
-                let port = if svc_port.port == 80 {
-                    None
-                } else {
-                    Some(convert_port(svc_port.port).with_field_index("ports", 0)?)
-                };
 
-                let target = Target::Service(ServiceTarget {
-                    name: name.to_string(),
-                    namespace: namespace.to_string(),
-                    port,
-                });
-                backends.push(Backend { target, lb })
-            }
-            svc_ports => {
-                for (i, svc_port) in svc_ports.iter().enumerate() {
-                    let port: u16 = convert_port(svc_port.port)
-                        .with_field("port")
-                        .with_field_index("ports", i)?;
+        let svc_ports =
+            as_ref_or_else(&spec.ports, "missing ports").with_fields("spec", "ports")?;
+        for (i, svc_port) in svc_ports.iter().enumerate() {
+            let port: u16 = convert_port(svc_port.port)
+                .with_field("port")
+                .with_field_index("ports", i)?;
 
-                    let target = Target::Service(ServiceTarget {
-                        name: name.to_string(),
-                        namespace: namespace.to_string(),
-                        port: Some(port),
-                    });
-                    backends.push(Backend {
-                        target,
-                        lb: lb.clone(),
-                    })
-                }
-            }
+            let lb_annotation = Self::lb_policy_annotation(Some(port));
+            let lb = get_lb_policy(svc.annotations(), &lb_annotation)?
+                .unwrap_or_else(|| default_lb_policy.clone());
+
+            let target = Target::Service(ServiceTarget {
+                name: Name::from_str(name).with_fields("meta", "name")?,
+                namespace: Name::from_str(namespace).with_fields("meta", "namespace")?,
+                port: Some(port),
+            });
+            backends.push(Backend {
+                target,
+                lb: lb.clone(),
+            })
         }
 
         Ok(backends)
+    }
+
+    fn lb_policy_annotation(port: Option<u16>) -> Cow<'static, str> {
+        match port {
+            Some(port) => Cow::Owned(format!("{LB_ANNOTATION}.{port}")),
+            None => Cow::Borrowed(LB_ANNOTATION),
+        }
+    }
+}
+
+fn get_lb_policy(
+    annotations: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<LbPolicy>, Error> {
+    match annotations.get(key) {
+        Some(s) => {
+            let lb_policy = serde_json::from_str(s)
+                .map_err(|e| Error::new(format!("failed to deserialize {key}: {e}")))?;
+            Ok(Some(lb_policy))
+        }
+        None => Ok(None),
     }
 }
 
@@ -139,7 +151,10 @@ mod test {
     use k8s_openapi::api::core::v1::{ServicePort, ServiceSpec};
     use kube::api::ObjectMeta;
 
-    use crate::DNSTarget;
+    use crate::{
+        backend::{RingHashParams, SessionAffinityHashParam, SessionAffinityHashParamType},
+        DNSTarget, Hostname,
+    };
 
     use super::*;
 
@@ -157,8 +172,8 @@ mod test {
     fn test_to_service_patch() {
         let backend = Backend {
             target: Target::Service(ServiceTarget {
-                name: "foo".to_string(),
-                namespace: "bar".to_string(),
+                name: Name::from_static("foo"),
+                namespace: Name::from_static("bar"),
                 port: None,
             }),
             lb: LbPolicy::RoundRobin,
@@ -189,7 +204,7 @@ mod test {
 
         let backend = Backend {
             target: Target::DNS(DNSTarget {
-                hostname: "example.com".to_string(),
+                hostname: Hostname::from_static("example.com"),
                 port: None,
             }),
             lb: LbPolicy::RoundRobin,
@@ -237,9 +252,9 @@ mod test {
             Backend::from_service(&svc).unwrap(),
             vec![Backend {
                 target: Target::Service(ServiceTarget {
-                    name: "foo".to_string(),
-                    namespace: "bar".to_string(),
-                    port: None,
+                    name: Name::from_static("foo"),
+                    namespace: Name::from_static("bar"),
+                    port: Some(80),
                 }),
                 lb: LbPolicy::Unspecified,
             },]
@@ -247,7 +262,7 @@ mod test {
     }
 
     #[test]
-    fn test_from_svc_multiple_ports() {
+    fn test_from_svc_default_lb_policy() {
         let svc = Service {
             metadata: ObjectMeta {
                 namespace: Some("bar".to_string()),
@@ -282,17 +297,94 @@ mod test {
             vec![
                 Backend {
                     target: Target::Service(ServiceTarget {
-                        name: "foo".to_string(),
-                        namespace: "bar".to_string(),
+                        name: Name::from_static("foo"),
+                        namespace: Name::from_static("bar"),
                         port: Some(80),
                     }),
                     lb: LbPolicy::RoundRobin,
                 },
                 Backend {
                     target: Target::Service(ServiceTarget {
-                        name: "foo".to_string(),
-                        namespace: "bar".to_string(),
+                        name: Name::from_static("foo"),
+                        namespace: Name::from_static("bar"),
                         port: Some(443),
+                    }),
+                    lb: LbPolicy::RoundRobin,
+                },
+            ]
+        )
+    }
+
+    #[test]
+    fn test_from_svc_override_lb_policy() {
+        let svc = Service {
+            metadata: ObjectMeta {
+                namespace: Some("bar".to_string()),
+                name: Some("foo".to_string()),
+                annotations: Some(annotations! {
+                    "junctionlabs.io/backend.lb" => r#"{"type":"RoundRobin"}"#,
+                    "junctionlabs.io/backend.lb.443" => r#"{"type":"RingHash", "min_ring_size": 1024, "hash_params": [{"type": "Header", "name": "x-user"}]}"#,
+                }),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                ports: Some(vec![
+                    ServicePort {
+                        name: Some("http".to_string()),
+                        port: 80,
+                        protocol: Some("TCP".to_string()),
+                        ..Default::default()
+                    },
+                    ServicePort {
+                        name: Some("https".to_string()),
+                        port: 443,
+                        protocol: Some("TCP".to_string()),
+                        ..Default::default()
+                    },
+                    ServicePort {
+                        name: Some("health".to_string()),
+                        port: 4430,
+                        protocol: Some("TCP".to_string()),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }),
+            status: None,
+        };
+
+        assert_eq!(
+            Backend::from_service(&svc).unwrap(),
+            vec![
+                Backend {
+                    target: Target::Service(ServiceTarget {
+                        name: Name::from_static("foo"),
+                        namespace: Name::from_static("bar"),
+                        port: Some(80),
+                    }),
+                    lb: LbPolicy::RoundRobin,
+                },
+                Backend {
+                    target: Target::Service(ServiceTarget {
+                        name: Name::from_static("foo"),
+                        namespace: Name::from_static("bar"),
+                        port: Some(443),
+                    }),
+                    lb: LbPolicy::RingHash(RingHashParams {
+                        min_ring_size: 1024,
+                        hash_params: vec![SessionAffinityHashParam {
+                            terminal: false,
+                            matcher: SessionAffinityHashParamType::Header {
+                                name: "x-user".to_string()
+                            }
+                        }]
+                    }),
+                },
+                Backend {
+                    target: Target::Service(ServiceTarget {
+                        name: Name::from_static("foo"),
+                        namespace: Name::from_static("bar"),
+                        port: Some(4430),
                     }),
                     lb: LbPolicy::RoundRobin,
                 },
@@ -304,9 +396,9 @@ mod test {
     fn test_svc_patch_roundtrip() {
         let backend = Backend {
             target: Target::Service(ServiceTarget {
-                name: "foo".to_string(),
-                namespace: "bar".to_string(),
-                port: None,
+                name: Name::from_static("foo"),
+                namespace: Name::from_static("bar"),
+                port: Some(8888),
             }),
             lb: LbPolicy::RoundRobin,
         };
