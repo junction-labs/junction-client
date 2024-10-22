@@ -400,6 +400,8 @@ impl TryFrom<&crate::http::RouteRule> for HTTPRouteRules {
             backend_refs: Some(vec_to_gateway!(route_rule.backends).with_field("backends")?),
             filters: None,
             matches: Some(vec_to_gateway!(route_rule.matches).with_field("matches")?),
+            name: None,
+            retry: None,
             session_persistence: None,
             timeouts: option_to_gateway!(route_rule.timeouts).with_field("timeouts")?,
         })
