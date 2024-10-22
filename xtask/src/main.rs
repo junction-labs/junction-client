@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, ffi::OsStr};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use xshell::{cmd, Shell};
@@ -10,6 +10,10 @@ fn main() -> anyhow::Result<()> {
     let venv = env::var("VIRTUAL_ENV").unwrap_or_else(|_| ".venv".to_string());
 
     match &args.command {
+        // rust
+        Commands::Check { crates } => rust::cargo_cmd(&sh, "check", &[], crates),
+        Commands::Doc { crates } => rust::cargo_cmd(&sh, "doc", &["--no-deps"], crates),
+        // python
         Commands::PythonClean => python::clean(&sh, &venv),
         Commands::PythonBuild {
             maturin,
@@ -20,7 +24,11 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// Cargo `xtasks` for development.
+/// Cargo xtasks for development.
+///
+/// xtasks are here anything common that takes more than a single, standard
+/// cargo command. If a cargo default isn't working, try running `cargo xtask
+/// --help` to see if there's an equivalent here.
 #[derive(Parser)]
 struct Args {
     #[command(subcommand)]
@@ -38,6 +46,20 @@ enum MaturinOption {
 #[allow(clippy::enum_variant_names)]
 #[derive(Subcommand)]
 enum Commands {
+    /// Run `cargo check` for a crate or crates, appropriate environment
+    /// variables set.
+    Check {
+        #[clap(long, num_args=1.., default_value = "junction-api")]
+        crates: Vec<String>,
+    },
+
+    /// Run `cargo doc` for a crate or crates, appropriate environment
+    /// variables set.
+    Doc {
+        #[clap(long, num_args=1.., default_value = "junction-api")]
+        crates: Vec<String>,
+    },
+
     /// Build and install junction-python in a .venv.
     PythonBuild {
         /// Skip rebuilding the junction-python wheel. Useful for working on
@@ -63,6 +85,35 @@ enum Commands {
 
     /// Clean the current virtualenv and any Python caches.
     PythonClean,
+}
+
+mod rust {
+    use super::*;
+
+    const K8S_OPENAPI_VERSION: &'static str = "K8S_OPENAPI_ENABLED_VERSION";
+
+    pub(super) fn cargo_cmd(
+        sh: &Shell,
+        cmd: &'static str,
+        args: &[&'static str],
+        crates: &[String],
+    ) -> anyhow::Result<()> {
+        let crate_args: Vec<_> = crates.iter().map(|name| ["-p", &name]).flatten().collect();
+
+        let _env = loud_env(sh, K8S_OPENAPI_VERSION, "1.29");
+        cmd!(sh, "cargo {cmd} {args...} {crate_args...}").run()?;
+
+        Ok(())
+    }
+}
+
+fn loud_env<K: AsRef<OsStr>, V: AsRef<OsStr>>(sh: &Shell, key: K, value: V) -> xshell::PushEnv<'_> {
+    eprintln!(
+        "with: {k}={v}",
+        k = key.as_ref().to_string_lossy(),
+        v = value.as_ref().to_string_lossy()
+    );
+    sh.push_env(key, value)
 }
 
 mod python {
