@@ -23,7 +23,7 @@ pub use shared::{Duration, Fraction, Regex};
 mod xds;
 
 #[cfg(feature = "kube")]
-mod kube;
+pub mod kube;
 
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
