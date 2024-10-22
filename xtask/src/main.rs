@@ -89,6 +89,7 @@ mod python {
             MaturinOption::Build => maturin_build(sh, venv)?,
             MaturinOption::None => (),
         }
+
         if stubs {
             generate_typing_hints(sh, venv)?;
         }
@@ -117,7 +118,13 @@ mod python {
     }
 
     fn generate_typing_hints(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-        let generated = cmd!(sh, "cargo run -p junction-api-gen").read()?;
+        let generate_cmd = cmd!(sh, "cargo run -p junction-api-gen");
+        // .run() doesn't echo the command. do it ourselves
+        //
+        // https://github.com/matklad/xshell/issues/57
+        eprintln!("$ {}", generate_cmd);
+
+        let generated = generate_cmd.read()?;
         let config_typing = "junction-python/junction/config.py";
         sh.write_file(config_typing, generated)?;
 
