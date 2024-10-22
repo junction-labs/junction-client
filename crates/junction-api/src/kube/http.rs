@@ -4,14 +4,14 @@ use gateway_api::apis::experimental::httproutes::{
     HTTPRoute, HTTPRouteParentRefs, HTTPRouteRules, HTTPRouteRulesBackendRefs,
     HTTPRouteRulesMatches, HTTPRouteRulesMatchesHeaders, HTTPRouteRulesMatchesHeadersType,
     HTTPRouteRulesMatchesMethod, HTTPRouteRulesMatchesPath, HTTPRouteRulesMatchesPathType,
-    HTTPRouteRulesMatchesQueryParams, HTTPRouteRulesMatchesQueryParamsType, HTTPRouteRulesTimeouts,
-    HTTPRouteSpec,
+    HTTPRouteRulesMatchesQueryParams, HTTPRouteRulesMatchesQueryParamsType, HTTPRouteRulesRetry,
+    HTTPRouteRulesTimeouts, HTTPRouteSpec,
 };
 use kube::api::ObjectMeta;
 
 use crate::error::{Error, ErrorContext};
 use crate::shared::Regex;
-use crate::{Hostname, Name};
+use crate::{Duration, Hostname, Name};
 
 impl crate::http::Route {
     /// Convert an [HTTPRouteSpec] into a [Route][crate::http::Route].
@@ -111,13 +111,9 @@ impl TryFrom<&HTTPRouteRules> for crate::http::RouteRule {
         let matches = vec_from_gateway!(rule.matches).with_field("matches")?;
         let timeouts = option_from_gateway!(rule.timeouts).with_field("timeouts")?;
         let backends = vec_from_gateway!(rule.backend_refs).with_field("backends")?;
-
         // FIXME: filters are ignored because they're not implemented yet
         let filters = vec![];
-
-        // FIXME: retries are in Gateway API v1.2.0 which doesn't have support yet.
-        // figuring out how to get that or how to parse them from annotations.
-        let retry = None;
+        let retry = option_from_gateway!(rule.retry).with_field("retry")?;
 
         Ok(crate::http::RouteRule {
             matches,
@@ -139,6 +135,44 @@ impl TryFrom<&HTTPRouteRulesTimeouts> for crate::http::RouteTimeouts {
         Ok(crate::http::RouteTimeouts {
             request,
             backend_request,
+        })
+    }
+}
+
+impl TryFrom<&HTTPRouteRulesRetry> for crate::http::RouteRetry {
+    type Error = Error;
+
+    fn try_from(retry: &HTTPRouteRulesRetry) -> Result<Self, Self::Error> {
+        let mut codes = Vec::with_capacity(retry.codes.as_ref().map_or(0, |c| c.len()));
+        for (i, &code) in retry.codes.iter().flatten().enumerate() {
+            let code: u32 = code
+                .try_into()
+                .map_err(|_| Error::new_static("invalid response code"))
+                .with_field_index("codes", i)?;
+            codes.push(code);
+        }
+
+        let attempts = retry
+            .attempts
+            .map(|i| i.try_into())
+            .transpose()
+            .map_err(|_| Error::new_static("invalid u32"))
+            .with_field("attempts")?;
+
+        let backoff = retry
+            .backoff
+            .as_ref()
+            .map(|s| {
+                Duration::from_str(s)
+                    .map_err(Error::new)
+                    .with_field("backoff")
+            })
+            .transpose()?;
+
+        Ok(crate::http::RouteRetry {
+            codes,
+            attempts,
+            backoff,
         })
     }
 }
@@ -395,13 +429,12 @@ impl TryFrom<&crate::http::RouteRule> for HTTPRouteRules {
     type Error = Error;
 
     fn try_from(route_rule: &crate::http::RouteRule) -> Result<HTTPRouteRules, Error> {
-        // FIXME: retries
         Ok(HTTPRouteRules {
             backend_refs: Some(vec_to_gateway!(route_rule.backends).with_field("backends")?),
             filters: None,
             matches: Some(vec_to_gateway!(route_rule.matches).with_field("matches")?),
             name: None,
-            retry: None,
+            retry: option_to_gateway!(route_rule.retry).with_field("retry")?,
             session_persistence: None,
             timeouts: option_to_gateway!(route_rule.timeouts).with_field("timeouts")?,
         })
@@ -415,6 +448,27 @@ impl TryFrom<&crate::http::RouteTimeouts> for HTTPRouteRulesTimeouts {
         Ok(HTTPRouteRulesTimeouts {
             backend_request: timeouts.backend_request.map(|d| d.to_string()),
             request: timeouts.request.map(|d| d.to_string()),
+        })
+    }
+}
+
+impl TryFrom<&crate::http::RouteRetry> for HTTPRouteRulesRetry {
+    type Error = Error;
+
+    fn try_from(retry: &crate::http::RouteRetry) -> Result<Self, Self::Error> {
+        let attempts = retry.attempts.map(|n| n as i64);
+        let backoff = retry.backoff.map(|d| d.to_string());
+        let codes = if retry.codes.is_empty() {
+            None
+        } else {
+            let codes = retry.codes.iter().map(|&code| code as i64).collect();
+            Some(codes)
+        };
+
+        Ok(HTTPRouteRulesRetry {
+            attempts,
+            backoff,
+            codes,
         })
     }
 }
@@ -586,6 +640,11 @@ spec:
     - path:
         type: PathPrefix
         value: /login
+    retry:
+      attempts: 3
+      backoff: 1m2s3ms
+    timeouts:
+      request: 1m2s3ms
     backendRefs:
     - name: foo-svc
       namespace: prod
@@ -606,6 +665,15 @@ spec:
                     }),
                     ..Default::default()
                 }],
+                retry: Some(crate::http::RouteRetry {
+                    codes: vec![],
+                    attempts: Some(3),
+                    backoff: Some(Duration::from_str("1m2s3ms").unwrap()),
+                }),
+                timeouts: Some(crate::http::RouteTimeouts {
+                    request: Some(Duration::from_str("1m2s3ms").unwrap()),
+                    backend_request: None,
+                }),
                 backends: vec![crate::http::WeightedTarget {
                     weight: 1,
                     target: crate::Target::Service(crate::ServiceTarget {
@@ -649,6 +717,15 @@ spec:
                     }),
                     ..Default::default()
                 }],
+                retry: Some(crate::http::RouteRetry {
+                    codes: vec![500, 503],
+                    attempts: Some(3),
+                    backoff: Some(Duration::from_secs(2).unwrap()),
+                }),
+                timeouts: Some(crate::http::RouteTimeouts {
+                    request: Some(Duration::from_secs(2).unwrap()),
+                    backend_request: Some(Duration::from_secs(1).unwrap()),
+                }),
                 backends: vec![crate::http::WeightedTarget {
                     weight: 1,
                     target: crate::Target::Service(crate::ServiceTarget {
