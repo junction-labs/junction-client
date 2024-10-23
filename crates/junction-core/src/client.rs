@@ -122,9 +122,13 @@ impl Client {
 
             for rule in &route.rules {
                 for backend in &rule.backends {
-                    self.ads
-                        .subscribe(xds::ResourceType::Cluster, backend.target.name())
-                        .unwrap();
+                    // only subscribe to a backends if we know the port up
+                    // front. backends shouldn't exist without a port.
+                    if backend.target.port().is_some() {
+                        self.ads
+                            .subscribe(xds::ResourceType::Cluster, backend.target.name())
+                            .unwrap();
+                    }
                 }
             }
         }
@@ -293,6 +297,11 @@ impl Client {
 
     fn resolve(&self, request: HttpRequest<'_>) -> Result<Vec<crate::Endpoint>, crate::Error> {
         let resolved_route = self.resolve_routes(ConfigMode::Dynamic, request)?;
+
+        self.ads
+            .subscribe(xds::ResourceType::Cluster, resolved_route.backend.name())
+            .unwrap();
+
         resolve_endpoint(&self.ads.cache, &self.defaults, resolved_route, request)
     }
 }

@@ -53,12 +53,12 @@ def retry_sample(args):
                         codes=[502], attempts=2, backoff="1ms"
                     ),
                     "backends": [
-                        {**feature_target, "port": 8008},
+                        feature_target,
                     ],
                 },
                 {
                     "backends": [
-                        {**default_target, "port": 8008},
+                        default_target,
                     ]
                 },
             ],
