@@ -489,6 +489,14 @@ impl Target {
         }
     }
 
+    /// Clone this Target, replacing its current port with `None`.
+    pub fn without_port(&self) -> Self {
+        match self.clone() {
+            Target::DNS(dns) => Target::DNS(DNSTarget { port: None, ..dns }),
+            Target::Service(svc) => Target::Service(ServiceTarget { port: None, ..svc }),
+        }
+    }
+
     /// Return a clone of this Target with a port set to `default_port` if it
     /// doesn't already have a port.
     pub fn with_default_port(&self, default_port: u16) -> Self {
