@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Target"],"mod":["backend","http","kube"],"struct":["DNSTarget","Duration","Error","Fraction","Hostname","Name","Regex","ServiceTarget"]};

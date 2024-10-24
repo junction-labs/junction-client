@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["LbPolicy","SessionAffinityHashParamType"],"struct":["Backend","RingHashParams","SessionAffinity","SessionAffinityHashParam"]};
