@@ -1093,6 +1093,7 @@ dependencies = [
  "h2",
  "http 1.1.0",
  "junction-api",
+ "k8s-openapi",
  "once_cell",
  "petgraph",
  "prost",

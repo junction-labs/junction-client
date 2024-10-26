@@ -568,3 +568,243 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
     }
     false
 }
+
+// TODO: thorough tests for matching
+
+#[cfg(test)]
+mod test {
+    use crate::Url;
+    use junction_api::{http::WeightedTarget, Name, Regex, ServiceTarget};
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn test_resolve_passthrough_route() {
+        let target = Target::from_name("example.com").unwrap();
+        let routes = StaticConfig::new(vec![Route::passthrough_route(target.clone())], vec![]);
+        let defaults = StaticConfig::default();
+
+        let request = HttpRequest {
+            method: &http::Method::GET,
+            url: &Url::from_str("http://example.com/test-path").unwrap(),
+            headers: &http::HeaderMap::default(),
+        };
+
+        let resolved = resolve_routes(&routes, &defaults, request, |_| {}).unwrap();
+        assert_eq!(resolved.backend, target.with_port(80));
+    }
+
+    #[test]
+    fn test_resolve_route_no_backends() {
+        let route = Route {
+            target: Target::from_name("example.com").unwrap(),
+            rules: vec![],
+        };
+
+        let routes = StaticConfig::new(vec![route], vec![]);
+        let defaults = StaticConfig::default();
+
+        let resolved = resolve_routes(
+            &routes,
+            &defaults,
+            HttpRequest {
+                method: &http::Method::GET,
+                url: &Url::from_str("http://example.com/users/123").unwrap(),
+                headers: &http::HeaderMap::default(),
+            },
+            |_| {},
+        );
+        assert!(resolved.is_err())
+    }
+
+    #[test]
+    fn test_resolve_path_route() {
+        let backend_one = Target::Service(ServiceTarget {
+            name: Name::from_static("svc1"),
+            namespace: Name::from_static("web"),
+            port: Some(8910),
+        });
+        let backend_two = Target::Service(ServiceTarget {
+            name: Name::from_static("svc2"),
+            namespace: Name::from_static("web"),
+            port: Some(8919),
+        });
+
+        let route = Route {
+            target: Target::from_name("example.com").unwrap(),
+            rules: vec![
+                RouteRule {
+                    matches: vec![RouteMatch {
+                        path: Some(PathMatch::Prefix {
+                            value: "/users".to_string(),
+                        }),
+                        ..Default::default()
+                    }],
+                    backends: vec![WeightedTarget {
+                        weight: 1,
+                        target: backend_one.clone(),
+                    }],
+                    ..Default::default()
+                },
+                RouteRule {
+                    backends: vec![WeightedTarget {
+                        weight: 1,
+                        target: backend_two.clone(),
+                    }],
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let routes = StaticConfig::new(vec![route], vec![]);
+        let defaults = StaticConfig::default();
+
+        let resolved = resolve_routes(
+            &routes,
+            &defaults,
+            HttpRequest {
+                method: &http::Method::GET,
+                url: &Url::from_str("http://example.com/test-path").unwrap(),
+                headers: &http::HeaderMap::default(),
+            },
+            |_| {},
+        )
+        .unwrap();
+        // should match the fallthrough rule
+        assert_eq!(resolved.rule, 1);
+        assert_eq!(resolved.backend, backend_two);
+
+        let resolved = resolve_routes(
+            &routes,
+            &defaults,
+            HttpRequest {
+                method: &http::Method::GET,
+                url: &Url::from_str("http://example.com/users/123").unwrap(),
+                headers: &http::HeaderMap::default(),
+            },
+            |_| {},
+        )
+        .unwrap();
+        // should match the first rule, with the path match
+        assert_eq!(resolved.backend, backend_one);
+        assert!(!resolved.route.rules[resolved.rule].matches.is_empty());
+
+        let resolved = resolve_routes(
+            &routes,
+            &defaults,
+            HttpRequest {
+                method: &http::Method::GET,
+                url: &Url::from_str("http://example.com/users/123").unwrap(),
+                headers: &http::HeaderMap::default(),
+            },
+            |_| {},
+        )
+        .unwrap();
+        // should match the first rule, with the path match
+        assert_eq!(resolved.rule, 0);
+        assert_eq!(resolved.backend, backend_one);
+    }
+
+    #[test]
+    fn test_resolve_query_route() {
+        let backend_one = Target::Service(ServiceTarget {
+            name: Name::from_static("svc1"),
+            namespace: Name::from_static("web"),
+            port: Some(8910),
+        });
+        let backend_two = Target::Service(ServiceTarget {
+            name: Name::from_static("svc2"),
+            namespace: Name::from_static("web"),
+            port: Some(8919),
+        });
+
+        let route = Route {
+            target: Target::from_name("example.com").unwrap(),
+            rules: vec![
+                RouteRule {
+                    matches: vec![RouteMatch {
+                        query_params: vec![
+                            QueryParamMatch::Exact {
+                                name: "qp1".to_string(),
+                                value: "potato".to_string(),
+                            },
+                            QueryParamMatch::RegularExpression {
+                                name: "qp2".to_string(),
+                                value: Regex::from_str("foo.*bar").unwrap(),
+                            },
+                        ],
+                        ..Default::default()
+                    }],
+                    backends: vec![WeightedTarget {
+                        weight: 1,
+                        target: backend_one.clone(),
+                    }],
+                    ..Default::default()
+                },
+                RouteRule {
+                    backends: vec![WeightedTarget {
+                        weight: 1,
+                        target: backend_two.clone(),
+                    }],
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let routes = StaticConfig::new(vec![route], vec![]);
+        let defaults = StaticConfig::default();
+
+        let wont_match = [
+            "http://example.com?qp1=tomato",
+            "http://example.com?qp1=potatooo",
+            "http://example.com?qp2=barfoo",
+            "http://example.com?qp2=fobar",
+            "http://example.com?qp1=potat&qp2=foobar",
+            "http://example.com?qp1=potato&qp2=fbar",
+        ];
+
+        for url in wont_match {
+            let resolved = resolve_routes(
+                &routes,
+                &defaults,
+                HttpRequest {
+                    method: &http::Method::GET,
+                    url: &Url::from_str(url).unwrap(),
+                    headers: &http::HeaderMap::default(),
+                },
+                |_| {},
+            )
+            .unwrap();
+            // should match the fallthrough rule
+            assert_eq!(resolved.rule, 1);
+            assert_eq!(resolved.backend, backend_two);
+        }
+
+        let will_match = [
+            "http://example.com?qp1=potato&qp2=foobar",
+            "http://example.com?qp1=potato&qp2=foobazbar",
+            "http://example.com?qp1=potato&qp2=fooooooooooooooobar",
+        ];
+
+        for url in will_match {
+            let resolved = resolve_routes(
+                &routes,
+                &defaults,
+                HttpRequest {
+                    method: &http::Method::GET,
+                    url: &Url::from_str(url).unwrap(),
+                    headers: &http::HeaderMap::default(),
+                },
+                |_| {},
+            )
+            .unwrap();
+            // should match one of the query matches
+            assert_eq!(
+                (resolved.rule, &resolved.backend),
+                (0, &backend_one),
+                "should match the first rule: {url}"
+            );
+        }
+    }
+}

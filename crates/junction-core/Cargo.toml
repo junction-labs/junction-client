@@ -12,7 +12,6 @@ form_urlencoded = { workspace = true }
 futures = { workspace = true }
 h2 = { workspace = true }
 http = { workspace = true }
-junction-api = { workspace = true }
 once_cell = { workspace = true }
 petgraph = { workspace = true }
 prost = { workspace = true }
@@ -31,6 +30,9 @@ tracing = { workspace = true }
 xds-api = { workspace = true, features = ["descriptor"] }
 xxhash-rust = { workspace = true }
 
+junction-api = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
+k8s-openapi = { version = "0.23", features = ["v1_29"] }
