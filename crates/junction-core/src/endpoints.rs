@@ -53,7 +53,6 @@ impl EndpointAddress {
         Some(Self::SocketAddr(SocketAddr::new(ip, port)))
     }
 
-    #[allow(unused)]
     pub(crate) fn from_dns_name(xds_address: &xds_core::SocketAddress) -> Option<Self> {
         let address = xds_address.address.clone();
         let port = match xds_address.port_specifier.as_ref()? {

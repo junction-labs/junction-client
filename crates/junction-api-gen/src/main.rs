@@ -9,6 +9,8 @@ use junction_typeinfo::TypeInfo as _;
 fn main() {
     let items = vec![
         junction_api::Target::item(),
+        junction_api::RouteTarget::item(),
+        junction_api::BackendTarget::item(),
         junction_api::Fraction::item(),
         junction_api::http::WeightedTarget::item(),
         junction_api::http::RouteTimeouts::item(),

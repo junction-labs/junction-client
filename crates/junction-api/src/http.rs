@@ -5,7 +5,7 @@
 
 use crate::{
     shared::{Duration, Fraction, Regex},
-    Hostname, Name, Target,
+    BackendTarget, Hostname, Name, RouteTarget, Target,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ use junction_typeinfo::TypeInfo;
 pub struct Route {
     /// The target for this route. The target determines the hostnames that map
     /// to this route.
-    pub target: Target,
+    pub target: RouteTarget,
 
     /// The route rules that determine whether any URLs match.
     pub rules: Vec<RouteRule>,
@@ -33,11 +33,12 @@ pub struct Route {
 impl Route {
     /// Create a trivial route that passes all traffic for a target directly to
     /// the same backend target.
-    pub fn passthrough_route(target: Target) -> Route {
-        let backend = WeightedTarget {
-            weight: 1,
-            target: target.clone(),
-        };
+    ///
+    /// If this RouteTarget has no port specified, `80` will be used for the
+    /// backend.
+    pub fn passthrough_route(target: RouteTarget) -> Route {
+        // FIXME: stop assuming 80.
+        let backend = target.with_default_port(80).as_backend().unwrap();
         Route {
             target,
             rules: vec![RouteRule {
@@ -45,7 +46,10 @@ impl Route {
                     path: Some(PathMatch::empty_prefix()),
                     ..Default::default()
                 }],
-                backends: vec![backend],
+                backends: vec![WeightedTarget {
+                    target: backend,
+                    weight: 1,
+                }],
                 ..Default::default()
             }],
         }
@@ -602,7 +606,7 @@ pub struct WeightedTarget {
     pub weight: u32,
 
     #[serde(flatten)]
-    pub target: Target,
+    pub target: BackendTarget,
     //Todo: gateway API also allows filters here under an extended support condition we need to
     // decide whether this is one where its simpler just to drop it.
 }
@@ -618,15 +622,15 @@ mod tests {
     use crate::{
         http::{HeaderMatch, RouteRule},
         shared::Regex,
-        DNSTarget, Hostname, ServiceTarget, Target,
+        Target,
     };
 
     #[test]
     fn test_passthrough_route() {
-        let route = Route::passthrough_route(Target::DNS(DNSTarget {
-            hostname: Hostname::from_static("example.com"),
+        let route = Route::passthrough_route(RouteTarget {
+            target: Target::dns("example.com").unwrap(),
             port: None,
-        }));
+        });
         assert!(route.is_passthrough_route())
     }
 
@@ -695,7 +699,7 @@ mod tests {
                 }
             }],
             "backends":[
-                { "weight": 1, "name": "timeout-svc", "namespace": "foo" }
+                { "weight": 1, "name": "timeout-svc", "namespace": "foo", "port": 80 }
             ],
             "timeouts": {
                 "request": "1s"
@@ -713,27 +717,25 @@ mod tests {
                 "target": { "name": "foo", "namespace": "bar" },
                 "rules": [
                     {
-                        "backends": [ { "name": "foo", "namespace": "bar" } ],
+                        "backends": [ { "name": "foo", "namespace": "bar", "port": 80 } ],
                     }
                 ]
             }),
             Route {
-                target: Target::Service(ServiceTarget {
-                    name: Name::from_static("foo"),
-                    namespace: Name::from_static("bar"),
-                    ..Default::default()
-                }),
+                target: RouteTarget {
+                    target: Target::kube_service("bar", "foo").unwrap(),
+                    port: None,
+                },
                 rules: vec![RouteRule {
                     matches: vec![],
                     filters: vec![],
                     timeouts: None,
                     retry: None,
                     backends: vec![WeightedTarget {
-                        target: Target::Service(ServiceTarget {
-                            name: Name::from_static("foo"),
-                            namespace: Name::from_static("bar"),
-                            ..Default::default()
-                        }),
+                        target: BackendTarget {
+                            target: Target::kube_service("bar", "foo").unwrap(),
+                            port: 80,
+                        },
                         weight: 1,
                     }],
                 }],
@@ -753,6 +755,7 @@ mod tests {
         }));
     }
 
+    #[track_caller]
     fn assert_deserialize<T: DeserializeOwned + PartialEq + std::fmt::Debug>(
         json: serde_json::Value,
         expected: T,
@@ -761,6 +764,7 @@ mod tests {
         assert_eq!(expected, actual);
     }
 
+    #[track_caller]
     fn assert_deserialize_err<T: DeserializeOwned + PartialEq + std::fmt::Debug>(
         json: serde_json::Value,
     ) -> serde_json::Error {

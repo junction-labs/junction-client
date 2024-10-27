@@ -40,6 +40,8 @@ macro_rules! value_or_default {
 #[cfg(feature = "xds")]
 pub(crate) use value_or_default;
 
+// TODO: replace String with SmolStr
+
 macro_rules! newtype_string {
     ($(#[$id_attr:meta])* pub $name:ident) => {
         $(#[$id_attr])*
@@ -296,55 +298,177 @@ impl Name {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct ServiceTarget {
+pub struct KubeService {
     /// The name of the Kubernetes Service to target.
     pub name: Name,
 
     /// The namespace of the Kubernetes service to target. This must be explicitly
     /// specified, and won't be inferred from context.
     pub namespace: Name,
-
-    /// The port number of the Kubernetes service to target/ attach to.
-    ///
-    /// When attaching policies, if it is not specified, the target will apply
-    /// to all connections that don't have a specific port specified.
-    ///
-    /// When being used to lookup a backend after a matched rule, if it is not
-    /// specified then it will use the same port as the incoming request
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<u16>,
 }
 
-impl ServiceTarget {
+impl KubeService {
     const SUBDOMAIN: &'static str = ".svc.cluster.local";
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct DNSTarget {
+pub struct Dns {
     /// The DNS name to target.
     pub hostname: Hostname,
+}
 
-    /// The port number to target/attach to.
-    ///
-    /// When attaching policies, if it is not specified, the target will apply
-    /// to all connections that don't have a specific port specified.
-    ///
-    /// When being used to lookup a backend after a matched rule, if it is not
-    /// specified then it will use the same port as the incoming request
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct RouteTarget {
+    #[serde(flatten)]
+    pub target: Target,
+
     pub port: Option<u16>,
+}
+
+impl std::fmt::Display for RouteTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.write_name(f)
+    }
+}
+
+impl RouteTarget {
+    pub fn from_name(name: &str) -> Result<Self, Error> {
+        let (name, port) = parse_port(name)?;
+        let target = Target::from_name(name)?;
+        Ok(Self { target, port })
+    }
+
+    /// Return a clone of this target with its `port` set.
+    pub fn with_port(&self, port: u16) -> Self {
+        Self {
+            target: self.target.clone(),
+            port: Some(port),
+        }
+    }
+
+    /// Return a clone of this target with no port set.
+    pub fn without_port(&self) -> Self {
+        Self {
+            target: self.target.clone(),
+            port: None,
+        }
+    }
+
+    /// Return a clone of this Target with a port set to `default_port` if it
+    /// doesn't already have a port.
+    pub fn with_default_port(&self, default_port: u16) -> Self {
+        Self {
+            target: self.target.clone(),
+            port: Some(self.port.unwrap_or(default_port)),
+        }
+    }
+
+    /// The canonical name of this target.
+    pub fn name(&self) -> String {
+        let mut buf = String::new();
+        self.write_name(&mut buf).unwrap();
+        buf
+    }
+
+    pub fn as_backend(&self) -> Option<BackendTarget> {
+        self.port.map(|port| BackendTarget {
+            target: self.target.clone(),
+            port,
+        })
+    }
+
+    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.target.write_name(w)?;
+
+        if let Some(port) = self.port {
+            write!(w, ":{port}")?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct BackendTarget {
+    #[serde(flatten)]
+    pub target: Target,
+
+    pub port: u16,
+}
+
+impl std::fmt::Display for BackendTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.write_name(f)
+    }
+}
+
+impl BackendTarget {
+    pub fn into_route_target(self) -> RouteTarget {
+        RouteTarget {
+            target: self.target,
+            port: Some(self.port),
+        }
+    }
+
+    pub fn from_name(name: &str) -> Result<Self, Error> {
+        let (name, port) = parse_port(name)?;
+
+        let port =
+            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
+        let target = Target::from_name(name)?;
+
+        Ok(Self { target, port })
+    }
+
+    pub fn name(&self) -> String {
+        let mut buf = String::new();
+        self.write_name(&mut buf).unwrap();
+        buf
+    }
+
+    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.target.write_name(w)?;
+        write!(w, ":{port}", port = self.port)?;
+
+        Ok(())
+    }
+
+    pub fn passthrough_route_name(&self) -> String {
+        let mut buf = String::new();
+        self.write_passthrough_route_name(&mut buf).unwrap();
+        buf
+    }
+
+    fn write_passthrough_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.target.write_passthrough_route_name(w)?;
+        write!(w, ":{port}", port = self.port)?;
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn from_passthrough_route_name(name: &str) -> Result<Self, Error> {
+        let (name, port) = parse_port(name)?;
+        let port =
+            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
+
+        let target = Target::from_passthrough_route_name(name)?;
+
+        Ok(Self { target, port })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum Target {
-    #[serde(alias = "dns")]
-    DNS(DNSTarget),
+    #[serde(alias = "dns", alias = "DNS")]
+    Dns(Dns),
 
     #[serde(untagged)]
-    Service(ServiceTarget),
+    Service(KubeService),
 }
 
 impl std::fmt::Display for Target {
@@ -354,7 +478,25 @@ impl std::fmt::Display for Target {
 }
 
 impl Target {
-    const BACKEND_SUBDOMAIN: &'static str = ".lb.jct";
+    pub fn dns(name: &str) -> Result<Self, Error> {
+        let hostname = Hostname::from_str(name)?;
+        Ok(Target::Dns(Dns { hostname }))
+    }
+
+    pub fn kube_service(namespace: &str, name: &str) -> Result<Self, Error> {
+        let namespace = Name::from_str(namespace)?;
+        let name = Name::from_str(name)?;
+
+        Ok(Target::Service(KubeService { name, namespace }))
+    }
+
+    pub fn into_backend(self, port: u16) -> BackendTarget {
+        BackendTarget { target: self, port }
+    }
+
+    pub fn into_route(self, port: Option<u16>) -> RouteTarget {
+        RouteTarget { target: self, port }
+    }
 
     pub fn name(&self) -> String {
         let mut buf = String::new();
@@ -364,12 +506,8 @@ impl Target {
 
     fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
         match self {
-            Target::DNS(dns) => {
+            Target::Dns(dns) => {
                 w.write_str(&dns.hostname)?;
-
-                if let Some(port) = dns.port {
-                    write!(w, ":{port}")?;
-                }
             }
             Target::Service(svc) => {
                 write!(
@@ -377,12 +515,8 @@ impl Target {
                     "{name}.{namespace}{subdomain}",
                     name = svc.name,
                     namespace = svc.namespace,
-                    subdomain = ServiceTarget::SUBDOMAIN,
+                    subdomain = KubeService::SUBDOMAIN,
                 )?;
-
-                if let Some(port) = svc.port {
-                    write!(w, ":{port}")?;
-                }
             }
         }
 
@@ -398,12 +532,8 @@ impl Target {
 
     fn write_passthrough_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
         match self {
-            Target::DNS(dns) => {
+            Target::Dns(dns) => {
                 write!(w, "{}{}", dns.hostname, Target::BACKEND_SUBDOMAIN)?;
-
-                if let Some(port) = dns.port {
-                    write!(w, ":{port}")?;
-                }
             }
             Target::Service(svc) => {
                 write!(
@@ -411,25 +541,22 @@ impl Target {
                     "{name}.{namespace}{svc}{backend}",
                     name = svc.name,
                     namespace = svc.namespace,
-                    svc = ServiceTarget::SUBDOMAIN,
+                    svc = KubeService::SUBDOMAIN,
                     backend = Target::BACKEND_SUBDOMAIN,
                 )?;
-
-                if let Some(port) = svc.port {
-                    write!(w, ":{port}")?;
-                }
             }
         }
 
         Ok(())
     }
 
+    const BACKEND_SUBDOMAIN: &'static str = ".lb.jct";
+
     pub fn from_name(name: &str) -> Result<Self, Error> {
-        let (name, port) = parse_port(name)?;
         let hostname = Hostname::from_str(name)?;
 
         let target = match name {
-            n if n.ends_with(ServiceTarget::SUBDOMAIN) => {
+            n if n.ends_with(KubeService::SUBDOMAIN) => {
                 let parts: Vec<_> = hostname.split('.').collect();
                 if parts.len() != 5 {
                     return Err(Error::new_static(
@@ -439,77 +566,22 @@ impl Target {
 
                 let name = parts[0].parse()?;
                 let namespace = parts[1].parse()?;
-                Target::Service(ServiceTarget {
-                    name,
-                    namespace,
-                    port,
-                })
+                Target::Service(KubeService { name, namespace })
             }
-            _ => Target::DNS(DNSTarget { hostname, port }),
+            _ => Target::Dns(Dns { hostname }),
         };
         Ok(target)
     }
 
     #[doc(hidden)]
     pub fn from_passthrough_route_name(name: &str) -> Result<Self, Error> {
-        let (name, port) = parse_port(name)?;
         let hostname = Hostname::from_str(name)?;
 
         let Some(hostname) = hostname.strip_suffix(Target::BACKEND_SUBDOMAIN) else {
             return Err(Error::new_static("expected a Junction backend name"));
         };
 
-        let mut target = Self::from_name(hostname)?;
-        if let Some(port) = port {
-            target = target.with_port(port);
-        }
-        Ok(target)
-    }
-
-    pub fn port(&self) -> Option<u16> {
-        match self {
-            Target::DNS(dns) => dns.port,
-            Target::Service(svc) => svc.port,
-        }
-    }
-
-    /// Return a clone of this Target with its port set.
-    pub fn with_port(&self, port: u16) -> Self {
-        match self {
-            Target::DNS(c) => Target::DNS(DNSTarget {
-                port: Some(port),
-                hostname: c.hostname.clone(),
-            }),
-
-            Target::Service(c) => Target::Service(ServiceTarget {
-                port: Some(port),
-                name: c.name.clone(),
-                namespace: c.namespace.clone(),
-            }),
-        }
-    }
-
-    /// Clone this Target, replacing its current port with `None`.
-    pub fn without_port(&self) -> Self {
-        match self.clone() {
-            Target::DNS(dns) => Target::DNS(DNSTarget { port: None, ..dns }),
-            Target::Service(svc) => Target::Service(ServiceTarget { port: None, ..svc }),
-        }
-    }
-
-    /// Return a clone of this Target with a port set to `default_port` if it
-    /// doesn't already have a port.
-    pub fn with_default_port(&self, default_port: u16) -> Self {
-        match self {
-            Target::DNS(dns) => match dns.port {
-                Some(_) => self.clone(),
-                None => self.clone().with_port(default_port),
-            },
-            Target::Service(svc) => match svc.port {
-                Some(_) => self.clone(),
-                None => self.clone().with_port(default_port),
-            },
-        }
+        Self::from_name(hostname)
     }
 }
 
@@ -544,11 +616,7 @@ mod test {
 
         assert_eq!(
             serde_json::from_value::<Target>(target).unwrap(),
-            Target::Service(ServiceTarget {
-                name: Name::from_static("foo"),
-                namespace: Name::from_static("potato"),
-                port: None
-            }),
+            Target::kube_service("potato", "foo").unwrap(),
         );
 
         let target = serde_json::json!({
@@ -558,96 +626,141 @@ mod test {
 
         assert_eq!(
             serde_json::from_value::<Target>(target).unwrap(),
-            Target::DNS(DNSTarget {
-                hostname: Hostname::from_static("example.com"),
-                port: None
-            }),
+            Target::dns("example.com").unwrap(),
         );
     }
 
     #[test]
-    fn test_target_route_name() {
+    fn test_route_target_name() {
         assert_route_name(
-            Target::Service(ServiceTarget {
-                name: Name::from_static("potato"),
-                namespace: Name::from_static("production"),
+            RouteTarget {
+                target: Target::Service(KubeService {
+                    name: Name::from_static("potato"),
+                    namespace: Name::from_static("production"),
+                }),
                 port: None,
-            }),
+            },
             "potato.production.svc.cluster.local",
         );
 
         assert_route_name(
-            Target::Service(ServiceTarget {
-                name: Name::from_static("potato"),
-                namespace: Name::from_static("production"),
-                port: Some(443),
-            }),
-            "potato.production.svc.cluster.local:443",
-        );
-
-        assert_route_name(
-            Target::DNS(DNSTarget {
-                hostname: Hostname::from_static("cool-stuff.example.com"),
+            RouteTarget {
+                target: Target::Dns(Dns {
+                    hostname: Hostname::from_static("cool-stuff.example.com"),
+                }),
                 port: None,
-            }),
+            },
             "cool-stuff.example.com",
         );
 
         assert_route_name(
-            Target::DNS(DNSTarget {
-                hostname: Hostname::from_static("cool-stuff.example.com"),
-                port: Some(1234),
-            }),
-            "cool-stuff.example.com:1234",
+            RouteTarget {
+                target: Target::Service(KubeService {
+                    name: Name::from_static("potato"),
+                    namespace: Name::from_static("production"),
+                }),
+                port: Some(123),
+            },
+            "potato.production.svc.cluster.local:123",
+        );
+
+        assert_route_name(
+            RouteTarget {
+                target: Target::Dns(Dns {
+                    hostname: Hostname::from_static("cool-stuff.example.com"),
+                }),
+                port: Some(123),
+            },
+            "cool-stuff.example.com:123",
         );
     }
 
     #[track_caller]
-    fn assert_route_name(target: Target, str: &'static str) {
+    fn assert_route_name(target: RouteTarget, str: &'static str) {
+        assert_eq!(&target.name(), str);
+        let parsed = RouteTarget::from_name(str).unwrap();
+        assert_eq!(parsed, target);
+    }
+
+    #[test]
+    fn test_backend_target_name() {
+        assert_backend_name(
+            BackendTarget {
+                target: Target::Service(KubeService {
+                    name: Name::from_static("potato"),
+                    namespace: Name::from_static("production"),
+                }),
+                port: 123,
+            },
+            "potato.production.svc.cluster.local:123",
+        );
+
+        assert_backend_name(
+            BackendTarget {
+                target: Target::Dns(Dns {
+                    hostname: Hostname::from_static("cool-stuff.example.com"),
+                }),
+                port: 123,
+            },
+            "cool-stuff.example.com:123",
+        );
+
+        assert!(BackendTarget::from_name("potato.production.svc.cluster.local").is_err());
+        assert!(BackendTarget::from_name("cool-stuff.example.com",).is_err());
+    }
+
+    #[track_caller]
+    fn assert_backend_name(target: BackendTarget, str: &'static str) {
+        assert_eq!(&target.name(), str);
+        let parsed = BackendTarget::from_name(str).unwrap();
+        assert_eq!(parsed, target);
+    }
+
+    #[test]
+    fn test_target_name() {
+        assert_name(
+            Target::Service(KubeService {
+                name: Name::from_static("potato"),
+                namespace: Name::from_static("production"),
+            }),
+            "potato.production.svc.cluster.local",
+        );
+
+        assert_name(
+            Target::Dns(Dns {
+                hostname: Hostname::from_static("cool-stuff.example.com"),
+            }),
+            "cool-stuff.example.com",
+        );
+    }
+
+    #[track_caller]
+    fn assert_name(target: Target, str: &'static str) {
         assert_eq!(&target.name(), str);
         let parsed = Target::from_name(str).unwrap();
         assert_eq!(parsed, target);
     }
 
     #[test]
-    fn test_target_backend_name() {
-        assert_backend_name(
-            Target::Service(ServiceTarget {
+    fn test_target_passthrough_name() {
+        assert_passthrough_name(
+            Target::Service(KubeService {
                 name: Name::from_static("potato"),
                 namespace: Name::from_static("production"),
-                port: None,
             }),
             "potato.production.svc.cluster.local.lb.jct",
         );
 
-        assert_backend_name(
-            Target::Service(ServiceTarget {
-                name: Name::from_static("potato"),
-                namespace: Name::from_static("production"),
-                port: Some(443),
-            }),
-            "potato.production.svc.cluster.local.lb.jct:443",
-        );
-
-        assert_backend_name(
-            Target::DNS(DNSTarget {
+        assert_passthrough_name(
+            Target::Dns(Dns {
                 hostname: Hostname::from_static("cool-stuff.example.com"),
-                port: None,
             }),
             "cool-stuff.example.com.lb.jct",
-        );
-
-        assert_backend_name(
-            Target::DNS(DNSTarget {
-                hostname: Hostname::from_static("cool-stuff.example.com"),
-                port: Some(1234),
-            }),
-            "cool-stuff.example.com.lb.jct:1234",
         );
     }
 
     #[track_caller]
-    fn assert_backend_name(target: Target, str: &'static str) {
+    fn assert_passthrough_name(target: Target, str: &'static str) {
         assert_eq!(&target.passthrough_route_name(), str);
         let parsed = Target::from_passthrough_route_name(str).unwrap();
         assert_eq!(parsed, target);

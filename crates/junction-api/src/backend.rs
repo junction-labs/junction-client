@@ -1,37 +1,25 @@
 //! Backends are the logical target of network traffic. They have an identity and
 //! a load-balancing policy. See [Backend] to get started.
 
-use crate::Target;
+use crate::BackendTarget;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
 
-/// Policy for configuring a ketama-style consistent hashing algorithm.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(deny_unknown_fields)]
+/// A Backend is a logical target for network traffic.
+///
+/// A backend configures how all traffic for it's `target` is handled. Any
+/// traffic routed to this backend will use its load balancing policy to evenly
+/// spread traffic across all available endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct RingHashParams {
-    /// The minimum size of the hash ring
-    #[serde(default = "default_min_ring_size", alias = "minRingSize")]
-    pub min_ring_size: u32,
+pub struct Backend {
+    /// A unique description of what this backend is.
+    pub target: BackendTarget,
 
-    /// How to hash an outgoing request into the ring.
-    ///
-    /// Hash parameters are applied in order. If the request is missing an input, it has no effect
-    /// on the final hash. Hashing stops when only when all polices have been applied or a
-    /// `terminal` policy matches part of an incoming request.
-    ///
-    /// This allows configuring a fallback-style hash, where the value of `HeaderA` gets used,
-    /// falling back to the value of `HeaderB`.
-    ///
-    /// If no policies match, a random hash is generated for each request.
-    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "hashParams")]
-    pub hash_params: Vec<SessionAffinityHashParam>,
-}
-
-pub(crate) const fn default_min_ring_size() -> u32 {
-    1024
+    /// How traffic to this target should be load balanced.
+    pub lb: LbPolicy,
 }
 
 // TODO: figure out how we want to support the filter_state/connection_properties style of hashing
@@ -67,21 +55,31 @@ impl LbPolicy {
     }
 }
 
-/// A Backend is a logical target for network traffic.
-///
-/// A backend configures how all traffic for it's `target` is handled. Any
-/// traffic routed to this backend will use its load balancing policy to evenly
-/// spread traffic across all available endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Policy for configuring a ketama-style consistent hashing algorithm.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct Backend {
-    /// The target this backend represents. A target may be a Kubernetes Service
-    /// or a DNS name. See [Target] for more.
-    pub target: Target,
+pub struct RingHashParams {
+    /// The minimum size of the hash ring
+    #[serde(default = "default_min_ring_size", alias = "minRingSize")]
+    pub min_ring_size: u32,
 
-    /// How traffic to this target should be load balanced.
-    pub lb: LbPolicy,
+    /// How to hash an outgoing request into the ring.
+    ///
+    /// Hash parameters are applied in order. If the request is missing an input, it has no effect
+    /// on the final hash. Hashing stops when only when all polices have been applied or a
+    /// `terminal` policy matches part of an incoming request.
+    ///
+    /// This allows configuring a fallback-style hash, where the value of `HeaderA` gets used,
+    /// falling back to the value of `HeaderB`.
+    ///
+    /// If no policies match, a random hash is generated for each request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "hashParams")]
+    pub hash_params: Vec<SessionAffinityHashParam>,
+}
+
+pub(crate) const fn default_min_ring_size() -> u32 {
+    1024
 }
 
 #[cfg(test)]
@@ -113,9 +111,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_backend() {
+    fn test_backend_json_roundtrip() {
         let test_json = json!({
-            "target": { "name": "foo", "namespace": "bar" },
+            "target": { "name": "foo", "namespace": "bar", "port": 789 },
             "lb": {
                 "type": "Unspecified",
             },
