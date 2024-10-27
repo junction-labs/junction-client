@@ -53,12 +53,12 @@ def retry_sample(args):
                         codes=[502], attempts=2, backoff="1ms"
                     ),
                     "backends": [
-                        feature_target,
+                        {**feature_target, "port": 8008},
                     ],
                 },
                 {
                     "backends": [
-                        default_target,
+                        {**default_target, "port": 8008},
                     ]
                 },
             ],
@@ -105,16 +105,18 @@ def path_match_sample(args):
                         {
                             **default_target,
                             "weight": 50,
+                            "port": 8008,
                         },
                         {
                             **feature_target,
                             "weight": 50,
+                            "port": 8008,
                         },
                     ],
                 },
                 {
                     "backends": [
-                        default_target,
+                        {**default_target, "port": 8008},
                     ]
                 },
             ],
@@ -158,7 +160,6 @@ def ring_hash_sample(args):
         "namespace": "default",
         "port": 8008,
     }
-    default_routes: List[junction.config.Route] = []
     default_backends: List[junction.config.Backend] = [
         {
             "target": default_target,
@@ -169,7 +170,7 @@ def ring_hash_sample(args):
             },
         }
     ]
-    session = junction.requests.Session(default_routes, default_backends)
+    session = junction.requests.Session(default_backends=default_backends)
 
     results = []
     for headers in [{}, {"USER": "user"}]:
@@ -205,7 +206,7 @@ def timeouts_sample(args):
             "rules": [
                 {
                     "backends": [
-                        default_target,
+                        {**default_target, "port": 8008},
                     ],
                     "timeouts": {"backend_request": "50ms"},
                 }
@@ -249,7 +250,7 @@ def urllib3_sample(args):
             "rules": [
                 {
                     "backends": [
-                        default_target,
+                        {**default_target, "port": 8008},
                     ],
                     "timeouts": {"backend_request": "50ms"},
                 }

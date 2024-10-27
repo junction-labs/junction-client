@@ -315,7 +315,7 @@ fn dump_kube_route(
 ) -> PyResult<String> {
     let route: Route = pythonize::depythonize_bound(route)?;
 
-    let (namespace, name) = match &route.target {
+    let (namespace, name) = match &route.target.target {
         junction_api::Target::Service(svc) => (Some(svc.namespace.clone()), Some(svc.name.clone())),
         _ => (None, None),
     };

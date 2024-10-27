@@ -15,7 +15,10 @@ def nginx_staging() -> junction.config.TargetService:
 
 
 def test_check_basic_route(nginx):
-    route: config.Route = {"target": nginx, "rules": [{"backends": [nginx]}]}
+    route: config.Route = {
+        "target": nginx,
+        "rules": [{"backends": [{**nginx, "port": 80}]}],
+    }
 
     (_, _, matched_backend) = junction.check_route(
         [route],
@@ -28,7 +31,10 @@ def test_check_basic_route(nginx):
 
 
 def test_check_basic_route_url_port(nginx):
-    route: config.Route = {"target": nginx, "rules": [{"backends": [nginx]}]}
+    route: config.Route = {
+        "target": nginx,
+        "rules": [{"backends": [{**nginx, "port": 8888}]}],
+    }
 
     (_, _, matched_backend) = junction.check_route(
         [route],
@@ -37,13 +43,13 @@ def test_check_basic_route_url_port(nginx):
         {},
     )
 
-    assert matched_backend == {**nginx, "port": 8910}
+    assert matched_backend == {**nginx, "port": 8888}
 
 
 def test_check_basic_route_with_port(nginx):
     route: config.Route = {
         "target": {**nginx, "port": 1234},
-        "rules": [{"backends": [nginx]}],
+        "rules": [{"backends": [{**nginx, "port": 1234}]}],
     }
 
     # explicitly specifying a different port should work
@@ -77,7 +83,9 @@ def test_check_retry_and_timeouts(nginx):
 
     route: config.Route = {
         "target": nginx,
-        "rules": [{"backends": [nginx], "retry": retry, "timeouts": timeouts}],
+        "rules": [
+            {"backends": [{**nginx, "port": 80}], "retry": retry, "timeouts": timeouts}
+        ],
     }
 
     (matching_route, matching_rule_idx, _) = junction.check_route(
@@ -92,7 +100,10 @@ def test_check_retry_and_timeouts(nginx):
 
 
 def test_check_redirect_route(nginx, nginx_staging):
-    route: config.Route = {"target": nginx, "rules": [{"backends": [nginx_staging]}]}
+    route: config.Route = {
+        "target": nginx,
+        "rules": [{"backends": [{**nginx_staging, "port": 80}]}],
+    }
 
     (_, _, matched_backend) = junction.check_route(
         [route],
@@ -109,11 +120,11 @@ def test_no_fallthrough(nginx, nginx_staging):
         "target": nginx,
         "rules": [
             {
-                "backends": [nginx_staging],
+                "backends": [{**nginx_staging, "port": 80}],
                 "matches": [{"headers": [{"name": "x-env", "value": "staging"}]}],
             },
             {
-                "backends": [nginx],
+                "backends": [{**nginx, "port": 80}],
                 "matches": [{"headers": [{"name": "x-env", "value": "prod"}]}],
             },
         ],
@@ -133,10 +144,10 @@ def test_no_target(nginx, nginx_staging):
         "target": nginx,
         "rules": [
             {
-                "backends": [nginx_staging],
+                "backends": [{**nginx_staging, "port": 80}],
                 "matches": [{"headers": [{"name": "x-env", "value": "staging"}]}],
             },
-            {"backends": [nginx]},
+            {"backends": [{**nginx, "port": 80}]},
         ],
     }
 
@@ -162,10 +173,10 @@ def test_check_headers_matches_default(headers, nginx, nginx_staging):
         "target": nginx,
         "rules": [
             {
-                "backends": [nginx_staging],
+                "backends": [{**nginx_staging, "port": 80}],
                 "matches": [{"headers": [{"name": "x-env", "value": "staging"}]}],
             },
-            {"backends": [nginx]},
+            {"backends": [{**nginx, "port": 80}]},
         ],
     }
 
@@ -178,7 +189,7 @@ def test_check_headers_matches_default(headers, nginx, nginx_staging):
     )
 
     assert {**nginx, "port": 80} == matched_backend
-    assert [nginx] == route["rules"][matched_rule_idx]["backends"]
+    assert [{**nginx, "port": 80}] == route["rules"][matched_rule_idx]["backends"]
 
 
 def test_check_headers_match(nginx, nginx_staging):
@@ -186,10 +197,10 @@ def test_check_headers_match(nginx, nginx_staging):
         "target": nginx,
         "rules": [
             {
-                "backends": [nginx_staging],
+                "backends": [{**nginx_staging, "port": 80}],
                 "matches": [{"headers": [{"name": "x-env", "value": "staging"}]}],
             },
-            {"backends": [nginx]},
+            {"backends": [{**nginx, "port": 80}]},
         ],
     }
 
@@ -202,7 +213,9 @@ def test_check_headers_match(nginx, nginx_staging):
     )
 
     assert {**nginx_staging, "port": 80} == matched_backend
-    assert [nginx_staging] == route["rules"][matched_rule_idx]["backends"]
+    assert [{**nginx_staging, "port": 80}] == route["rules"][matched_rule_idx][
+        "backends"
+    ]
 
 
 def test_check_path_matches_default(nginx, nginx_staging):
@@ -210,12 +223,12 @@ def test_check_path_matches_default(nginx, nginx_staging):
         "target": nginx,
         "rules": [
             {
-                "backends": [nginx_staging],
+                "backends": [{**nginx_staging, "port": 80}],
                 "matches": [
                     {"path": {"type": "RegularExpression", "value": "foo.*bar"}}
                 ],
             },
-            {"backends": [nginx]},
+            {"backends": [{**nginx, "port": 80}]},
         ],
     }
 
@@ -227,7 +240,7 @@ def test_check_path_matches_default(nginx, nginx_staging):
     )
 
     assert {**nginx, "port": 80} == matched_backend
-    assert [nginx] == route["rules"][matched_rule_idx]["backends"]
+    assert [{**nginx, "port": 80}] == route["rules"][matched_rule_idx]["backends"]
 
 
 def test_check_path_matches(nginx, nginx_staging):
@@ -235,12 +248,12 @@ def test_check_path_matches(nginx, nginx_staging):
         "target": nginx,
         "rules": [
             {
-                "backends": [nginx_staging],
+                "backends": [{**nginx_staging, "port": 80}],
                 "matches": [
                     {"path": {"type": "RegularExpression", "value": "foo.*bar"}}
                 ],
             },
-            {"backends": [nginx]},
+            {"backends": [{**nginx, "port": 80}]},
         ],
     }
 
@@ -252,4 +265,6 @@ def test_check_path_matches(nginx, nginx_staging):
     )
 
     assert {**nginx_staging, "port": 80} == matched_backend
-    assert [nginx_staging] == route["rules"][matched_rule_idx]["backends"]
+    assert [{**nginx_staging, "port": 80}] == route["rules"][matched_rule_idx][
+        "backends"
+    ]

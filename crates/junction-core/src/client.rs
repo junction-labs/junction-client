@@ -6,7 +6,7 @@ use crate::{
 use junction_api::{
     backend::Backend,
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
-    Target,
+    BackendTarget, RouteTarget, Target,
 };
 use std::future::Future;
 use std::time::Duration;
@@ -235,14 +235,12 @@ impl Client {
         match config_mode {
             ConfigMode::Dynamic => {
                 // in dynamic mode, use every target as an ads client
-                // subscription. this pins every target to the ads
-                // cache.
-                let subscribe = |target: &Target| {
+                // subscription. this pins every target to the ads cache.
+                resolve_routes(&self.ads.cache, &self.defaults, request, |name: String| {
                     self.ads
-                        .subscribe(xds::ResourceType::Listener, target.name())
+                        .subscribe(xds::ResourceType::Listener, name)
                         .unwrap();
-                };
-                resolve_routes(&self.ads.cache, &self.defaults, request, subscribe)
+                })
             }
             _ => {
                 // otherwise just no-op the subscribe fn and use the existing
@@ -315,12 +313,14 @@ impl Client {
 /// The URL's explicitly listed port or the default port for the URL's scheme
 /// will also be used to first specify a port-specific target before falling
 /// back to a port-less target.
-pub(crate) fn targets_for_url(url: &crate::Url) -> Result<Vec<Target>, crate::Error> {
-    let default_target =
+pub(crate) fn targets_for_url(url: &crate::Url) -> Result<Vec<RouteTarget>, crate::Error> {
+    let target =
         Target::from_name(url.hostname()).map_err(|e| crate::Error::invalid_url(e.to_string()))?;
-    let port = url.default_port();
 
-    Ok(vec![default_target.with_port(port), default_target])
+    Ok(vec![
+        target.clone().into_route(Some(url.default_port())),
+        target.into_route(None),
+    ])
 }
 
 /// A view into an HTTP Request, before any rewrites or modifications have been
@@ -347,7 +347,7 @@ pub struct ResolvedRoute {
     pub rule: usize,
 
     /// The backend selected as part of route resolution.
-    pub backend: Target,
+    pub backend: BackendTarget,
 }
 
 pub(crate) fn resolve_routes<F>(
@@ -357,13 +357,13 @@ pub(crate) fn resolve_routes<F>(
     subscribe: F,
 ) -> Result<ResolvedRoute, crate::Error>
 where
-    F: Fn(&Target),
+    F: Fn(String),
 {
     use rand::seq::SliceRandom;
 
     let targets = targets_for_url(request.url)?;
     for target in &targets {
-        subscribe(target);
+        subscribe(target.name());
     }
 
     let default_route = defaults.get_route_with_fallbacks(&targets);
@@ -398,13 +398,11 @@ where
         });
     };
 
-    // pick a target at random from the list, respecting weights. if the target
-    // has no port, then then we need to fill in the default using the request
-    // URL.
+    // pick a target at random from the list, respecting weights.
     let backend = &crate::rand::with_thread_rng(|rng| {
         matching_rule.backends.choose_weighted(rng, |wc| wc.weight)
     });
-    let Ok(backend) = backend.map(|w| &w.target) else {
+    let Ok(backend) = backend.map(|w| w.target.clone()) else {
         return Err(crate::Error::InvalidRoutes {
             message: "matched rule has no backends",
             target: matching_route.target.clone(),
@@ -412,9 +410,6 @@ where
         });
     };
 
-    // force port resolution. if the backend has a port set already, use it,
-    // otherwise the port from the request.
-    let backend = backend.with_default_port(request.url.default_port());
     Ok(ResolvedRoute {
         route: matching_route.clone(),
         rule: matching_rule_idx,
@@ -574,15 +569,18 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
 #[cfg(test)]
 mod test {
     use crate::Url;
-    use junction_api::{http::WeightedTarget, Name, Regex, ServiceTarget};
+    use junction_api::{http::WeightedTarget, Regex};
     use std::str::FromStr;
 
     use super::*;
 
     #[test]
     fn test_resolve_passthrough_route() {
-        let target = Target::from_name("example.com").unwrap();
-        let routes = StaticConfig::new(vec![Route::passthrough_route(target.clone())], vec![]);
+        let target = Target::dns("example.com").unwrap();
+        let routes = StaticConfig::new(
+            vec![Route::passthrough_route(target.clone().into_route(None))],
+            vec![],
+        );
         let defaults = StaticConfig::default();
 
         let request = HttpRequest {
@@ -592,13 +590,13 @@ mod test {
         };
 
         let resolved = resolve_routes(&routes, &defaults, request, |_| {}).unwrap();
-        assert_eq!(resolved.backend, target.with_port(80));
+        assert_eq!(resolved.backend, target.into_backend(80));
     }
 
     #[test]
     fn test_resolve_route_no_backends() {
         let route = Route {
-            target: Target::from_name("example.com").unwrap(),
+            target: Target::dns("example.com").unwrap().into_route(None),
             rules: vec![],
         };
 
@@ -620,19 +618,15 @@ mod test {
 
     #[test]
     fn test_resolve_path_route() {
-        let backend_one = Target::Service(ServiceTarget {
-            name: Name::from_static("svc1"),
-            namespace: Name::from_static("web"),
-            port: Some(8910),
-        });
-        let backend_two = Target::Service(ServiceTarget {
-            name: Name::from_static("svc2"),
-            namespace: Name::from_static("web"),
-            port: Some(8919),
-        });
+        let backend_one = Target::kube_service("web", "svc1")
+            .unwrap()
+            .into_backend(8910);
+        let backend_two = Target::kube_service("web", "svc2")
+            .unwrap()
+            .into_backend(8919);
 
         let route = Route {
-            target: Target::from_name("example.com").unwrap(),
+            target: Target::dns("example.com").unwrap().into_route(None),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {
@@ -708,19 +702,15 @@ mod test {
 
     #[test]
     fn test_resolve_query_route() {
-        let backend_one = Target::Service(ServiceTarget {
-            name: Name::from_static("svc1"),
-            namespace: Name::from_static("web"),
-            port: Some(8910),
-        });
-        let backend_two = Target::Service(ServiceTarget {
-            name: Name::from_static("svc2"),
-            namespace: Name::from_static("web"),
-            port: Some(8919),
-        });
+        let backend_one = Target::kube_service("web", "svc1")
+            .unwrap()
+            .into_backend(8910);
+        let backend_two = Target::kube_service("web", "svc2")
+            .unwrap()
+            .into_backend(8919);
 
         let route = Route {
-            target: Target::from_name("example.com").unwrap(),
+            target: Target::dns("example.com").unwrap().into_route(None),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {

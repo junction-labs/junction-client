@@ -543,7 +543,7 @@ mod test_ads_conn {
                 "nginx.default.svc.cluster.local" => [xds_test::vhost!(
                     "default",
                     ["nginx.default.svc.cluster.local"],
-                    [xds_test::route!(default "nginx.default.svc.cluster.local"),],
+                    [xds_test::route!(default "nginx.default.svc.cluster.local:80"),],
                 )],
             )]),
         );
@@ -554,7 +554,7 @@ mod test_ads_conn {
             vec![
                 xds_test::req!(
                     t = ResourceType::Cluster,
-                    rs = vec!["nginx.default.svc.cluster.local"]
+                    rs = vec!["nginx.default.svc.cluster.local:80"]
                 ),
                 xds_test::req!(
                     t = ResourceType::Listener,
@@ -566,7 +566,7 @@ mod test_ads_conn {
         cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "nginx.default.svc.cluster.local"),
+                xds_test::cluster!(eds "nginx.default.svc.cluster.local:80"),
             ]),
         );
 
@@ -576,17 +576,17 @@ mod test_ads_conn {
             vec![
                 xds_test::req!(
                     t = ResourceType::Cluster,
-                    rs = vec!["nginx.default.svc.cluster.local"]
+                    rs = vec!["nginx.default.svc.cluster.local:80"]
                 ),
                 xds_test::req!(
                     t = ResourceType::ClusterLoadAssignment,
-                    rs = vec!["nginx.default.svc.cluster.local"]
+                    rs = vec!["nginx.default.svc.cluster.local:80"]
                 ),
                 xds_test::req!(
                     t = ResourceType::Listener,
                     rs = vec![
                         "nginx.default.svc.cluster.local",
-                        "nginx.default.svc.cluster.local.lb.jct"
+                        "nginx.default.svc.cluster.local.lb.jct:80"
                     ]
                 ),
             ]
@@ -647,7 +647,7 @@ mod test_ads_conn {
                 "nginx.default.svc.cluster.local" => [xds_test::vhost!(
                     "default",
                     ["nginx.default.svc.cluster.local"],
-                    [xds_test::route!(default "nginx.default"),],
+                    [xds_test::route!(default "nginx.default:80"),],
                 )],
             )],
         ));
@@ -663,13 +663,18 @@ mod test_ads_conn {
                     vec!["nginx.default.svc.cluster.local"]
                 ),
                 // request the cluster that it targets. will have no version or nonce
-                xds_test::discovery_request(ResourceType::Cluster, "", "", vec!["nginx.default"]),
+                xds_test::discovery_request(
+                    ResourceType::Cluster,
+                    "",
+                    "",
+                    vec!["nginx.default:80"]
+                ),
             ]
         );
 
         assert_eq!(
             conn.cache.subscriptions(ResourceType::Cluster),
-            vec!["nginx.default"],
+            vec!["nginx.default:80"],
         );
     }
 
@@ -699,8 +704,8 @@ mod test_ads_conn {
                     "default",
                     ["nginx.default.svc.cluster.local"],
                     [
-                        xds_test::route!(header "x-staging" => "nginx-staging.default"),
-                        xds_test::route!(default "nginx.default"),
+                        xds_test::route!(header "x-staging" => "nginx-staging.default:80"),
+                        xds_test::route!(default "nginx.default:80"),
                     ],
                 )],
             )],
@@ -717,7 +722,7 @@ mod test_ads_conn {
                 ),
                 xds_test::req!(
                     t = ResourceType::Cluster,
-                    rs = vec!["nginx-staging.default", "nginx.default"]
+                    rs = vec!["nginx-staging.default:80", "nginx.default:80"]
                 ),
             ]
         );
@@ -731,7 +736,7 @@ mod test_ads_conn {
         let requests = conn.handle_ads_message(xds_test::discovery_response(
             "v1",
             "n2",
-            vec![xds_test::cluster!(eds "nginx.default")],
+            vec![xds_test::cluster!(eds "nginx.default:80")],
         ));
         assert_eq!(
             requests,
@@ -740,17 +745,17 @@ mod test_ads_conn {
                     t = ResourceType::Cluster,
                     v = "v1",
                     n = "n2",
-                    rs = vec!["nginx-staging.default", "nginx.default"]
+                    rs = vec!["nginx-staging.default:80", "nginx.default:80"]
                 ),
                 xds_test::req!(
                     t = ResourceType::Listener,
                     v = "v1",
                     n = "n1",
-                    rs = vec!["nginx.default.svc.cluster.local", "nginx.default.lb.jct"],
+                    rs = vec!["nginx.default.svc.cluster.local", "nginx.default.lb.jct:80"],
                 ),
                 xds_test::req!(
                     t = ResourceType::ClusterLoadAssignment,
-                    rs = vec!["nginx.default"],
+                    rs = vec!["nginx.default:80"],
                 ),
             ],
             "cluster request should include all resources. actual: {:#?}",
@@ -762,8 +767,8 @@ mod test_ads_conn {
             "v1",
             "n3",
             vec![
-                xds_test::cluster!(eds "nginx.default"),
-                xds_test::cluster!(eds "nginx-staging.default"),
+                xds_test::cluster!(eds "nginx.default:80"),
+                xds_test::cluster!(eds "nginx-staging.default:80"),
             ],
         ));
         assert_eq!(
@@ -773,7 +778,7 @@ mod test_ads_conn {
                     t = ResourceType::Cluster,
                     v = "v1",
                     n = "n3",
-                    rs = vec!["nginx-staging.default", "nginx.default"]
+                    rs = vec!["nginx-staging.default:80", "nginx.default:80"]
                 ),
                 xds_test::req!(
                     t = ResourceType::Listener,
@@ -781,13 +786,13 @@ mod test_ads_conn {
                     n = "n1",
                     rs = vec![
                         "nginx.default.svc.cluster.local",
-                        "nginx.default.lb.jct",
-                        "nginx-staging.default.lb.jct",
+                        "nginx.default.lb.jct:80",
+                        "nginx-staging.default.lb.jct:80",
                     ],
                 ),
                 xds_test::req!(
                     t = ResourceType::ClusterLoadAssignment,
-                    rs = vec!["nginx.default", "nginx-staging.default"]
+                    rs = vec!["nginx.default:80", "nginx-staging.default:80"]
                 ),
             ],
             "clusters should get acked again",

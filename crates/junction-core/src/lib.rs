@@ -18,7 +18,7 @@ pub use client::{Client, ConfigMode, HttpRequest, ResolvedRoute};
 pub use xds::{ResourceVersion, XdsConfig};
 
 use junction_api::http::Route;
-use junction_api::Target;
+use junction_api::{BackendTarget, RouteTarget};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -58,10 +58,13 @@ pub fn check_route(
 }
 
 pub(crate) trait ConfigCache {
-    fn get_route(&self, target: &Target) -> Option<Arc<Route>>;
-    fn get_backend(&self, target: &Target) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>);
+    fn get_route(&self, target: &RouteTarget) -> Option<Arc<Route>>;
+    fn get_backend(
+        &self,
+        target: &BackendTarget,
+    ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>);
 
-    fn get_route_with_fallbacks(&self, targets: &[Target]) -> Option<Arc<Route>> {
+    fn get_route_with_fallbacks(&self, targets: &[RouteTarget]) -> Option<Arc<Route>> {
         for target in targets {
             if let Some(route) = self.get_route(target) {
                 return Some(route);
@@ -74,8 +77,8 @@ pub(crate) trait ConfigCache {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StaticConfig {
-    pub routes: HashMap<Target, Arc<Route>>,
-    pub backends: HashMap<Target, Arc<BackendLb>>,
+    pub routes: HashMap<RouteTarget, Arc<Route>>,
+    pub backends: HashMap<BackendTarget, Arc<BackendLb>>,
 }
 
 impl StaticConfig {
@@ -104,11 +107,14 @@ impl StaticConfig {
 }
 
 impl ConfigCache for StaticConfig {
-    fn get_route(&self, target: &Target) -> Option<Arc<Route>> {
+    fn get_route(&self, target: &RouteTarget) -> Option<Arc<Route>> {
         self.routes.get(target).cloned()
     }
 
-    fn get_backend(&self, target: &Target) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
+    fn get_backend(
+        &self,
+        target: &BackendTarget,
+    ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
         (self.backends.get(target).cloned(), None)
     }
 }

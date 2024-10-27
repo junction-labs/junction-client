@@ -8,19 +8,10 @@ Duration = str | int | float
 """A duration expressed as a number of seconds or a string like '1h30m27s42ms'"""
 
 
-class TargetDNS(typing.TypedDict):
-    type: typing.Literal["DNS"]
+class TargetDns(typing.TypedDict):
+    type: typing.Literal["Dns"]
     hostname: str
     """The DNS name to target."""
-
-    port: int
-    """The port number to target/attach to.
-
-    When attaching policies, if it is not specified, the target will apply
-    to all connections that don't have a specific port specified.
-
-    When being used to lookup a backend after a matched rule, if it is not
-    specified then it will use the same port as the incoming request"""
 
 
 class TargetService(typing.TypedDict):
@@ -32,17 +23,38 @@ class TargetService(typing.TypedDict):
     """The namespace of the Kubernetes service to target. This must be explicitly
     specified, and won't be inferred from context."""
 
+
+Target = TargetDns | TargetService
+
+
+class RouteTarget(typing.TypedDict):
+    hostname: str
+    """The DNS name to target."""
+
+    name: str
+    """The name of the Kubernetes Service to target."""
+
+    namespace: str
+    """The namespace of the Kubernetes service to target. This must be explicitly
+    specified, and won't be inferred from context."""
+
+    type: typing.Literal["Dns"] | typing.Literal["Service"]
     port: int
-    """The port number of the Kubernetes service to target/ attach to.
-
-    When attaching policies, if it is not specified, the target will apply
-    to all connections that don't have a specific port specified.
-
-    When being used to lookup a backend after a matched rule, if it is not
-    specified then it will use the same port as the incoming request"""
 
 
-Target = TargetDNS | TargetService
+class BackendTarget(typing.TypedDict):
+    hostname: str
+    """The DNS name to target."""
+
+    name: str
+    """The name of the Kubernetes Service to target."""
+
+    namespace: str
+    """The namespace of the Kubernetes service to target. This must be explicitly
+    specified, and won't be inferred from context."""
+
+    type: typing.Literal["Dns"] | typing.Literal["Service"]
+    port: int
 
 
 class Fraction(typing.TypedDict):
@@ -64,16 +76,8 @@ class WeightedTarget(typing.TypedDict):
     """The namespace of the Kubernetes service to target. This must be explicitly
     specified, and won't be inferred from context."""
 
+    type: typing.Literal["Dns"] | typing.Literal["Service"]
     port: int
-    """The port number to target/attach to.
-
-    When attaching policies, if it is not specified, the target will apply
-    to all connections that don't have a specific port specified.
-
-    When being used to lookup a backend after a matched rule, if it is not
-    specified then it will use the same port as the incoming request"""
-
-    type: typing.Literal["DNS"] | typing.Literal["Service"]
 
 
 class RouteTimeouts(typing.TypedDict):
@@ -251,7 +255,7 @@ class Route(typing.TypedDict):
     one [RouteRule]. When a [RouteRule] matches, it also describes where and how
     the traffic should be directed to a [Backend](crate::backend::Backend)."""
 
-    target: Target
+    target: RouteTarget
     """The target for this route. The target determines the hostnames that map
     to this route."""
 
@@ -312,9 +316,8 @@ class Backend(typing.TypedDict):
     traffic routed to this backend will use its load balancing policy to evenly
     spread traffic across all available endpoints."""
 
-    target: Target
-    """The target this backend represents. A target may be a Kubernetes Service
-    or a DNS name. See [Target] for more."""
+    target: BackendTarget
+    """A unique description of what this backend is."""
 
     lb: LbPolicy
     """How traffic to this target should be load balanced."""

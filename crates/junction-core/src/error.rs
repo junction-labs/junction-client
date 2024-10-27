@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use junction_api::Target;
+use junction_api::{BackendTarget, RouteTarget};
 
 /// A `Result` alias where the `Err` case is `junction_core::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -13,37 +13,40 @@ pub enum Error {
     #[error("invalid route configuration")]
     InvalidRoutes {
         message: &'static str,
-        target: Target,
+        target: RouteTarget,
         rule: usize,
     },
 
     #[error("invalid backend configuration")]
     InvalidBackends {
         message: &'static str,
-        target: Target,
+        target: BackendTarget,
     },
 
     #[error(
         "no routing info is available for any of the following targets: [{}]",
         format_targets(.routes)
     )]
-    NoRouteMatched { routes: Vec<Target> },
+    NoRouteMatched { routes: Vec<RouteTarget> },
 
     #[error("using route '{route}': no routing rules matched the request")]
-    NoRuleMatched { route: Target },
+    NoRuleMatched { route: RouteTarget },
 
     #[error("{route}: backend not found: {backend}")]
     NoBackend {
-        route: Target,
+        route: RouteTarget,
         rule: usize,
-        backend: Target,
+        backend: BackendTarget,
     },
 
     #[error("{backend}: no reachable endpoints")]
-    NoReachableEndpoints { route: Target, backend: Target },
+    NoReachableEndpoints {
+        route: RouteTarget,
+        backend: BackendTarget,
+    },
 }
 
-fn format_targets(targets: &[Target]) -> String {
+fn format_targets(targets: &[RouteTarget]) -> String {
     targets
         .iter()
         .map(|a| a.to_string())

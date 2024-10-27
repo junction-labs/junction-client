@@ -2,7 +2,7 @@ use http::HeaderValue;
 use junction_api::{
     backend::{Backend, LbPolicy},
     http::{HeaderMatch, Route, RouteMatch, RouteRule, WeightedTarget},
-    Name, Regex, ServiceTarget, Target,
+    Regex, Target,
 };
 use junction_core::Client;
 use std::{env, str::FromStr, time::Duration};
@@ -26,19 +26,11 @@ async fn main() {
     .unwrap();
     tokio::spawn(client.csds_server(8009));
 
-    let nginx = Target::Service(ServiceTarget {
-        name: Name::from_static("nginx"),
-        namespace: Name::from_static("default"),
-        port: Some(80),
-    });
-    let nginx_staging = Target::Service(ServiceTarget {
-        name: Name::from_static("nginx-staging"),
-        namespace: Name::from_static("default"),
-        port: Some(80),
-    });
+    let nginx = Target::kube_service("default", "nginx").unwrap();
+    let nginx_staging = Target::kube_service("default", "nginx-staging").unwrap();
 
     let default_routes = vec![Route {
-        target: nginx.clone(),
+        target: nginx.clone().into_route(None),
         rules: vec![
             RouteRule {
                 matches: vec![RouteMatch {
@@ -49,14 +41,14 @@ async fn main() {
                     ..Default::default()
                 }],
                 backends: vec![WeightedTarget {
-                    target: nginx_staging.clone(),
+                    target: nginx_staging.clone().into_backend(80),
                     weight: 1,
                 }],
                 ..Default::default()
             },
             RouteRule {
                 backends: vec![WeightedTarget {
-                    target: nginx.clone(),
+                    target: nginx.clone().into_backend(80),
                     weight: 1,
                 }],
                 ..Default::default()
@@ -65,11 +57,11 @@ async fn main() {
     }];
     let default_backends = vec![
         Backend {
-            target: nginx,
+            target: nginx.into_backend(80),
             lb: LbPolicy::Unspecified,
         },
         Backend {
-            target: nginx_staging,
+            target: nginx_staging.into_backend(80),
             lb: LbPolicy::Unspecified,
         },
     ];

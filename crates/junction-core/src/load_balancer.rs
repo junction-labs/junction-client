@@ -3,7 +3,7 @@ use junction_api::{
     backend::{
         Backend, LbPolicy, RingHashParams, SessionAffinityHashParam, SessionAffinityHashParamType,
     },
-    Target,
+    BackendTarget, Target,
 };
 use std::{
     collections::BTreeMap,
@@ -24,9 +24,12 @@ pub(crate) struct EndpointGroup {
 }
 
 impl EndpointGroup {
-    pub(crate) fn from_xds(target: &Target, cla: &xds_endpoint::ClusterLoadAssignment) -> Self {
-        let make_address = match target {
-            Target::DNS(_) => EndpointAddress::from_socket_addr,
+    pub(crate) fn from_xds(
+        target: &BackendTarget,
+        cla: &xds_endpoint::ClusterLoadAssignment,
+    ) -> Self {
+        let make_address = match target.target {
+            Target::Dns(_) => EndpointAddress::from_socket_addr,
             Target::Service(_) => EndpointAddress::from_dns_name,
         };
 

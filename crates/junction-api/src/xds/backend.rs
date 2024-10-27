@@ -9,7 +9,7 @@ use crate::{
         SessionAffinityHashParamType,
     },
     error::{Error, ErrorContext},
-    value_or_default, Target,
+    value_or_default, BackendTarget, Target,
 };
 
 impl Backend {
@@ -18,7 +18,7 @@ impl Backend {
         route_action: Option<&xds_route::RouteAction>,
     ) -> Result<Self, Error> {
         let lb = LbPolicy::from_xds(cluster, route_action)?;
-        let target = Target::from_name(&cluster.name)?;
+        let target = BackendTarget::from_name(&cluster.name)?;
         Ok(Backend { target, lb })
     }
 
@@ -32,8 +32,8 @@ impl Backend {
             None => (xds_cluster::cluster::LbPolicy::default(), None),
         };
 
-        let cluster_discovery_type = match &self.target {
-            Target::DNS(_) => ClusterDiscoveryType::Type(DiscoveryType::LogicalDns.into()),
+        let cluster_discovery_type = match &self.target.target {
+            Target::Dns(_) => ClusterDiscoveryType::Type(DiscoveryType::LogicalDns.into()),
             Target::Service(_) => ClusterDiscoveryType::Type(DiscoveryType::Eds.into()),
         };
 
@@ -259,18 +259,14 @@ impl SessionAffinity {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{http::Route, Name, ServiceTarget};
+    use crate::http::Route;
 
     #[test]
     fn test_unspecified_lb_roundtrips() {
-        let web = Target::Service(ServiceTarget {
-            name: Name::from_static("web"),
-            namespace: Name::from_static("prod"),
-            port: None,
-        });
+        let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web,
+            target: web.into_backend(8891),
             lb: LbPolicy::Unspecified,
         };
         assert_eq!(
@@ -282,14 +278,10 @@ mod test {
 
     #[test]
     fn test_round_robin_lb_roundtrips() {
-        let web = Target::Service(ServiceTarget {
-            name: Name::from_static("web"),
-            namespace: Name::from_static("prod"),
-            port: None,
-        });
+        let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web,
+            target: web.into_backend(7891),
             lb: LbPolicy::RoundRobin,
         };
         assert_eq!(
@@ -301,14 +293,10 @@ mod test {
 
     #[test]
     fn test_ringhash_roundtrip() {
-        let web = Target::Service(ServiceTarget {
-            name: Name::from_static("web"),
-            namespace: Name::from_static("prod"),
-            port: None,
-        });
+        let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web,
+            target: web.into_backend(6666),
             lb: LbPolicy::RingHash(RingHashParams {
                 min_ring_size: 1024,
                 hash_params: vec![
@@ -344,14 +332,10 @@ mod test {
 
     #[test]
     fn test_passthrough_route_is_passthrough() {
-        let web = Target::Service(ServiceTarget {
-            name: Name::from_static("web"),
-            namespace: Name::from_static("prod"),
-            port: None,
-        });
+        let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web,
+            target: web.into_backend(4321),
             lb: LbPolicy::RoundRobin,
         };
 
@@ -361,14 +345,10 @@ mod test {
 
     #[test]
     fn test_passthrough_route_roundtrip() {
-        let web = Target::Service(ServiceTarget {
-            name: Name::from_static("web"),
-            namespace: Name::from_static("prod"),
-            port: None,
-        });
+        let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web,
+            target: web.into_backend(12321),
             lb: LbPolicy::RingHash(RingHashParams {
                 min_ring_size: 1024,
                 hash_params: vec![
