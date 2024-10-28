@@ -1,4 +1,8 @@
-use std::{fmt::Debug, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Debug,
+    str::FromStr,
+};
 
 use crate::{
     error::{Error, ErrorContext},
@@ -11,12 +15,13 @@ use crate::{
 };
 use xds_api::pb::{
     envoy::{
-        config::route::v3::{
-            self as xds_route, query_parameter_matcher::QueryParameterMatchSpecifier,
+        config::{
+            core::v3 as xds_core,
+            route::v3::{self as xds_route, query_parameter_matcher::QueryParameterMatchSpecifier},
         },
         r#type::matcher::v3::{string_matcher::MatchPattern, StringMatcher},
     },
-    google,
+    google::{self, protobuf},
 };
 
 use crate::xds::shared::{parse_xds_regex, regex_matcher};
@@ -39,10 +44,12 @@ impl Route {
     pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, Error> {
         // try to parse the target as a backend name in case it's a passthrough
         // route, and then try parsing it as a regular target.
-        let target = BackendId::from_passthrough_route_name(&xds.name)
+        let vhost = BackendId::from_passthrough_route_name(&xds.name)
             .map(BackendId::into_vhost)
             .or_else(|_| VirtualHost::from_str(&xds.name))
             .with_field("name")?;
+
+        let tags = tags_from_xds(&xds.metadata)?;
 
         let mut rules = vec![];
         for (vhost_idx, vhost) in xds.virtual_hosts.iter().enumerate() {
@@ -70,14 +77,12 @@ impl Route {
             }
         }
 
-        Ok(Route {
-            vhost: target,
-            rules,
-        })
+        Ok(Route { vhost, tags, rules })
     }
 
     pub fn to_xds(&self) -> xds_route::RouteConfiguration {
         let routes = self.rules.iter().flat_map(RouteRule::to_xds).collect();
+        let metadata = tags_to_xds(&self.tags);
         let virtual_hosts = vec![xds_route::VirtualHost {
             domains: vec!["*".to_string()],
             routes,
@@ -87,10 +92,61 @@ impl Route {
         let name = self.vhost.name();
         xds_route::RouteConfiguration {
             name,
+            metadata,
             virtual_hosts,
             ..Default::default()
         }
     }
+}
+
+const JUNCTION_ROUTE_TAGS: &str = "io.junctionlabs.route.tags";
+
+fn tags_to_xds(tags: &BTreeMap<String, String>) -> Option<xds_core::Metadata> {
+    if tags.is_empty() {
+        return None;
+    }
+
+    let fields: HashMap<_, _> = tags
+        .iter()
+        .map(|(k, v)| {
+            let v = protobuf::Value {
+                kind: Some(protobuf::value::Kind::StringValue(v.clone())),
+            };
+            (k.clone(), v)
+        })
+        .collect();
+
+    let mut metadata = xds_core::Metadata::default();
+    metadata
+        .filter_metadata
+        .insert(JUNCTION_ROUTE_TAGS.to_string(), protobuf::Struct { fields });
+
+    Some(metadata)
+}
+
+fn tags_from_xds(metadata: &Option<xds_core::Metadata>) -> Result<BTreeMap<String, String>, Error> {
+    let Some(metadata) = metadata else {
+        return Ok(Default::default());
+    };
+
+    let Some(route_tags) = metadata.filter_metadata.get(JUNCTION_ROUTE_TAGS) else {
+        return Ok(Default::default());
+    };
+
+    let mut tags = BTreeMap::new();
+    for (k, v) in route_tags.fields.iter() {
+        let v = match &v.kind {
+            Some(protobuf::value::Kind::StringValue(v)) => v.clone(),
+            _ => {
+                return Err(Error::new_static("invalid tag"))
+                    .with_fields("filter_metadata", JUNCTION_ROUTE_TAGS)
+            }
+        };
+
+        tags.insert(k.clone(), v);
+    }
+
+    Ok(tags)
 }
 
 impl RouteRule {
@@ -660,6 +716,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            tags: Default::default(),
             rules: vec![RouteRule {
                 backends: vec![WeightedBackend {
                     weight: 1,
@@ -689,6 +746,35 @@ mod test {
     }
 
     #[test]
+    fn test_metadata_roundtrip() {
+        let web = Target::kube_service("prod", "web").unwrap();
+
+        assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
+            vhost: VirtualHost {
+                target: web.clone(),
+                port: None,
+            },
+            tags: BTreeMap::from_iter([("foo".to_string(), "bar".to_string())]),
+            rules: vec![RouteRule {
+                matches: vec![RouteMatch {
+                    path: Some(PathMatch::Prefix {
+                        value: "".to_string(),
+                    }),
+                    ..Default::default()
+                }],
+                backends: vec![WeightedBackend {
+                    weight: 1,
+                    backend: BackendId {
+                        target: web.clone(),
+                        port: 8778,
+                    },
+                }],
+                ..Default::default()
+            }],
+        });
+    }
+
+    #[test]
     fn test_multiple_rules_roundtrip() {
         let web = Target::kube_service("prod", "web").unwrap();
         let staging = Target::kube_service("staging", "web").unwrap();
@@ -699,6 +785,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            tags: Default::default(),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {
@@ -750,6 +837,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            tags: Default::default(),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {
@@ -796,6 +884,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            tags: Default::default(),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {
@@ -848,6 +937,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            tags: Default::default(),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {
@@ -893,6 +983,7 @@ mod test {
                     target: web.clone(),
                     port: None,
                 },
+                tags: Default::default(),
                 rules: vec![RouteRule {
                     matches: vec![
                         RouteMatch {
@@ -930,6 +1021,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![
                     RouteMatch {
@@ -973,6 +1065,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
                     path: Some(PathMatch::Prefix {

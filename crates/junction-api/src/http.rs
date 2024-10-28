@@ -3,6 +3,8 @@
 //! A [Route] specifies the all of the top-level configuration for all HTTP
 //! traffic that matches a particular URL.
 
+use std::collections::BTreeMap;
+
 use crate::{
     shared::{Duration, Fraction, Regex},
     BackendId, Hostname, Name, Target, VirtualHost,
@@ -34,6 +36,10 @@ pub struct Route {
     /// list of `rules` to route traffic.
     pub vhost: VirtualHost,
 
+    /// A list of arbitrary tags that can be added to a Route.
+    #[serde(default)]
+    pub tags: BTreeMap<String, String>,
+
     /// The rules that determine whether a request matches and where traffic
     /// should be routed.
     pub rules: Vec<RouteRule>,
@@ -50,6 +56,7 @@ impl Route {
         let backend = target.with_default_port(80).into_backend().unwrap();
         Route {
             vhost: target,
+            tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
                     path: Some(PathMatch::empty_prefix()),
@@ -740,6 +747,7 @@ mod tests {
                     target: Target::kube_service("bar", "foo").unwrap(),
                     port: None,
                 },
+                tags: Default::default(),
                 rules: vec![RouteRule {
                     matches: vec![],
                     filters: vec![],

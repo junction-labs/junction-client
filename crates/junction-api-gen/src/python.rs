@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use askama::Template;
 
 // TODO: To make mypy happy, we have to make TypedDict keys optional. This

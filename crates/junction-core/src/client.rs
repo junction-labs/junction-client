@@ -591,6 +591,7 @@ mod test {
     fn test_resolve_route_no_backends() {
         let route = Route {
             vhost: Target::dns("example.com").unwrap().into_vhost(None),
+            tags: Default::default(),
             rules: vec![],
         };
 
@@ -621,6 +622,7 @@ mod test {
 
         let route = Route {
             vhost: Target::dns("example.com").unwrap().into_vhost(None),
+            tags: Default::default(),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {
@@ -705,6 +707,7 @@ mod test {
 
         let route = Route {
             vhost: Target::dns("example.com").unwrap().into_vhost(None),
+            tags: Default::default(),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {

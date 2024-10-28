@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use gateway_api::apis::experimental::httproutes::{
@@ -8,34 +9,29 @@ use gateway_api::apis::experimental::httproutes::{
     HTTPRouteRulesTimeouts, HTTPRouteSpec,
 };
 use kube::api::ObjectMeta;
+use kube::ResourceExt;
 
 use crate::error::{Error, ErrorContext};
 use crate::shared::Regex;
 use crate::{Duration, Name, Target};
 
+// TODO: this originally was written as a bunch of TryFrom implementations, but
+// that makes organization in here very tough and go-to-definition hard. try
+// re-writing those impls as to_kube(..) and from_kube(..) methods.
+
 impl crate::http::Route {
     /// Convert an [HTTPRouteSpec] into a [Route][crate::http::Route].
     #[inline]
-    pub fn from_gateway_httproute(route_spec: &HTTPRouteSpec) -> Result<crate::http::Route, Error> {
-        route_spec.try_into()
-    }
-
-    /// Convert this [Route][crate::http::Route] into a Gateway API
-    /// [HTTPRouteSpec].
-    #[inline]
-    pub fn to_gateway_httproute_spec(&self) -> Result<HTTPRouteSpec, Error> {
-        self.try_into()
+    pub fn from_gateway_httproute(httproute: &HTTPRoute) -> Result<crate::http::Route, Error> {
+        httproute.try_into()
     }
 
     /// Convert this [Route][crate::http::Route] into a Gateway API [HTTPRoute]
-    /// with it's `name` and `namespace` metadata set.
-    ///
-    /// This is a convenience function for creating an [HTTPRoute] with a name
-    /// you define. To create just an [HTTPRouteSpec] with other metadata, use
-    /// [Self::to_gateway_httproute_spec].
+    /// with it's `name` and `namespace` metadata set and
+    /// [tags][crate::http::Route::tags] converted to annotations.
     pub fn to_gateway_httproute(&self, namespace: &str, name: &str) -> Result<HTTPRoute, Error> {
-        let spec = self.to_gateway_httproute_spec()?;
-        Ok(HTTPRoute {
+        let spec = self.try_into()?;
+        let mut route = HTTPRoute {
             metadata: ObjectMeta {
                 namespace: Some(namespace.to_string()),
                 name: Some(name.to_string()),
@@ -43,8 +39,30 @@ impl crate::http::Route {
             },
             spec,
             status: None,
-        })
+        };
+        write_tags(route.annotations_mut(), &self.tags);
+
+        Ok(route)
     }
+}
+
+fn write_tags(annotations: &mut BTreeMap<String, String>, tags: &BTreeMap<String, String>) {
+    for (k, v) in tags {
+        let k = format!("junctionlabs.io.route.tags/{k}");
+        annotations.insert(k, v.to_string());
+    }
+}
+
+fn read_tags(annotations: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut tags = BTreeMap::new();
+
+    for (k, v) in annotations {
+        if let Some(key) = k.strip_prefix("junctionlabs.io.route.tags/") {
+            tags.insert(key.to_string(), v.to_string());
+        }
+    }
+
+    tags
 }
 
 macro_rules! option_from_gateway {
@@ -81,32 +99,28 @@ macro_rules! vec_to_gateway {
 
 // kube -> crate
 
-impl TryFrom<&HTTPRouteSpec> for crate::http::Route {
+impl TryFrom<&HTTPRoute> for crate::http::Route {
     type Error = Error;
 
-    fn try_from(spec: &HTTPRouteSpec) -> Result<Self, Error> {
+    fn try_from(route: &HTTPRoute) -> Result<Self, Error> {
         use crate::VirtualHost;
 
         // build a target from the parent ref. forbid having more than one parent ref.
         //
         // TOOD: we could allow converting one HTTPRoute into more than one Route
-        let target = match spec.parent_refs.as_deref() {
-            Some([parent_ref]) => {
-                VirtualHost::try_from(parent_ref).with_field_index("parentRefs", 0)?
-            }
-            Some(_) => {
-                return Err(Error::new_static(
-                    "HTTPRoute can't have more than one parent ref",
-                ))
-            }
-            None => return Err(Error::new_static("HTTPRoute must have a parent ref")),
+        let vhost = match route.spec.parent_refs.as_deref() {
+            Some([parent_ref]) => VirtualHost::try_from(parent_ref).with_index(0),
+            Some(_) => Err(Error::new_static(
+                "HTTPRoute can't have more than one parent ref",
+            )),
+            None => Err(Error::new_static("HTTPRoute must have a parent ref")),
         };
 
-        let rules = vec_from_gateway!(spec.rules).with_field("rules")?;
-        Ok(Self {
-            vhost: target,
-            rules,
-        })
+        let vhost = vhost.with_fields("spec", "parentRefs")?;
+        let tags = read_tags(route.annotations());
+        let rules = vec_from_gateway!(route.spec.rules).with_fields("spec", "rules")?;
+
+        Ok(Self { vhost, tags, rules })
     }
 }
 
@@ -630,6 +644,8 @@ fn group_kind(target: &Target) -> (&'static str, &'static str) {
 
 #[cfg(test)]
 mod test {
+    use std::collections::BTreeMap;
+
     use gateway_api::apis::experimental::httproutes::HTTPRoute;
 
     use super::*;
@@ -668,6 +684,7 @@ spec:
             vhost: Target::kube_service("prod", "example-gateway")
                 .unwrap()
                 .into_vhost(None),
+            tags: Default::default(),
             rules: vec![crate::http::RouteRule {
                 matches: vec![crate::http::RouteMatch {
                     path: Some(crate::http::PathMatch::Prefix {
@@ -695,19 +712,16 @@ spec:
         };
 
         assert_eq!(
-            crate::http::Route::try_from(&gateway_route.spec).unwrap(),
+            crate::http::Route::try_from(&gateway_route).unwrap(),
             route,
             "should parse from gateway",
         );
         assert_eq!(
-            crate::http::Route::try_from(&HTTPRouteSpec::try_from(&route).unwrap()).unwrap(),
+            crate::http::Route::try_from(&route.to_gateway_httproute("potato", "tomato").unwrap())
+                .unwrap(),
             route,
             "should roundtrip"
         );
-
-        // NOTE: gateway structs still don't impl PartialEq. once a patch patch comes out, try
-        // to roundtrip that way.
-        // NOTE: yaml doesn't roundtrip because we fill in defaults.
     }
 
     #[test]
@@ -716,6 +730,10 @@ spec:
             vhost: Target::kube_service("default", "example-gateway")
                 .unwrap()
                 .into_vhost(None),
+            tags: BTreeMap::from_iter([
+                ("foo".to_string(), "bar".to_string()),
+                ("one".to_string(), "seven".to_string()),
+            ]),
             rules: vec![crate::http::RouteRule {
                 matches: vec![crate::http::RouteMatch {
                     path: Some(crate::http::PathMatch::Prefix {
@@ -744,7 +762,10 @@ spec:
 
         assert_eq!(
             route,
-            crate::http::Route::try_from(&HTTPRouteSpec::try_from(&route).unwrap()).unwrap(),
+            crate::http::Route::from_gateway_httproute(
+                &route.to_gateway_httproute("potato", "tomato").unwrap(),
+            )
+            .unwrap(),
         );
     }
 }

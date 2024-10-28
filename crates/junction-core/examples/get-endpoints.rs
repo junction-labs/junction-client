@@ -31,6 +31,7 @@ async fn main() {
 
     let default_routes = vec![Route {
         vhost: nginx.clone().into_vhost(None),
+        tags: Default::default(),
         rules: vec![
             RouteRule {
                 matches: vec![RouteMatch {

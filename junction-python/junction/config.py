@@ -286,6 +286,9 @@ class Route(typing.TypedDict):
     """This route's virtual host. Traffic to this virutal host will use the
     list of `rules` to route traffic."""
 
+    tags: typing.Dict[str, str]
+    """A list of arbitrary tags that can be added to a Route."""
+
     rules: typing.List[RouteRule]
     """The rules that determine whether a request matches and where traffic
     should be routed."""
