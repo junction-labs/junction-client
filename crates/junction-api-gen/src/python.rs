@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use askama::Template;
 
 // TODO: To make mypy happy, we have to make TypedDict keys optional. This
@@ -58,7 +60,7 @@ const MODULE_HEADER: &str = r#"
 /// There are absolutely more types in Python, we simply don't care about them.
 #[derive(Debug)]
 enum PyDef {
-    TypedDict(PyDict),
+    TypedDict(PyTypedDict),
     Union(PyUnion),
 }
 
@@ -105,7 +107,7 @@ class {{name}}(typing.TypedDict):
     ext = "py",
     escape = "none"
 )]
-struct PyDict {
+struct PyTypedDict {
     name: &'static str,
     doc: Option<&'static str>,
     fields: Vec<PyDictField>,
@@ -175,7 +177,7 @@ fn into_pydefs(item: junction_typeinfo::Item) -> Vec<PyDef> {
             }));
         }
         junction_typeinfo::Kind::Object(name) => {
-            defs.push(PyDef::TypedDict(PyDict {
+            defs.push(PyDef::TypedDict(PyTypedDict {
                 name,
                 doc: item.doc,
                 fields: item.fields.into_iter().map(|f| f.into()).collect(),
@@ -187,7 +189,7 @@ fn into_pydefs(item: junction_typeinfo::Item) -> Vec<PyDef> {
     defs
 }
 
-impl From<junction_typeinfo::StructVariant> for PyDict {
+impl From<junction_typeinfo::StructVariant> for PyTypedDict {
     fn from(item: junction_typeinfo::StructVariant) -> Self {
         let name = format!(
             "{parent_name}{item_name}",
@@ -195,7 +197,7 @@ impl From<junction_typeinfo::StructVariant> for PyDict {
             item_name = item.name
         );
         let fields = item.fields.into_iter().map(|f| f.into()).collect();
-        PyDict {
+        PyTypedDict {
             name: name.leak(),
             doc: item.doc,
             fields,
@@ -228,8 +230,11 @@ enum PyType {
     /// or as an number of seconds (int or float).
     Duration,
 
+    /// A Python Dict with type-hints for keys and values.
+    Dict(Box<PyType>, Box<PyType>),
+
     /// A TypedDict with a name and fields.
-    TypedDict(PyDict),
+    TypedDict(PyTypedDict),
 
     /// A Python `list` of items that all share a type.
     List(Box<PyType>),
@@ -288,6 +293,9 @@ impl std::fmt::Display for PyType {
                 }
             }
             PyType::Object(name) => write!(f, "{name}"),
+            PyType::Dict(k, v) => {
+                write!(f, "typing.Dict[{k}, {v}]")
+            }
             PyType::TypedDict(d) => write!(f, "{name}", name = d.name),
         }
     }
@@ -308,6 +316,11 @@ impl From<junction_typeinfo::Kind> for PyType {
             }
             junction_typeinfo::Kind::Array(kind) => Self::List(Box::new((*kind).into())),
             junction_typeinfo::Kind::Object(name) => Self::Object(name),
+            junction_typeinfo::Kind::Map(k, v) => {
+                let k = (*k).into();
+                let v = (*v).into();
+                Self::Dict(Box::new(k), Box::new(v))
+            }
             junction_typeinfo::Kind::Duration => Self::Duration,
         }
     }

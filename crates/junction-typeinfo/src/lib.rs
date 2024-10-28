@@ -31,6 +31,7 @@ pub enum Kind {
     Union(&'static str, Vec<Variant>),
     Tuple(Vec<Kind>),
     Array(Box<Kind>),
+    Map(Box<Kind>, Box<Kind>),
     Object(&'static str),
 }
 
@@ -230,6 +231,12 @@ impl<T: TypeInfo> TypeInfo for Vec<T> {
 
     fn fields() -> Vec<Field> {
         Vec::new()
+    }
+}
+
+impl<K: TypeInfo, V: TypeInfo> TypeInfo for BTreeMap<K, V> {
+    fn kind() -> Kind {
+        crate::Kind::Map(Box::new(K::kind()), Box::new(V::kind()))
     }
 }
 
