@@ -296,179 +296,28 @@ impl Name {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct KubeService {
-    /// The name of the Kubernetes Service to target.
-    pub name: Name,
-
-    /// The namespace of the Kubernetes service to target. This must be explicitly
-    /// specified, and won't be inferred from context.
-    pub namespace: Name,
-}
-
-impl KubeService {
-    const SUBDOMAIN: &'static str = ".svc.cluster.local";
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct Dns {
-    /// The DNS name to target.
-    pub hostname: Hostname,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct RouteTarget {
-    #[serde(flatten)]
-    pub target: Target,
-
-    pub port: Option<u16>,
-}
-
-impl std::fmt::Display for RouteTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.write_name(f)
-    }
-}
-
-impl RouteTarget {
-    pub fn from_name(name: &str) -> Result<Self, Error> {
-        let (name, port) = parse_port(name)?;
-        let target = Target::from_name(name)?;
-        Ok(Self { target, port })
-    }
-
-    /// Return a clone of this target with its `port` set.
-    pub fn with_port(&self, port: u16) -> Self {
-        Self {
-            target: self.target.clone(),
-            port: Some(port),
-        }
-    }
-
-    /// Return a clone of this target with no port set.
-    pub fn without_port(&self) -> Self {
-        Self {
-            target: self.target.clone(),
-            port: None,
-        }
-    }
-
-    /// Return a clone of this Target with a port set to `default_port` if it
-    /// doesn't already have a port.
-    pub fn with_default_port(&self, default_port: u16) -> Self {
-        Self {
-            target: self.target.clone(),
-            port: Some(self.port.unwrap_or(default_port)),
-        }
-    }
-
-    /// The canonical name of this target.
-    pub fn name(&self) -> String {
-        let mut buf = String::new();
-        self.write_name(&mut buf).unwrap();
-        buf
-    }
-
-    pub fn as_backend(&self) -> Option<BackendTarget> {
-        self.port.map(|port| BackendTarget {
-            target: self.target.clone(),
-            port,
-        })
-    }
-
-    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
-        self.target.write_name(w)?;
-
-        if let Some(port) = self.port {
-            write!(w, ":{port}")?;
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct BackendTarget {
-    #[serde(flatten)]
-    pub target: Target,
-
-    pub port: u16,
-}
-
-impl std::fmt::Display for BackendTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.write_name(f)
-    }
-}
-
-impl BackendTarget {
-    pub fn into_route_target(self) -> RouteTarget {
-        RouteTarget {
-            target: self.target,
-            port: Some(self.port),
-        }
-    }
-
-    pub fn from_name(name: &str) -> Result<Self, Error> {
-        let (name, port) = parse_port(name)?;
-
-        let port =
-            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
-        let target = Target::from_name(name)?;
-
-        Ok(Self { target, port })
-    }
-
-    pub fn name(&self) -> String {
-        let mut buf = String::new();
-        self.write_name(&mut buf).unwrap();
-        buf
-    }
-
-    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
-        self.target.write_name(w)?;
-        write!(w, ":{port}", port = self.port)?;
-
-        Ok(())
-    }
-
-    pub fn passthrough_route_name(&self) -> String {
-        let mut buf = String::new();
-        self.write_passthrough_route_name(&mut buf).unwrap();
-        buf
-    }
-
-    fn write_passthrough_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
-        self.target.write_passthrough_route_name(w)?;
-        write!(w, ":{port}", port = self.port)?;
-        Ok(())
-    }
-
-    #[doc(hidden)]
-    pub fn from_passthrough_route_name(name: &str) -> Result<Self, Error> {
-        let (name, port) = parse_port(name)?;
-        let port =
-            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
-
-        let target = Target::from_passthrough_route_name(name)?;
-
-        Ok(Self { target, port })
-    }
-}
-
+/// A traffic target. Traffic targets are abstract, uniquely identifiable places
+/// to route traffic, like a DNS name or a Kubernetes Service.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum Target {
+    /// A DNS hostname.
+    ///
+    /// Traffic sent to a DNS hostname will uses the addresses returned from DNS
+    /// as its final destination. How addresses are fetched and load balanced is
+    /// configured on each [Backend][crate::backend::Backend].
     #[serde(alias = "dns", alias = "DNS")]
     Dns(Dns),
 
+    /// The addresses that make up a Kubernetes Service.
+    ///
+    /// Any type of Service, except an `ExternalName` Service may be used as a
+    /// traffic target (to represent an `ExternalName` Service, use a [DNS target][Target::Dns])
+    /// and will route traffic directly to Pod IPs as if the service had
+    /// explicitly set `ClusterIP: None`.
     #[serde(untagged)]
-    Service(KubeService),
+    KubeService(KubeService),
 }
 
 impl std::fmt::Display for Target {
@@ -477,27 +326,64 @@ impl std::fmt::Display for Target {
     }
 }
 
+impl std::str::FromStr for Target {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        let hostname = Hostname::from_str(name)?;
+
+        let target = match name {
+            n if n.ends_with(KubeService::SUBDOMAIN) => {
+                let parts: Vec<_> = hostname.split('.').collect();
+                if parts.len() != 5 {
+                    return Err(Error::new_static(
+                        "invalid Service target: name and namespace must be valid DNS labels",
+                    ));
+                }
+
+                let name = parts[0].parse()?;
+                let namespace = parts[1].parse()?;
+                Target::KubeService(KubeService { name, namespace })
+            }
+            _ => Target::Dns(Dns { hostname }),
+        };
+        Ok(target)
+    }
+}
+
 impl Target {
+    const BACKEND_SUBDOMAIN: &'static str = ".lb.jct";
+
+    /// Create a new DNS target. The given name must be a valid RFC 1123 DNS
+    /// hostname.
     pub fn dns(name: &str) -> Result<Self, Error> {
         let hostname = Hostname::from_str(name)?;
         Ok(Target::Dns(Dns { hostname }))
     }
 
+    /// Create a new Kubernetes Service target.
+    ///
+    /// `name` and `hostname` must be valid DNS subdomain labels.
     pub fn kube_service(namespace: &str, name: &str) -> Result<Self, Error> {
         let namespace = Name::from_str(namespace)?;
         let name = Name::from_str(name)?;
 
-        Ok(Target::Service(KubeService { name, namespace }))
+        Ok(Target::KubeService(KubeService { name, namespace }))
     }
 
-    pub fn into_backend(self, port: u16) -> BackendTarget {
-        BackendTarget { target: self, port }
+    /// Convert this target into a [BackendId] with the specified port.
+    pub fn into_backend(self, port: u16) -> BackendId {
+        BackendId { target: self, port }
     }
 
-    pub fn into_route(self, port: Option<u16>) -> RouteTarget {
-        RouteTarget { target: self, port }
+    /// Convert this target into a [VirtualHost] with an optional port.
+    pub fn into_vhost(self, port: Option<u16>) -> VirtualHost {
+        VirtualHost { target: self, port }
     }
 
+    /// The canonical name of this Target.
+    ///
+    /// This is an alias for the [Display][std::fmt::Display] representation.
     pub fn name(&self) -> String {
         let mut buf = String::new();
         self.write_name(&mut buf).unwrap();
@@ -509,7 +395,7 @@ impl Target {
             Target::Dns(dns) => {
                 w.write_str(&dns.hostname)?;
             }
-            Target::Service(svc) => {
+            Target::KubeService(svc) => {
                 write!(
                     w,
                     "{name}.{namespace}{subdomain}",
@@ -535,7 +421,7 @@ impl Target {
             Target::Dns(dns) => {
                 write!(w, "{}{}", dns.hostname, Target::BACKEND_SUBDOMAIN)?;
             }
-            Target::Service(svc) => {
+            Target::KubeService(svc) => {
                 write!(
                     w,
                     "{name}.{namespace}{svc}{backend}",
@@ -550,29 +436,6 @@ impl Target {
         Ok(())
     }
 
-    const BACKEND_SUBDOMAIN: &'static str = ".lb.jct";
-
-    pub fn from_name(name: &str) -> Result<Self, Error> {
-        let hostname = Hostname::from_str(name)?;
-
-        let target = match name {
-            n if n.ends_with(KubeService::SUBDOMAIN) => {
-                let parts: Vec<_> = hostname.split('.').collect();
-                if parts.len() != 5 {
-                    return Err(Error::new_static(
-                        "invalid Service target: name and namespace must be valid DNS labels",
-                    ));
-                }
-
-                let name = parts[0].parse()?;
-                let namespace = parts[1].parse()?;
-                Target::Service(KubeService { name, namespace })
-            }
-            _ => Target::Dns(Dns { hostname }),
-        };
-        Ok(target)
-    }
-
     #[doc(hidden)]
     pub fn from_passthrough_route_name(name: &str) -> Result<Self, Error> {
         let hostname = Hostname::from_str(name)?;
@@ -581,7 +444,206 @@ impl Target {
             return Err(Error::new_static("expected a Junction backend name"));
         };
 
-        Self::from_name(hostname)
+        Self::from_str(hostname)
+    }
+}
+
+/// A Kubernetes Service to target with traffic.
+///
+/// See [Target::KubeService].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct KubeService {
+    /// The name of the Kubernetes Service to target.
+    pub name: Name,
+
+    /// The namespace of the Kubernetes service to target. This must be explicitly
+    /// specified, and won't be inferred from context.
+    pub namespace: Name,
+}
+
+impl KubeService {
+    const SUBDOMAIN: &'static str = ".svc.cluster.local";
+}
+
+/// A DNS name to target with traffic.
+///
+/// See [Target::Dns].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct Dns {
+    /// A valid RFC1123 DNS domain name.
+    pub hostname: Hostname,
+}
+
+/// A virtual hostname. `VirtualHosts` represent the primary layer of
+/// indirection in Junction. Traffic sent to a `VirtualHost` is routed to an
+/// appropriate backend based on the content of the request.
+///
+/// VirtualHosts uniquely map to the Authority section of a URL.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct VirtualHost {
+    /// The logical target for this traffic.
+    #[serde(flatten)]
+    pub target: Target,
+
+    /// The port this virtual hostname should apply to. If no port is specified,
+    /// traffic is allowed on any port.
+    pub port: Option<u16>,
+}
+
+impl std::fmt::Display for VirtualHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.write_name(f)
+    }
+}
+
+impl std::str::FromStr for VirtualHost {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        let (name, port) = parse_port(name)?;
+        let target = Target::from_str(name)?;
+        Ok(Self { target, port })
+    }
+}
+
+impl VirtualHost {
+    /// Return a clone of this target with its port set to `port`.
+    pub fn with_port(&self, port: u16) -> Self {
+        Self {
+            target: self.target.clone(),
+            port: Some(port),
+        }
+    }
+
+    /// Return a clone of this virtual host with no port set.
+    pub fn without_port(&self) -> Self {
+        Self {
+            target: self.target.clone(),
+            port: None,
+        }
+    }
+
+    /// Return a clone of this VirtualHost with its port set to `default_port`
+    /// if it doesn't already have a port set.
+    pub fn with_default_port(&self, default_port: u16) -> Self {
+        Self {
+            target: self.target.clone(),
+            port: Some(self.port.unwrap_or(default_port)),
+        }
+    }
+
+    /// Clone this VirtualHost and convert it to a [BackendId].
+    ///
+    /// Returns `None` if this VirtualHost has no port set.
+    pub fn into_backend(self) -> Option<BackendId> {
+        self.port.map(|port| BackendId {
+            target: self.target,
+            port,
+        })
+    }
+
+    /// The canonical name of this virtual host.
+    ///
+    /// This is an alias for the [Display][std::fmt::Display] representation of
+    /// this VirtualHost.
+    pub fn name(&self) -> String {
+        let mut buf = String::new();
+        self.write_name(&mut buf).unwrap();
+        buf
+    }
+
+    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.target.write_name(w)?;
+
+        if let Some(port) = self.port {
+            write!(w, ":{port}")?;
+        }
+
+        Ok(())
+    }
+}
+
+/// A target and port together uniquely represent a [Backend][crate::backend::Backend].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct BackendId {
+    /// The logical traffic target that this backend configures.
+    #[serde(flatten)]
+    pub target: Target,
+
+    /// The port backend traffic is sent on.
+    pub port: u16,
+}
+
+impl std::fmt::Display for BackendId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.write_name(f)
+    }
+}
+
+impl std::str::FromStr for BackendId {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        let (name, port) = parse_port(name)?;
+
+        let port =
+            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
+        let target = Target::from_str(name)?;
+
+        Ok(Self { target, port })
+    }
+}
+
+impl BackendId {
+    /// Convert this id into a [VirtualHost] with the same route target and port.
+    pub fn into_vhost(self) -> VirtualHost {
+        VirtualHost {
+            target: self.target,
+            port: Some(self.port),
+        }
+    }
+
+    /// The cannonical name of this ID. This is an alias for the
+    /// [Display][std::fmt::Display] representation of this ID.
+    pub fn name(&self) -> String {
+        let mut buf = String::new();
+        self.write_name(&mut buf).unwrap();
+        buf
+    }
+
+    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.target.write_name(w)?;
+        write!(w, ":{port}", port = self.port)?;
+
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn passthrough_route_name(&self) -> String {
+        let mut buf = String::new();
+        self.write_passthrough_route_name(&mut buf).unwrap();
+        buf
+    }
+
+    fn write_passthrough_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.target.write_passthrough_route_name(w)?;
+        write!(w, ":{port}", port = self.port)?;
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn from_passthrough_route_name(name: &str) -> Result<Self, Error> {
+        let (name, port) = parse_port(name)?;
+        let port =
+            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
+
+        let target = Target::from_passthrough_route_name(name)?;
+
+        Ok(Self { target, port })
     }
 }
 
@@ -633,8 +695,8 @@ mod test {
     #[test]
     fn test_route_target_name() {
         assert_route_name(
-            RouteTarget {
-                target: Target::Service(KubeService {
+            VirtualHost {
+                target: Target::KubeService(KubeService {
                     name: Name::from_static("potato"),
                     namespace: Name::from_static("production"),
                 }),
@@ -644,7 +706,7 @@ mod test {
         );
 
         assert_route_name(
-            RouteTarget {
+            VirtualHost {
                 target: Target::Dns(Dns {
                     hostname: Hostname::from_static("cool-stuff.example.com"),
                 }),
@@ -654,8 +716,8 @@ mod test {
         );
 
         assert_route_name(
-            RouteTarget {
-                target: Target::Service(KubeService {
+            VirtualHost {
+                target: Target::KubeService(KubeService {
                     name: Name::from_static("potato"),
                     namespace: Name::from_static("production"),
                 }),
@@ -665,7 +727,7 @@ mod test {
         );
 
         assert_route_name(
-            RouteTarget {
+            VirtualHost {
                 target: Target::Dns(Dns {
                     hostname: Hostname::from_static("cool-stuff.example.com"),
                 }),
@@ -676,17 +738,17 @@ mod test {
     }
 
     #[track_caller]
-    fn assert_route_name(target: RouteTarget, str: &'static str) {
+    fn assert_route_name(target: VirtualHost, str: &'static str) {
         assert_eq!(&target.name(), str);
-        let parsed = RouteTarget::from_name(str).unwrap();
+        let parsed = VirtualHost::from_str(str).unwrap();
         assert_eq!(parsed, target);
     }
 
     #[test]
     fn test_backend_target_name() {
         assert_backend_name(
-            BackendTarget {
-                target: Target::Service(KubeService {
+            BackendId {
+                target: Target::KubeService(KubeService {
                     name: Name::from_static("potato"),
                     namespace: Name::from_static("production"),
                 }),
@@ -696,7 +758,7 @@ mod test {
         );
 
         assert_backend_name(
-            BackendTarget {
+            BackendId {
                 target: Target::Dns(Dns {
                     hostname: Hostname::from_static("cool-stuff.example.com"),
                 }),
@@ -705,31 +767,26 @@ mod test {
             "cool-stuff.example.com:123",
         );
 
-        assert!(BackendTarget::from_name("potato.production.svc.cluster.local").is_err());
-        assert!(BackendTarget::from_name("cool-stuff.example.com",).is_err());
+        assert!(BackendId::from_str("potato.production.svc.cluster.local").is_err());
+        assert!(BackendId::from_str("cool-stuff.example.com",).is_err());
     }
 
     #[track_caller]
-    fn assert_backend_name(target: BackendTarget, str: &'static str) {
+    fn assert_backend_name(target: BackendId, str: &'static str) {
         assert_eq!(&target.name(), str);
-        let parsed = BackendTarget::from_name(str).unwrap();
+        let parsed = BackendId::from_str(str).unwrap();
         assert_eq!(parsed, target);
     }
 
     #[test]
     fn test_target_name() {
         assert_name(
-            Target::Service(KubeService {
-                name: Name::from_static("potato"),
-                namespace: Name::from_static("production"),
-            }),
+            Target::kube_service("production", "potato").unwrap(),
             "potato.production.svc.cluster.local",
         );
 
         assert_name(
-            Target::Dns(Dns {
-                hostname: Hostname::from_static("cool-stuff.example.com"),
-            }),
+            Target::dns("cool-stuff.example.com").unwrap(),
             "cool-stuff.example.com",
         );
     }
@@ -737,24 +794,19 @@ mod test {
     #[track_caller]
     fn assert_name(target: Target, str: &'static str) {
         assert_eq!(&target.name(), str);
-        let parsed = Target::from_name(str).unwrap();
+        let parsed = Target::from_str(str).unwrap();
         assert_eq!(parsed, target);
     }
 
     #[test]
     fn test_target_passthrough_name() {
         assert_passthrough_name(
-            Target::Service(KubeService {
-                name: Name::from_static("potato"),
-                namespace: Name::from_static("production"),
-            }),
+            Target::kube_service("production", "potato").unwrap(),
             "potato.production.svc.cluster.local.lb.jct",
         );
 
         assert_passthrough_name(
-            Target::Dns(Dns {
-                hostname: Hostname::from_static("cool-stuff.example.com"),
-            }),
+            Target::dns("cool-stuff.example.com").unwrap(),
             "cool-stuff.example.com.lb.jct",
         );
     }

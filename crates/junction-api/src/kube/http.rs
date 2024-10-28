@@ -85,14 +85,14 @@ impl TryFrom<&HTTPRouteSpec> for crate::http::Route {
     type Error = Error;
 
     fn try_from(spec: &HTTPRouteSpec) -> Result<Self, Error> {
-        use crate::RouteTarget;
+        use crate::VirtualHost;
 
         // build a target from the parent ref. forbid having more than one parent ref.
         //
         // TOOD: we could allow converting one HTTPRoute into more than one Route
         let target = match spec.parent_refs.as_deref() {
             Some([parent_ref]) => {
-                RouteTarget::try_from(parent_ref).with_field_index("parentRefs", 0)?
+                VirtualHost::try_from(parent_ref).with_field_index("parentRefs", 0)?
             }
             Some(_) => {
                 return Err(Error::new_static(
@@ -103,7 +103,10 @@ impl TryFrom<&HTTPRouteSpec> for crate::http::Route {
         };
 
         let rules = vec_from_gateway!(spec.rules).with_field("rules")?;
-        Ok(Self { target, rules })
+        Ok(Self {
+            vhost: target,
+            rules,
+        })
     }
 }
 
@@ -293,7 +296,7 @@ fn port_from_gateway(port: &Option<i32>) -> Result<Option<u16>, Error> {
         .transpose()
 }
 
-impl TryFrom<&HTTPRouteParentRefs> for crate::RouteTarget {
+impl TryFrom<&HTTPRouteParentRefs> for crate::VirtualHost {
     type Error = Error;
     fn try_from(parent_ref: &HTTPRouteParentRefs) -> Result<Self, Error> {
         let group = parent_ref
@@ -305,7 +308,7 @@ impl TryFrom<&HTTPRouteParentRefs> for crate::RouteTarget {
             ("junctionlabs.io", Some("DNS")) => {
                 let target = Target::dns(&parent_ref.name).with_field("name")?;
                 let port = port_from_gateway(&parent_ref.port).with_field("port")?;
-                Ok(crate::RouteTarget { target, port })
+                Ok(crate::VirtualHost { target, port })
             }
             ("", Some("Service")) => {
                 // NOTE: kube doesn't require the namespace, but we do for now.
@@ -320,7 +323,7 @@ impl TryFrom<&HTTPRouteParentRefs> for crate::RouteTarget {
                 let target =
                     Target::kube_service(&namespace, &parent_ref.name).with_field("name")?;
 
-                Ok(crate::RouteTarget { target, port })
+                Ok(crate::VirtualHost { target, port })
             }
             (group, Some(kind)) => Err(Error::new(format!(
                 "unsupported parent ref: {group}/{kind}"
@@ -330,7 +333,7 @@ impl TryFrom<&HTTPRouteParentRefs> for crate::RouteTarget {
     }
 }
 
-impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::http::WeightedTarget {
+impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::http::WeightedBackend {
     type Error = Error;
     fn try_from(backend_ref: &HTTPRouteRulesBackendRefs) -> Result<Self, Error> {
         let group = backend_ref.group.as_deref().unwrap_or("");
@@ -366,9 +369,9 @@ impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::http::WeightedTarget {
             }
         };
 
-        Ok(crate::http::WeightedTarget {
+        Ok(crate::http::WeightedBackend {
             weight,
-            target: crate::BackendTarget { target, port },
+            backend: crate::BackendId { target, port },
         })
     }
 }
@@ -414,7 +417,7 @@ impl TryFrom<&crate::http::Route> for HTTPRouteSpec {
     type Error = Error;
 
     fn try_from(route: &crate::http::Route) -> Result<HTTPRouteSpec, Error> {
-        let parent_ref = (&route.target).try_into().with_field("target")?;
+        let parent_ref = (&route.vhost).try_into().with_field("target")?;
 
         Ok(HTTPRouteSpec {
             hostnames: None,
@@ -565,10 +568,10 @@ impl TryFrom<&crate::http::HeaderMatch> for HTTPRouteRulesMatchesHeaders {
     }
 }
 
-impl TryFrom<&crate::RouteTarget> for HTTPRouteParentRefs {
+impl TryFrom<&crate::VirtualHost> for HTTPRouteParentRefs {
     type Error = Error;
 
-    fn try_from(target: &crate::RouteTarget) -> Result<HTTPRouteParentRefs, Error> {
+    fn try_from(target: &crate::VirtualHost) -> Result<HTTPRouteParentRefs, Error> {
         let (group, kind) = group_kind(&target.target);
         let (name, namespace) = name_and_namespace(&target.target);
         let port = target.port.map(|p| p as i32);
@@ -584,14 +587,14 @@ impl TryFrom<&crate::RouteTarget> for HTTPRouteParentRefs {
     }
 }
 
-impl TryFrom<&crate::http::WeightedTarget> for HTTPRouteRulesBackendRefs {
+impl TryFrom<&crate::http::WeightedBackend> for HTTPRouteRulesBackendRefs {
     type Error = Error;
 
     fn try_from(
-        weighted_target: &crate::http::WeightedTarget,
+        weighted_target: &crate::http::WeightedBackend,
     ) -> Result<HTTPRouteRulesBackendRefs, Error> {
-        let (group, kind) = group_kind(&weighted_target.target.target);
-        let (name, namespace) = name_and_namespace(&weighted_target.target.target);
+        let (group, kind) = group_kind(&weighted_target.backend.target);
+        let (name, namespace) = name_and_namespace(&weighted_target.backend.target);
         let weight = Some(
             weighted_target
                 .weight
@@ -604,7 +607,7 @@ impl TryFrom<&crate::http::WeightedTarget> for HTTPRouteRulesBackendRefs {
             namespace,
             group: Some(group.to_string()),
             kind: Some(kind.to_string()),
-            port: Some(weighted_target.target.port as i32),
+            port: Some(weighted_target.backend.port as i32),
             weight,
             ..Default::default()
         })
@@ -614,14 +617,14 @@ impl TryFrom<&crate::http::WeightedTarget> for HTTPRouteRulesBackendRefs {
 fn name_and_namespace(target: &Target) -> (String, Option<String>) {
     match target {
         Target::Dns(dns) => (dns.hostname.to_string(), None),
-        Target::Service(svc) => (svc.name.to_string(), Some(svc.namespace.to_string())),
+        Target::KubeService(svc) => (svc.name.to_string(), Some(svc.namespace.to_string())),
     }
 }
 
 fn group_kind(target: &Target) -> (&'static str, &'static str) {
     match target {
         Target::Dns(_) => ("junctionlabs.io", "DNS"),
-        Target::Service(_) => ("", "Service"),
+        Target::KubeService(_) => ("", "Service"),
     }
 }
 
@@ -662,9 +665,9 @@ spec:
 
         let gateway_route: HTTPRoute = serde_yml::from_str(gateway_yaml).unwrap();
         let route = crate::http::Route {
-            target: Target::kube_service("prod", "example-gateway")
+            vhost: Target::kube_service("prod", "example-gateway")
                 .unwrap()
-                .into_route(None),
+                .into_vhost(None),
             rules: vec![crate::http::RouteRule {
                 matches: vec![crate::http::RouteMatch {
                     path: Some(crate::http::PathMatch::Prefix {
@@ -681,9 +684,9 @@ spec:
                     request: Some(Duration::from_str("1m2s3ms").unwrap()),
                     backend_request: None,
                 }),
-                backends: vec![crate::http::WeightedTarget {
+                backends: vec![crate::http::WeightedBackend {
                     weight: 1,
-                    target: Target::kube_service("prod", "foo-svc")
+                    backend: Target::kube_service("prod", "foo-svc")
                         .unwrap()
                         .into_backend(8080),
                 }],
@@ -710,9 +713,9 @@ spec:
     #[test]
     fn test_roundtrip() {
         let route = crate::http::Route {
-            target: Target::kube_service("default", "example-gateway")
+            vhost: Target::kube_service("default", "example-gateway")
                 .unwrap()
-                .into_route(None),
+                .into_vhost(None),
             rules: vec![crate::http::RouteRule {
                 matches: vec![crate::http::RouteMatch {
                     path: Some(crate::http::PathMatch::Prefix {
@@ -729,9 +732,9 @@ spec:
                     request: Some(Duration::from_secs(2).unwrap()),
                     backend_request: Some(Duration::from_secs(1).unwrap()),
                 }),
-                backends: vec![crate::http::WeightedTarget {
+                backends: vec![crate::http::WeightedBackend {
                     weight: 1,
-                    target: Target::kube_service("default", "foo-svc")
+                    backend: Target::kube_service("default", "foo-svc")
                         .unwrap()
                         .into_backend(8080),
                 }],

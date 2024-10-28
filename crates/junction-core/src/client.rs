@@ -6,11 +6,11 @@ use crate::{
 use junction_api::{
     backend::Backend,
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
-    BackendTarget, RouteTarget, Target,
+    BackendId, Target, VirtualHost,
 };
-use std::future::Future;
 use std::time::Duration;
 use std::{collections::BTreeSet, sync::Arc};
+use std::{future::Future, str::FromStr};
 
 /// A service discovery client that looks up URL information based on URLs,
 /// headers, and methods.
@@ -122,15 +122,9 @@ impl Client {
 
             for rule in &route.rules {
                 for backend in &rule.backends {
-                    // only subscribe to a backends if we know the port up
-                    // front. backends shouldn't exist without a port.
-                    if backend.target.port().is_some() {
-                        self.ads
-                            .subscribe(xds::ResourceType::Cluster, backend.target.name())
-                            .expect(
-                                "subscribe failed: ads task is gone. this is a bug in Junction",
-                            );
-                    }
+                    self.ads
+                        .subscribe(xds::ResourceType::Cluster, backend.backend.name())
+                        .expect("subscribe failed: ads task is gone. this is a bug in Junction");
                 }
             }
         }
@@ -172,13 +166,13 @@ impl Client {
             let route = if route.is_passthrough_route() {
                 self.defaults
                     .routes
-                    .get(&route.target)
+                    .get(&route.vhost)
                     .cloned()
                     .unwrap_or(route)
             } else {
                 route
             };
-            defaults.remove(&route.target);
+            defaults.remove(&route.vhost);
             routes.push(route);
         }
 
@@ -201,14 +195,14 @@ impl Client {
             let backend = if backend.config.lb.is_unspecified() {
                 self.defaults
                     .backends
-                    .get(&backend.config.target)
+                    .get(&backend.config.id)
                     .cloned()
                     .unwrap_or(backend)
             } else {
                 backend
             };
 
-            defaults.remove(&backend.config.target);
+            defaults.remove(&backend.config.id);
             backends.push(backend);
         }
 
@@ -313,13 +307,13 @@ impl Client {
 /// The URL's explicitly listed port or the default port for the URL's scheme
 /// will also be used to first specify a port-specific target before falling
 /// back to a port-less target.
-pub(crate) fn targets_for_url(url: &crate::Url) -> Result<Vec<RouteTarget>, crate::Error> {
+pub(crate) fn targets_for_url(url: &crate::Url) -> Result<Vec<VirtualHost>, crate::Error> {
     let target =
-        Target::from_name(url.hostname()).map_err(|e| crate::Error::invalid_url(e.to_string()))?;
+        Target::from_str(url.hostname()).map_err(|e| crate::Error::invalid_url(e.to_string()))?;
 
     Ok(vec![
-        target.clone().into_route(Some(url.default_port())),
-        target.into_route(None),
+        target.clone().into_vhost(Some(url.default_port())),
+        target.into_vhost(None),
     ])
 }
 
@@ -347,7 +341,7 @@ pub struct ResolvedRoute {
     pub rule: usize,
 
     /// The backend selected as part of route resolution.
-    pub backend: BackendTarget,
+    pub backend: BackendId,
 }
 
 pub(crate) fn resolve_routes<F>(
@@ -394,7 +388,7 @@ where
         request.headers,
     ) else {
         return Err(crate::Error::NoRuleMatched {
-            route: matching_route.target.clone(),
+            route: matching_route.vhost.clone(),
         });
     };
 
@@ -402,10 +396,10 @@ where
     let backend = &crate::rand::with_thread_rng(|rng| {
         matching_rule.backends.choose_weighted(rng, |wc| wc.weight)
     });
-    let Ok(backend) = backend.map(|w| w.target.clone()) else {
+    let Ok(backend) = backend.map(|w| w.backend.clone()) else {
         return Err(crate::Error::InvalidRoutes {
             message: "matched rule has no backends",
-            target: matching_route.target.clone(),
+            vhost: matching_route.vhost.clone(),
             rule: matching_rule_idx,
         });
     };
@@ -435,8 +429,8 @@ fn resolve_endpoint(
         }
         (Some(backend), None) => {
             return Err(crate::Error::NoReachableEndpoints {
-                route: resolved.route.target.clone(),
-                backend: backend.config.target.clone(),
+                vhost: resolved.route.vhost.clone(),
+                backend: backend.config.id.clone(),
             })
         }
         // FIXME: does this case even make sense?
@@ -452,7 +446,7 @@ fn resolve_endpoint(
             // its a DNS address that xDS knows nothing about but we can
             // still route to.
             return Err(crate::Error::NoBackend {
-                route: resolved.route.target.clone(),
+                vhost: resolved.route.vhost.clone(),
                 rule: resolved.rule,
                 backend: resolved.backend,
             });
@@ -464,7 +458,7 @@ fn resolve_endpoint(
         .load_balance(request.url, request.headers, &endpoints);
     let Some(endpoint) = endpoint else {
         return Err(crate::Error::NoReachableEndpoints {
-            route: resolved.route.target.clone(),
+            vhost: resolved.route.vhost.clone(),
             backend: resolved.backend,
         });
     };
@@ -569,7 +563,7 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
 #[cfg(test)]
 mod test {
     use crate::Url;
-    use junction_api::{http::WeightedTarget, Regex};
+    use junction_api::{http::WeightedBackend, Regex};
     use std::str::FromStr;
 
     use super::*;
@@ -578,7 +572,7 @@ mod test {
     fn test_resolve_passthrough_route() {
         let target = Target::dns("example.com").unwrap();
         let routes = StaticConfig::new(
-            vec![Route::passthrough_route(target.clone().into_route(None))],
+            vec![Route::passthrough_route(target.clone().into_vhost(None))],
             vec![],
         );
         let defaults = StaticConfig::default();
@@ -596,7 +590,7 @@ mod test {
     #[test]
     fn test_resolve_route_no_backends() {
         let route = Route {
-            target: Target::dns("example.com").unwrap().into_route(None),
+            vhost: Target::dns("example.com").unwrap().into_vhost(None),
             rules: vec![],
         };
 
@@ -626,7 +620,7 @@ mod test {
             .into_backend(8919);
 
         let route = Route {
-            target: Target::dns("example.com").unwrap().into_route(None),
+            vhost: Target::dns("example.com").unwrap().into_vhost(None),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {
@@ -635,16 +629,16 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: backend_one.clone(),
+                        backend: backend_one.clone(),
                     }],
                     ..Default::default()
                 },
                 RouteRule {
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: backend_two.clone(),
+                        backend: backend_two.clone(),
                     }],
                     ..Default::default()
                 },
@@ -710,7 +704,7 @@ mod test {
             .into_backend(8919);
 
         let route = Route {
-            target: Target::dns("example.com").unwrap().into_route(None),
+            vhost: Target::dns("example.com").unwrap().into_vhost(None),
             rules: vec![
                 RouteRule {
                     matches: vec![RouteMatch {
@@ -726,16 +720,16 @@ mod test {
                         ],
                         ..Default::default()
                     }],
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: backend_one.clone(),
+                        backend: backend_one.clone(),
                     }],
                     ..Default::default()
                 },
                 RouteRule {
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: backend_two.clone(),
+                        backend: backend_two.clone(),
                     }],
                     ..Default::default()
                 },

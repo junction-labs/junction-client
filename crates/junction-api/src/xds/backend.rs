@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use xds_api::pb::envoy::config::{
     cluster::v3::{self as xds_cluster, cluster::ring_hash_lb_config::HashFunction},
     route::v3 as xds_route,
@@ -9,7 +11,7 @@ use crate::{
         SessionAffinityHashParamType,
     },
     error::{Error, ErrorContext},
-    value_or_default, BackendTarget, Target,
+    value_or_default, BackendId, Target,
 };
 
 impl Backend {
@@ -18,8 +20,8 @@ impl Backend {
         route_action: Option<&xds_route::RouteAction>,
     ) -> Result<Self, Error> {
         let lb = LbPolicy::from_xds(cluster, route_action)?;
-        let target = BackendTarget::from_name(&cluster.name)?;
-        Ok(Backend { target, lb })
+        let target = BackendId::from_str(&cluster.name)?;
+        Ok(Backend { id: target, lb })
     }
 
     pub fn to_xds_cluster(&self) -> xds_cluster::Cluster {
@@ -32,19 +34,19 @@ impl Backend {
             None => (xds_cluster::cluster::LbPolicy::default(), None),
         };
 
-        let cluster_discovery_type = match &self.target.target {
+        let cluster_discovery_type = match &self.id.target {
             Target::Dns(_) => ClusterDiscoveryType::Type(DiscoveryType::LogicalDns.into()),
-            Target::Service(_) => ClusterDiscoveryType::Type(DiscoveryType::Eds.into()),
+            Target::KubeService(_) => ClusterDiscoveryType::Type(DiscoveryType::Eds.into()),
         };
 
         xds_cluster::Cluster {
-            name: self.target.name(),
+            name: self.id.name(),
             lb_policy: lb_policy.into(),
             lb_config,
             cluster_discovery_type: Some(cluster_discovery_type),
             eds_cluster_config: Some(EdsClusterConfig {
                 eds_config: Some(crate::xds::ads_config_source()),
-                service_name: self.target.name(),
+                service_name: self.id.name(),
             }),
             ..Default::default()
         }
@@ -56,7 +58,7 @@ impl Backend {
         use xds_route::route_match::PathSpecifier;
 
         let default_action = Action::Route(xds_route::RouteAction {
-            cluster_specifier: Some(ClusterSpecifier::Cluster(self.target.name())),
+            cluster_specifier: Some(ClusterSpecifier::Cluster(self.id.name())),
             hash_policy: self.to_xds_hash_policies(),
             ..Default::default()
         });
@@ -82,7 +84,7 @@ impl Backend {
         // it's incorrect literally everywhere else, but should be done here to
         // indicate that this is the passthrough route.
         xds_route::RouteConfiguration {
-            name: self.target.passthrough_route_name(),
+            name: self.id.passthrough_route_name(),
             virtual_hosts: vec![vhost],
             ..Default::default()
         }
@@ -266,7 +268,7 @@ mod test {
         let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web.into_backend(8891),
+            id: web.into_backend(8891),
             lb: LbPolicy::Unspecified,
         };
         assert_eq!(
@@ -281,7 +283,7 @@ mod test {
         let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web.into_backend(7891),
+            id: web.into_backend(7891),
             lb: LbPolicy::RoundRobin,
         };
         assert_eq!(
@@ -296,7 +298,7 @@ mod test {
         let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web.into_backend(6666),
+            id: web.into_backend(6666),
             lb: LbPolicy::RingHash(RingHashParams {
                 min_ring_size: 1024,
                 hash_params: vec![
@@ -335,7 +337,7 @@ mod test {
         let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web.into_backend(4321),
+            id: web.into_backend(4321),
             lb: LbPolicy::RoundRobin,
         };
 
@@ -348,7 +350,7 @@ mod test {
         let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
-            target: web.into_backend(12321),
+            id: web.into_backend(12321),
             lb: LbPolicy::RingHash(RingHashParams {
                 min_ring_size: 1024,
                 hash_params: vec![

@@ -1,7 +1,7 @@
 use http::HeaderValue;
 use junction_api::{
     backend::{Backend, LbPolicy},
-    http::{HeaderMatch, Route, RouteMatch, RouteRule, WeightedTarget},
+    http::{HeaderMatch, Route, RouteMatch, RouteRule, WeightedBackend},
     Regex, Target,
 };
 use junction_core::Client;
@@ -30,7 +30,7 @@ async fn main() {
     let nginx_staging = Target::kube_service("default", "nginx-staging").unwrap();
 
     let default_routes = vec![Route {
-        target: nginx.clone().into_route(None),
+        vhost: nginx.clone().into_vhost(None),
         rules: vec![
             RouteRule {
                 matches: vec![RouteMatch {
@@ -40,15 +40,15 @@ async fn main() {
                     }],
                     ..Default::default()
                 }],
-                backends: vec![WeightedTarget {
-                    target: nginx_staging.clone().into_backend(80),
+                backends: vec![WeightedBackend {
+                    backend: nginx_staging.clone().into_backend(80),
                     weight: 1,
                 }],
                 ..Default::default()
             },
             RouteRule {
-                backends: vec![WeightedTarget {
-                    target: nginx.clone().into_backend(80),
+                backends: vec![WeightedBackend {
+                    backend: nginx.clone().into_backend(80),
                     weight: 1,
                 }],
                 ..Default::default()
@@ -57,11 +57,11 @@ async fn main() {
     }];
     let default_backends = vec![
         Backend {
-            target: nginx.into_backend(80),
+            id: nginx.into_backend(80),
             lb: LbPolicy::Unspecified,
         },
         Backend {
-            target: nginx_staging.into_backend(80),
+            id: nginx_staging.into_backend(80),
             lb: LbPolicy::Unspecified,
         },
     ];
