@@ -127,7 +127,9 @@ impl Client {
                     if backend.target.port().is_some() {
                         self.ads
                             .subscribe(xds::ResourceType::Cluster, backend.target.name())
-                            .unwrap();
+                            .expect(
+                                "subscribe failed: ads task is gone. this is a bug in Junction",
+                            );
                     }
                 }
             }

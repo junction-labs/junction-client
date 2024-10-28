@@ -112,7 +112,7 @@ impl AdsClient {
 
     pub fn subscribe(&self, resource_type: ResourceType, name: String) -> Result<(), ()> {
         self.subscriptions
-            .try_send(SubscriptionUpdate::Add(resource_type, name))
+            .blocking_send(SubscriptionUpdate::Add(resource_type, name))
             .map_err(|_| ())?;
 
         Ok(())
