@@ -14,6 +14,15 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
 
+#[doc(hidden)]
+pub mod tags {
+    //! Well known tags for Routes.
+
+    /// Marks a Route as inferred from an environment and not configured by a
+    /// human being.
+    pub const INFERRED: &str = "junctionlabs.io/inferred";
+}
+
 /// A Route is high level policy that describes how a request to a specific
 /// [virtual host][crate::VirtualHost] should be routed.
 ///
