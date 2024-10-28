@@ -12,7 +12,12 @@ fn main() -> anyhow::Result<()> {
     match &args.command {
         // rust
         Commands::Check { crates } => rust::cargo_cmd(&sh, "check", &[], crates),
-        Commands::Doc { crates } => rust::cargo_cmd(&sh, "doc", &["--no-deps"], crates),
+        Commands::Doc { crates, deps, ci } => rust::docs(&sh, crates, *deps, *ci),
+        Commands::CIClippy {
+            crates,
+            fix,
+            allow_staged,
+        } => rust::ci_clippy(&sh, crates, *fix, *allow_staged),
         // python
         Commands::PythonClean => python::clean(&sh, &venv),
         Commands::PythonBuild {
@@ -46,18 +51,46 @@ enum MaturinOption {
 #[allow(clippy::enum_variant_names)]
 #[derive(Subcommand)]
 enum Commands {
-    /// Run `cargo check` for a crate or crates, appropriate environment
+    /// Run `cargo check` for a crate or crates, with appropriate environment
     /// variables set.
     Check {
+        /// The crates to check.
         #[clap(long, num_args=1.., default_value = "junction-api")]
         crates: Vec<String>,
+    },
+
+    /// Run `cargo clippy` with some extra lints, and deny all default warnings.
+    CIClippy {
+        /// The crates to check. Defaults to the workspace defaults.
+        #[clap(long, num_args=0..)]
+        crates: Vec<String>,
+
+        /// Automatically fix any errors when possible. See `cargo clippy --fix`
+        /// for more detail.
+        #[clap(long)]
+        fix: bool,
+
+        /// Allows `ci-clippy --fix` to make changes even if there are staged
+        /// changes in the current repo.
+        #[clap(long)]
+        allow_staged: bool,
     },
 
     /// Run `cargo doc` for a crate or crates, appropriate environment
     /// variables set.
     Doc {
+        /// The crates to run rustdoc for.
         #[clap(long, num_args=1.., default_value = "junction-api")]
         crates: Vec<String>,
+
+        /// Run docs for all deps. By default, `doc` runs `cargo doc --no-deps`.
+        #[clap(long)]
+        deps: bool,
+
+        /// When set, run as a CI check to make sure that docs are valid and
+        /// will render correctly on docsrs.
+        #[clap(long)]
+        ci: bool,
     },
 
     /// Build and install junction-python in a .venv.
@@ -105,11 +138,63 @@ mod rust {
 
         Ok(())
     }
+
+    pub(super) fn docs(sh: &Shell, crates: &[String], deps: bool, ci: bool) -> anyhow::Result<()> {
+        let crate_args = crate_args(crates);
+
+        let _k8s_version = loud_env(sh, K8S_OPENAPI_VERSION, "1.29");
+        let _rustdoc_flags = if ci {
+            Some(loud_env(
+                sh,
+                "RUSTDOCFLAGS",
+                "--cfg docsrs -D warnings --allow=rustdoc::redundant-explicit-links",
+            ))
+        } else {
+            None
+        };
+
+        let args = if deps { vec![] } else { vec!["--no-deps"] };
+
+        cmd!(sh, "cargo doc {args...} {crate_args...}").run()?;
+
+        Ok(())
+    }
+
+    pub(super) fn ci_clippy(
+        sh: &Shell,
+        crates: &[String],
+        fix: bool,
+        allow_staged: bool,
+    ) -> anyhow::Result<()> {
+        let crate_args = crate_args(crates);
+
+        let mut options = vec!["--tests", "--all-features", "--no-deps"];
+        if fix {
+            options.push("--fix");
+        }
+        if allow_staged {
+            options.push("--allow-staged");
+        }
+
+        #[rustfmt::skip]
+        let args = vec![
+            "-D", "warnings",
+            "-D", "clippy::dbg_macro",
+        ];
+
+        cmd!(sh, "cargo clippy {crate_args...} {options...} -- {args...}").run()?;
+
+        Ok(())
+    }
+
+    fn crate_args(crates: &[String]) -> Vec<&str> {
+        crates.iter().map(|name| ["-p", &name]).flatten().collect()
+    }
 }
 
 fn loud_env<K: AsRef<OsStr>, V: AsRef<OsStr>>(sh: &Shell, key: K, value: V) -> xshell::PushEnv<'_> {
     eprintln!(
-        "with: {k}={v}",
+        "env: {k}={v}",
         k = key.as_ref().to_string_lossy(),
         v = value.as_ref().to_string_lossy()
     );
