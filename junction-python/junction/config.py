@@ -11,11 +11,11 @@ Duration = str | int | float
 class TargetDns(typing.TypedDict):
     type: typing.Literal["Dns"]
     hostname: str
-    """The DNS name to target."""
+    """A valid RFC1123 DNS domain name."""
 
 
-class TargetService(typing.TypedDict):
-    type: typing.Literal["Service"]
+class TargetKubeService(typing.TypedDict):
+    type: typing.Literal["KubeService"]
     name: str
     """The name of the Kubernetes Service to target."""
 
@@ -24,12 +24,18 @@ class TargetService(typing.TypedDict):
     specified, and won't be inferred from context."""
 
 
-Target = TargetDns | TargetService
+Target = TargetDns | TargetKubeService
 
 
-class RouteTarget(typing.TypedDict):
+class VirtualHost(typing.TypedDict):
+    """A virtual hostname. `VirtualHosts` represent the primary layer of
+    indirection in Junction. Traffic sent to a `VirtualHost` is routed to an
+    appropriate backend based on the content of the request.
+
+    VirtualHosts uniquely map to the Authority section of a URL."""
+
     hostname: str
-    """The DNS name to target."""
+    """A valid RFC1123 DNS domain name."""
 
     name: str
     """The name of the Kubernetes Service to target."""
@@ -38,13 +44,17 @@ class RouteTarget(typing.TypedDict):
     """The namespace of the Kubernetes service to target. This must be explicitly
     specified, and won't be inferred from context."""
 
-    type: typing.Literal["Dns"] | typing.Literal["Service"]
+    type: typing.Literal["Dns"] | typing.Literal["KubeService"]
     port: int
+    """The port this virtual hostname should apply to. If no port is specified,
+    traffic is allowed on any port."""
 
 
-class BackendTarget(typing.TypedDict):
+class BackendId(typing.TypedDict):
+    """A target and port together uniquely represent a [Backend][crate::backend::Backend]."""
+
     hostname: str
-    """The DNS name to target."""
+    """A valid RFC1123 DNS domain name."""
 
     name: str
     """The name of the Kubernetes Service to target."""
@@ -53,8 +63,9 @@ class BackendTarget(typing.TypedDict):
     """The namespace of the Kubernetes service to target. This must be explicitly
     specified, and won't be inferred from context."""
 
-    type: typing.Literal["Dns"] | typing.Literal["Service"]
+    type: typing.Literal["Dns"] | typing.Literal["KubeService"]
     port: int
+    """The port backend traffic is sent on."""
 
 
 class Fraction(typing.TypedDict):
@@ -64,10 +75,17 @@ class Fraction(typing.TypedDict):
     denominator: int
 
 
-class WeightedTarget(typing.TypedDict):
+class WeightedBackend(typing.TypedDict):
+    """A [backend id][BackendId] and a weight."""
+
     weight: int
+    """The relative weight of this backend relative to any other backends in
+    [the list][RouteRule::backends].
+
+    If not specified, defaults to `1`."""
+
     hostname: str
-    """The DNS name to target."""
+    """A valid RFC1123 DNS domain name."""
 
     name: str
     """The name of the Kubernetes Service to target."""
@@ -76,8 +94,9 @@ class WeightedTarget(typing.TypedDict):
     """The namespace of the Kubernetes service to target. This must be explicitly
     specified, and won't be inferred from context."""
 
-    type: typing.Literal["Dns"] | typing.Literal["Service"]
+    type: typing.Literal["Dns"] | typing.Literal["KubeService"]
     port: int
+    """The port backend traffic is sent on."""
 
 
 class RouteTimeouts(typing.TypedDict):
@@ -241,26 +260,35 @@ class RouteRule(typing.TypedDict):
 
     timeouts: RouteTimeouts
     retry: RouteRetry
-    """How to retry any requests to this route."""
+    """How to retry requests. If not specified, requests are not retried."""
 
-    backends: typing.List[WeightedTarget]
+    backends: typing.List[WeightedBackend]
     """Where the traffic should route if this rule matches."""
 
 
 class Route(typing.TypedDict):
-    """High level policy that describes how a request to a specific hostname should
-    be routed.
+    """A Route is high level policy that describes how a request to a specific
+    [virtual host][crate::VirtualHost] should be routed.
 
-    Routes contain a target that describes the hostname to match and at least
-    one [RouteRule]. When a [RouteRule] matches, it also describes where and how
-    the traffic should be directed to a [Backend](crate::backend::Backend)."""
+    After a Route is selected based on matching a request URL's Authority
+    against a VirtualHost, the method, headers, and rest of the URL are used to
+    match against the rules in this Route. When a rule matches, traffic is sent
+    to one of the [Backend][crate::backend::Backend]s it contains.
 
-    target: RouteTarget
-    """The target for this route. The target determines the hostnames that map
-    to this route."""
+    A Route also contains high-level resilience features like retry policies and
+    timeouts. Generally, anything you would usually configure in simple
+    client-side code can be found in a Route.
+
+    For more detail on how matching works or backends are selected see the docs
+    on [RouteRule] and [RouteMatch]."""
+
+    vhost: VirtualHost
+    """This route's virtual host. Traffic to this virutal host will use the
+    list of `rules` to route traffic."""
 
     rules: typing.List[RouteRule]
-    """The route rules that determine whether any URLs match."""
+    """The rules that determine whether a request matches and where traffic
+    should be routed."""
 
 
 class SessionAffinityHashParam(typing.TypedDict):
@@ -316,7 +344,7 @@ class Backend(typing.TypedDict):
     traffic routed to this backend will use its load balancing policy to evenly
     spread traffic across all available endpoints."""
 
-    target: BackendTarget
+    id: BackendId
     """A unique description of what this backend is."""
 
     lb: LbPolicy

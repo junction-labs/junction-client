@@ -75,8 +75,8 @@
 
 use crossbeam_skiplist::SkipMap;
 use enum_map::EnumMap;
-use junction_api::RouteTarget;
-use junction_api::{http::Route, BackendTarget};
+use junction_api::VirtualHost;
+use junction_api::{http::Route, BackendId};
 use petgraph::{
     graph::{DiGraph, NodeIndex},
     visit::{self, Visitable},
@@ -84,6 +84,7 @@ use petgraph::{
 };
 use prost::Name;
 use std::collections::BTreeSet;
+use std::str::FromStr;
 use std::sync::Arc;
 use xds_api::pb::envoy::config::{
     cluster::v3::{self as xds_cluster},
@@ -342,7 +343,7 @@ impl CacheReader {
 }
 
 impl ConfigCache for CacheReader {
-    fn get_route(&self, target: &RouteTarget) -> Option<Arc<Route>> {
+    fn get_route(&self, target: &VirtualHost) -> Option<Arc<Route>> {
         let listener = self.data.listeners.get(&target.name())?;
 
         match &listener.data()?.route_config {
@@ -356,7 +357,7 @@ impl ConfigCache for CacheReader {
 
     fn get_backend(
         &self,
-        target: &BackendTarget,
+        target: &BackendId,
     ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
         macro_rules! tri {
             ($e:expr) => {
@@ -801,7 +802,7 @@ impl Cache {
                         .expect("GC leak: parent Cluster has no data")
                         .backend_lb
                         .config
-                        .target
+                        .id
                         .clone()
                 };
 
@@ -888,7 +889,7 @@ impl Cache {
 
         // try to subscribe to the passthrough Listener for this Cluster if it
         // doesn't already exist in the GC graph.
-        let passthrough_listener_name = cluster.backend_lb.config.target.passthrough_route_name();
+        let passthrough_listener_name = cluster.backend_lb.config.id.passthrough_route_name();
         let (default_listener_node, created) =
             self.find_or_create_ref(ResourceType::Listener, &passthrough_listener_name);
         if created {
@@ -945,7 +946,7 @@ impl Cache {
     fn find_passthrough_action(&self, cluster_name: &str) -> Option<xds_route::RouteAction> {
         // don't even parse the cluster name as a target, assume that the
         // passthrough listener has the same name as the cluster.
-        let target = BackendTarget::from_name(cluster_name).ok()?;
+        let target = BackendId::from_str(cluster_name).ok()?;
         let listener = self.data.listeners.get(&target.passthrough_route_name())?;
 
         match &listener.data()?.route_config {

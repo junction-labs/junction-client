@@ -4,10 +4,10 @@ use crate::{
     error::{Error, ErrorContext},
     http::{
         HeaderMatch, Method, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRetry, RouteRule,
-        RouteTimeouts, WeightedTarget,
+        RouteTimeouts, WeightedBackend,
     },
     shared::{Duration, Regex},
-    BackendTarget, RouteTarget,
+    BackendId, VirtualHost,
 };
 use xds_api::pb::{
     envoy::{
@@ -39,9 +39,9 @@ impl Route {
     pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, Error> {
         // try to parse the target as a backend name in case it's a passthrough
         // route, and then try parsing it as a regular target.
-        let target = BackendTarget::from_passthrough_route_name(&xds.name)
-            .map(BackendTarget::into_route_target)
-            .or_else(|_| RouteTarget::from_name(&xds.name))
+        let target = BackendId::from_passthrough_route_name(&xds.name)
+            .map(BackendId::into_vhost)
+            .or_else(|_| VirtualHost::from_str(&xds.name))
             .with_field("name")?;
 
         let mut rules = vec![];
@@ -70,7 +70,10 @@ impl Route {
             }
         }
 
-        Ok(Route { target, rules })
+        Ok(Route {
+            vhost: target,
+            rules,
+        })
     }
 
     pub fn to_xds(&self) -> xds_route::RouteConfiguration {
@@ -81,7 +84,7 @@ impl Route {
             ..Default::default()
         }];
 
-        let name = self.target.name();
+        let name = self.vhost.name();
         xds_route::RouteConfiguration {
             name,
             virtual_hosts,
@@ -114,7 +117,7 @@ impl RouteRule {
         let retry = action.retry_policy.as_ref().map(RouteRetry::from_xds);
         // cluster_specifier is a oneof field, so let WeightedTarget specify the
         // field names in errors.
-        let backends = WeightedTarget::from_xds(action.cluster_specifier.as_ref())?;
+        let backends = WeightedBackend::from_xds(action.cluster_specifier.as_ref())?;
 
         Ok(RouteRule {
             matches,
@@ -151,7 +154,7 @@ impl RouteRule {
         // TODO: when we allow backends to be omitted and inferred from the
         // RouteTarget, this will have to be converted into an actual
         // RouteAction instead of None.
-        let cluster_specifier = WeightedTarget::to_xds(&self.backends);
+        let cluster_specifier = WeightedBackend::to_xds(&self.backends);
 
         // tie it all together into a route action that we can use for each match
         let route_action = xds_route::route::Action::Route(xds_route::RouteAction {
@@ -555,18 +558,18 @@ where
     }
 }
 
-impl WeightedTarget {
+impl WeightedBackend {
     pub(crate) fn to_xds(targets: &[Self]) -> Option<xds_route::route_action::ClusterSpecifier> {
         match targets {
             [] => None,
             [wt] => Some(xds_route::route_action::ClusterSpecifier::Cluster(
-                wt.target.name(),
+                wt.backend.name(),
             )),
             targets => {
                 let clusters = targets
                     .iter()
                     .map(|wt| xds_route::weighted_cluster::ClusterWeight {
-                        name: wt.target.name(),
+                        name: wt.backend.name(),
                         weight: Some(wt.weight.into()),
                         ..Default::default()
                     })
@@ -590,17 +593,20 @@ impl WeightedTarget {
         // can just be BackendTarget::from_name
         match xds {
             Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => Ok(vec![Self {
-                target: BackendTarget::from_name(name).with_field("cluster")?,
+                backend: BackendId::from_str(name).with_field("cluster")?,
                 weight: 1,
             }]),
             Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(
                 weighted_clusters,
             )) => {
                 let clusters = weighted_clusters.clusters.iter().enumerate().map(|(i, w)| {
-                    let target = BackendTarget::from_name(&w.name).with_field_index("name", i)?;
+                    let target = BackendId::from_str(&w.name).with_field_index("name", i)?;
                     let weight = crate::value_or_default!(w.weight, 1);
 
-                    Ok(Self { target, weight })
+                    Ok(Self {
+                        backend: target,
+                        weight,
+                    })
                 });
 
                 clusters
@@ -650,14 +656,14 @@ mod test {
         let web = Target::kube_service("prod", "web").unwrap();
 
         let original = Route {
-            target: RouteTarget {
+            vhost: VirtualHost {
                 target: web.clone(),
                 port: None,
             },
             rules: vec![RouteRule {
-                backends: vec![WeightedTarget {
+                backends: vec![WeightedBackend {
                     weight: 1,
-                    target: BackendTarget {
+                    backend: BackendId {
                         target: web.clone(),
                         port: 80,
                     },
@@ -689,7 +695,7 @@ mod test {
 
         // should roundtrip with different targets
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            target: RouteTarget {
+            vhost: VirtualHost {
                 target: web.clone(),
                 port: None,
             },
@@ -702,16 +708,16 @@ mod test {
                         ..Default::default()
                     }],
                     backends: vec![
-                        WeightedTarget {
+                        WeightedBackend {
                             weight: 3,
-                            target: BackendTarget {
+                            backend: BackendId {
                                 target: staging.clone(),
                                 port: 80,
                             },
                         },
-                        WeightedTarget {
+                        WeightedBackend {
                             weight: 1,
-                            target: BackendTarget {
+                            backend: BackendId {
                                 target: web.clone(),
                                 port: 80,
                             },
@@ -726,9 +732,9 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: BackendTarget {
+                        backend: BackendId {
                             target: web.clone(),
                             port: 80,
                         },
@@ -740,7 +746,7 @@ mod test {
 
         // should roundtrip with the same backends but different timeouts
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            target: RouteTarget {
+            vhost: VirtualHost {
                 target: web.clone(),
                 port: None,
             },
@@ -752,9 +758,9 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: BackendTarget {
+                        backend: BackendId {
                             target: web.clone(),
                             port: 80,
                         },
@@ -772,9 +778,9 @@ mod test {
                         request: Some(Duration::from_secs(123).unwrap()),
                         backend_request: None,
                     }),
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: BackendTarget {
+                        backend: BackendId {
                             target: web.clone(),
                             port: 80,
                         },
@@ -786,7 +792,7 @@ mod test {
 
         // should roundtrip with the same backends but different retries
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            target: RouteTarget {
+            vhost: VirtualHost {
                 target: web.clone(),
                 port: None,
             },
@@ -803,9 +809,9 @@ mod test {
                         attempts: Some(123),
                         backoff: Some(Duration::from_secs(1).unwrap()),
                     }),
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: BackendTarget {
+                        backend: BackendId {
                             target: web.clone(),
                             port: 80,
                         },
@@ -819,9 +825,9 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: BackendTarget {
+                        backend: BackendId {
                             target: web.clone(),
                             port: 80,
                         },
@@ -838,7 +844,7 @@ mod test {
 
         // should not roundtrip as two identical targets
         let original = Route {
-            target: RouteTarget {
+            vhost: VirtualHost {
                 target: web.clone(),
                 port: None,
             },
@@ -850,9 +856,9 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: BackendTarget {
+                        backend: BackendId {
                             target: web.clone(),
                             port: 80,
                         },
@@ -866,9 +872,9 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: BackendTarget {
+                        backend: BackendId {
                             target: web.clone(),
                             port: 80,
                         },
@@ -883,7 +889,7 @@ mod test {
         assert_eq!(
             converted,
             Route {
-                target: RouteTarget {
+                vhost: VirtualHost {
                     target: web.clone(),
                     port: None,
                 },
@@ -902,9 +908,9 @@ mod test {
                             ..Default::default()
                         }
                     ],
-                    backends: vec![WeightedTarget {
+                    backends: vec![WeightedBackend {
                         weight: 1,
-                        target: BackendTarget {
+                        backend: BackendId {
                             target: web.clone(),
                             port: 80,
                         },
@@ -920,7 +926,7 @@ mod test {
         let web = Target::kube_service("prod", "web").unwrap();
 
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            target: RouteTarget {
+            vhost: VirtualHost {
                 target: web.clone(),
                 port: None,
             },
@@ -946,9 +952,9 @@ mod test {
                         ..Default::default()
                     },
                 ],
-                backends: vec![WeightedTarget {
+                backends: vec![WeightedBackend {
                     weight: 1,
-                    target: BackendTarget {
+                    backend: BackendId {
                         target: web.clone(),
                         port: 80,
                     },
@@ -963,7 +969,7 @@ mod test {
         let web = Target::kube_service("prod", "web").unwrap();
 
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            target: RouteTarget {
+            vhost: VirtualHost {
                 target: web.clone(),
                 port: None,
             },
@@ -988,9 +994,9 @@ mod test {
                     ],
                     method: Some("CONNECT".to_string()),
                 }],
-                backends: vec![WeightedTarget {
+                backends: vec![WeightedBackend {
                     weight: 1,
-                    target: BackendTarget {
+                    backend: BackendId {
                         target: web.clone(),
                         port: 80,
                     },

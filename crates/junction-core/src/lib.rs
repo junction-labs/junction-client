@@ -18,7 +18,7 @@ pub use client::{Client, ConfigMode, HttpRequest, ResolvedRoute};
 pub use xds::{ResourceVersion, XdsConfig};
 
 use junction_api::http::Route;
-use junction_api::{BackendTarget, RouteTarget};
+use junction_api::{BackendId, VirtualHost};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -30,8 +30,8 @@ use junction_api::backend::Backend;
 /// Check route resolution.
 ///
 /// Resolves a route against a table of routes, returning the chosen [Route],
-/// the index of the rule that matched, and the [Target] selected from the
-/// route.
+/// the index of the rule that matched, and the [BackendId] selected based on
+/// the route.
 ///
 /// Use this function to test routing configuration without requiring a full
 /// client or a live connection to a control plane. For actual route resolution,
@@ -58,13 +58,13 @@ pub fn check_route(
 }
 
 pub(crate) trait ConfigCache {
-    fn get_route(&self, target: &RouteTarget) -> Option<Arc<Route>>;
+    fn get_route(&self, target: &VirtualHost) -> Option<Arc<Route>>;
     fn get_backend(
         &self,
-        target: &BackendTarget,
+        target: &BackendId,
     ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>);
 
-    fn get_route_with_fallbacks(&self, targets: &[RouteTarget]) -> Option<Arc<Route>> {
+    fn get_route_with_fallbacks(&self, targets: &[VirtualHost]) -> Option<Arc<Route>> {
         for target in targets {
             if let Some(route) = self.get_route(target) {
                 return Some(route);
@@ -77,15 +77,15 @@ pub(crate) trait ConfigCache {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StaticConfig {
-    pub routes: HashMap<RouteTarget, Arc<Route>>,
-    pub backends: HashMap<BackendTarget, Arc<BackendLb>>,
+    pub routes: HashMap<VirtualHost, Arc<Route>>,
+    pub backends: HashMap<BackendId, Arc<BackendLb>>,
 }
 
 impl StaticConfig {
     pub(crate) fn new(routes: Vec<Route>, backends: Vec<Backend>) -> Self {
         let routes = routes
             .into_iter()
-            .map(|x| (x.target.clone(), Arc::new(x)))
+            .map(|x| (x.vhost.clone(), Arc::new(x)))
             .collect();
 
         let backends = backends
@@ -93,7 +93,7 @@ impl StaticConfig {
             .map(|config| {
                 let load_balancer = LoadBalancer::from_config(&config.lb);
                 (
-                    config.target.clone(),
+                    config.id.clone(),
                     Arc::new(BackendLb {
                         config,
                         load_balancer,
@@ -107,13 +107,13 @@ impl StaticConfig {
 }
 
 impl ConfigCache for StaticConfig {
-    fn get_route(&self, target: &RouteTarget) -> Option<Arc<Route>> {
+    fn get_route(&self, target: &VirtualHost) -> Option<Arc<Route>> {
         self.routes.get(target).cloned()
     }
 
     fn get_backend(
         &self,
-        target: &BackendTarget,
+        target: &BackendId,
     ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
         (self.backends.get(target).cloned(), None)
     }

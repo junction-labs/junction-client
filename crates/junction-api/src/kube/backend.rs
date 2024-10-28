@@ -30,13 +30,13 @@ impl Backend {
             ..Default::default()
         };
 
-        let lb_annotation = lb_policy_annotation(self.target.port);
+        let lb_annotation = lb_policy_annotation(self.id.port);
         let lb_json = serde_json::to_string(&self.lb)
             .expect("Failed to serialize Backend. this is a bug in Junction, not your code");
         svc.annotations_mut()
             .insert(lb_annotation.to_string(), lb_json);
 
-        match &self.target.target {
+        match &self.id.target {
             Target::Dns(dns) => {
                 svc.spec = Some(ServiceSpec {
                     type_: Some("ExternalName".to_string()),
@@ -44,14 +44,14 @@ impl Backend {
                     ..Default::default()
                 })
             }
-            Target::Service(service) => {
+            Target::KubeService(service) => {
                 let meta = svc.meta_mut();
                 meta.name = Some(service.name.to_string());
                 meta.namespace = Some(service.namespace.to_string());
 
                 svc.spec = Some(ServiceSpec {
                     ports: Some(vec![ServicePort {
-                        port: self.target.port as i32,
+                        port: self.id.port as i32,
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
                     }]),
@@ -66,8 +66,9 @@ impl Backend {
     /// Read one or more [Backend]s from a Kubernetes [Service]. A backend will
     /// be generated for every distinct port the [Service] is configured with.
     ///
-    /// > NOTE: This method currently only supports generating backends with
-    /// > [Service targets][Target::Service]. Support for DNS services coming soon!.
+    /// > NOTE: This method currently only supports generating backends with >
+    /// > [Service targets][Target::KubeService]. Support for DNS backends is
+    /// > coming soon!.
     pub fn from_service(svc: &Service) -> Result<Vec<Self>, Error> {
         let (namespace, name) = (
             as_ref_or_else(&svc.meta().namespace, "missing namespace")
@@ -98,7 +99,7 @@ impl Backend {
             let namespace = Name::from_str(namespace).with_fields("meta", "namespace")?;
             let target = Target::kube_service(&namespace, &name)?;
             backends.push(Backend {
-                target: crate::BackendTarget { target, port },
+                id: crate::BackendId { target, port },
                 lb: lb.clone(),
             })
         }
@@ -154,7 +155,7 @@ mod test {
     #[test]
     fn test_to_service_patch() {
         let backend = Backend {
-            target: Target::kube_service("bar", "foo")
+            id: Target::kube_service("bar", "foo")
                 .unwrap()
                 .into_backend(1212),
             lb: LbPolicy::RoundRobin,
@@ -183,7 +184,7 @@ mod test {
         );
 
         let backend = Backend {
-            target: Target::dns("example.com").unwrap().into_backend(4430),
+            id: Target::dns("example.com").unwrap().into_backend(4430),
             lb: LbPolicy::RoundRobin,
         };
         assert_eq!(
@@ -227,7 +228,7 @@ mod test {
         assert_eq!(
             Backend::from_service(&svc).unwrap(),
             vec![Backend {
-                target: Target::kube_service("bar", "foo").unwrap().into_backend(80),
+                id: Target::kube_service("bar", "foo").unwrap().into_backend(80),
                 lb: LbPolicy::Unspecified,
             },]
         )
@@ -275,11 +276,11 @@ mod test {
             Backend::from_service(&svc).unwrap(),
             vec![
                 Backend {
-                    target: Target::kube_service("bar", "foo").unwrap().into_backend(80),
+                    id: Target::kube_service("bar", "foo").unwrap().into_backend(80),
                     lb: LbPolicy::Unspecified,
                 },
                 Backend {
-                    target: Target::kube_service("bar", "foo")
+                    id: Target::kube_service("bar", "foo")
                         .unwrap()
                         .into_backend(443),
                     lb: LbPolicy::RingHash(RingHashParams {
@@ -293,7 +294,7 @@ mod test {
                     }),
                 },
                 Backend {
-                    target: Target::kube_service("bar", "foo")
+                    id: Target::kube_service("bar", "foo")
                         .unwrap()
                         .into_backend(4430),
                     lb: LbPolicy::RoundRobin,
@@ -305,7 +306,7 @@ mod test {
     #[test]
     fn test_svc_patch_roundtrip() {
         let backend = Backend {
-            target: Target::kube_service("bar", "foo")
+            id: Target::kube_service("bar", "foo")
                 .unwrap()
                 .into_backend(8888),
             lb: LbPolicy::RoundRobin,

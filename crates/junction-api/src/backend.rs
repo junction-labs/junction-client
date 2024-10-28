@@ -1,7 +1,7 @@
 //! Backends are the logical target of network traffic. They have an identity and
 //! a load-balancing policy. See [Backend] to get started.
 
-use crate::BackendTarget;
+use crate::BackendId;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "typeinfo")]
@@ -16,7 +16,7 @@ use junction_typeinfo::TypeInfo;
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Backend {
     /// A unique description of what this backend is.
-    pub target: BackendTarget,
+    pub id: BackendId,
 
     /// How traffic to this target should be load balanced.
     pub lb: LbPolicy,
@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn test_backend_json_roundtrip() {
         let test_json = json!({
-            "target": { "name": "foo", "namespace": "bar", "port": 789 },
+            "id": { "name": "foo", "namespace": "bar", "port": 789 },
             "lb": {
                 "type": "Unspecified",
             },

@@ -5,18 +5,18 @@ import pytest
 
 
 @pytest.fixture
-def nginx() -> junction.config.TargetService:
+def nginx() -> junction.config.Target:
     return {"namespace": "default", "name": "nginx"}
 
 
 @pytest.fixture
-def nginx_staging() -> junction.config.TargetService:
+def nginx_staging() -> junction.config.Target:
     return {"namespace": "default", "name": "nginx-staging"}
 
 
 def test_check_basic_route(nginx):
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [{"backends": [{**nginx, "port": 80}]}],
     }
 
@@ -32,7 +32,7 @@ def test_check_basic_route(nginx):
 
 def test_check_basic_route_url_port(nginx):
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [{"backends": [{**nginx, "port": 8888}]}],
     }
 
@@ -48,7 +48,7 @@ def test_check_basic_route_url_port(nginx):
 
 def test_check_basic_route_with_port(nginx):
     route: config.Route = {
-        "target": {**nginx, "port": 1234},
+        "vhost": {**nginx, "port": 1234},
         "rules": [{"backends": [{**nginx, "port": 1234}]}],
     }
 
@@ -82,7 +82,7 @@ def test_check_retry_and_timeouts(nginx):
     }
 
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [
             {"backends": [{**nginx, "port": 80}], "retry": retry, "timeouts": timeouts}
         ],
@@ -101,7 +101,7 @@ def test_check_retry_and_timeouts(nginx):
 
 def test_check_redirect_route(nginx, nginx_staging):
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [{"backends": [{**nginx_staging, "port": 80}]}],
     }
 
@@ -117,7 +117,7 @@ def test_check_redirect_route(nginx, nginx_staging):
 
 def test_no_fallthrough(nginx, nginx_staging):
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],
@@ -141,7 +141,7 @@ def test_no_fallthrough(nginx, nginx_staging):
 
 def test_no_target(nginx, nginx_staging):
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],
@@ -170,7 +170,7 @@ def test_no_target(nginx, nginx_staging):
 )
 def test_check_headers_matches_default(headers, nginx, nginx_staging):
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],
@@ -194,7 +194,7 @@ def test_check_headers_matches_default(headers, nginx, nginx_staging):
 
 def test_check_headers_match(nginx, nginx_staging):
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],
@@ -220,7 +220,7 @@ def test_check_headers_match(nginx, nginx_staging):
 
 def test_check_path_matches_default(nginx, nginx_staging):
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],
@@ -245,7 +245,7 @@ def test_check_path_matches_default(nginx, nginx_staging):
 
 def test_check_path_matches(nginx, nginx_staging):
     route: config.Route = {
-        "target": nginx,
+        "vhost": nginx,
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],

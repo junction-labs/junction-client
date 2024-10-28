@@ -5,28 +5,37 @@
 
 use crate::{
     shared::{Duration, Fraction, Regex},
-    BackendTarget, Hostname, Name, RouteTarget, Target,
+    BackendId, Hostname, Name, Target, VirtualHost,
 };
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
 
-/// High level policy that describes how a request to a specific hostname should
-/// be routed.
+/// A Route is high level policy that describes how a request to a specific
+/// [virtual host][crate::VirtualHost] should be routed.
 ///
-/// Routes contain a target that describes the hostname to match and at least
-/// one [RouteRule]. When a [RouteRule] matches, it also describes where and how
-/// the traffic should be directed to a [Backend](crate::backend::Backend).
+/// After a Route is selected based on matching a request URL's Authority
+/// against a VirtualHost, the method, headers, and rest of the URL are used to
+/// match against the rules in this Route. When a rule matches, traffic is sent
+/// to one of the [Backend][crate::backend::Backend]s it contains.
+///
+/// A Route also contains high-level resilience features like retry policies and
+/// timeouts. Generally, anything you would usually configure in simple
+/// client-side code can be found in a Route.
+///
+/// For more detail on how matching works or backends are selected see the docs
+/// on [RouteRule] and [RouteMatch].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
-    /// The target for this route. The target determines the hostnames that map
-    /// to this route.
-    pub target: RouteTarget,
+    /// This route's virtual host. Traffic to this virutal host will use the
+    /// list of `rules` to route traffic.
+    pub vhost: VirtualHost,
 
-    /// The route rules that determine whether any URLs match.
+    /// The rules that determine whether a request matches and where traffic
+    /// should be routed.
     pub rules: Vec<RouteRule>,
 }
 
@@ -36,20 +45,17 @@ impl Route {
     ///
     /// If this RouteTarget has no port specified, `80` will be used for the
     /// backend.
-    pub fn passthrough_route(target: RouteTarget) -> Route {
+    pub fn passthrough_route(target: VirtualHost) -> Route {
         // FIXME: stop assuming 80.
-        let backend = target.with_default_port(80).as_backend().unwrap();
+        let backend = target.with_default_port(80).into_backend().unwrap();
         Route {
-            target,
+            vhost: target,
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
                     path: Some(PathMatch::empty_prefix()),
                     ..Default::default()
                 }],
-                backends: vec![WeightedTarget {
-                    target: backend,
-                    weight: 1,
-                }],
+                backends: vec![WeightedBackend { backend, weight: 1 }],
                 ..Default::default()
             }],
         }
@@ -130,19 +136,20 @@ pub struct RouteRule {
     #[doc(hidden)]
     pub filters: Vec<RouteFilter>,
 
-    //FIXME(persistence): enable session persistence as per the Gateway API #[serde(default,
-    //skip_serializing_if = "Option::is_none")] pub session_persistence: Option<SessionPersistence>,
+    // FIXME(persistence): enable session persistence as per the Gateway API #[serde(default,
+    // skip_serializing_if = "Option::is_none")]
+    // pub session_persistence: Option<SessionPersistence>,
 
     // The timeouts set on any request that matches route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeouts: Option<RouteTimeouts>,
 
-    /// How to retry any requests to this route.
+    /// How to retry requests. If not specified, requests are not retried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RouteRetry>,
 
     /// Where the traffic should route if this rule matches.
-    pub backends: Vec<WeightedTarget>,
+    pub backends: Vec<WeightedBackend>,
 }
 
 /// Defines timeouts that can be configured for a HTTP Route.
@@ -599,16 +606,23 @@ const fn default_weight() -> u32 {
     1
 }
 
+/// A [backend id][BackendId] and a weight.
+// TODO: gateway API also allows filters here under an extended support
+// condition we need to decide whether this is one where its simpler just to
+// drop it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct WeightedTarget {
+pub struct WeightedBackend {
+    /// The relative weight of this backend relative to any other backends in
+    /// [the list][RouteRule::backends].
+    ///
+    /// If not specified, defaults to `1`.
     #[serde(default = "default_weight")]
     pub weight: u32,
 
+    /// The [Backend][crate::backend::Backend] to route to.
     #[serde(flatten)]
-    pub target: BackendTarget,
-    //Todo: gateway API also allows filters here under an extended support condition we need to
-    // decide whether this is one where its simpler just to drop it.
+    pub backend: BackendId,
 }
 
 #[cfg(test)]
@@ -627,7 +641,7 @@ mod tests {
 
     #[test]
     fn test_passthrough_route() {
-        let route = Route::passthrough_route(RouteTarget {
+        let route = Route::passthrough_route(VirtualHost {
             target: Target::dns("example.com").unwrap(),
             port: None,
         });
@@ -711,10 +725,10 @@ mod tests {
     }
 
     #[test]
-    fn minimal_route() {
+    fn test_route_roundtrip() {
         assert_deserialize(
             json!({
-                "target": { "name": "foo", "namespace": "bar" },
+                "vhost": { "name": "foo", "namespace": "bar" },
                 "rules": [
                     {
                         "backends": [ { "name": "foo", "namespace": "bar", "port": 80 } ],
@@ -722,7 +736,7 @@ mod tests {
                 ]
             }),
             Route {
-                target: RouteTarget {
+                vhost: VirtualHost {
                     target: Target::kube_service("bar", "foo").unwrap(),
                     port: None,
                 },
@@ -731,8 +745,8 @@ mod tests {
                     filters: vec![],
                     timeouts: None,
                     retry: None,
-                    backends: vec![WeightedTarget {
-                        target: BackendTarget {
+                    backends: vec![WeightedBackend {
+                        backend: BackendId {
                             target: Target::kube_service("bar", "foo").unwrap(),
                             port: 80,
                         },
@@ -744,9 +758,9 @@ mod tests {
     }
 
     #[test]
-    fn minimal_route_missing_target() {
+    fn test_route_missing_vhost() {
         assert_deserialize_err::<Route>(json!({
-            "hostnames": ["foo.bar"],
+            "soemthing_else": ["foo.bar"],
             "rules": [
                 {
                     "matches": [],

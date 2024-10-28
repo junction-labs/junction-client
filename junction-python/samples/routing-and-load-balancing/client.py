@@ -39,7 +39,7 @@ def retry_sample(args):
     }
     default_routes: List[junction.config.Route] = [
         {
-            "target": default_target,
+            "vhost": default_target,
             "rules": [
                 {
                     "matches": [
@@ -83,9 +83,7 @@ def retry_sample(args):
 
 
 def path_match_sample(args):
-    print_header(
-        "Header Match - 50% of /feature-1/index sent to a different backend target"
-    )
+    print_header("Header Match - 50% of /feature-1/index sent to a different backend")
 
     default_target: junction.config.Target = {
         "name": "jct-http-server",
@@ -97,7 +95,7 @@ def path_match_sample(args):
     }
     default_routes: List[junction.config.Route] = [
         {
-            "target": default_target,
+            "vhost": default_target,
             "rules": [
                 {
                     "matches": [{"path": {"value": "/feature-1/index"}}],
@@ -162,7 +160,7 @@ def ring_hash_sample(args):
     }
     default_backends: List[junction.config.Backend] = [
         {
-            "target": default_target,
+            "id": default_target,
             "lb": {
                 "type": "RingHash",
                 "minRingSize": 1024,
@@ -202,7 +200,7 @@ def timeouts_sample(args):
     }
     default_routes: List[junction.config.Route] = [
         {
-            "target": default_target,
+            "vhost": default_target,
             "rules": [
                 {
                     "backends": [
@@ -246,7 +244,7 @@ def urllib3_sample(args):
     }
     default_routes: List[junction.config.Route] = [
         {
-            "target": default_target,
+            "vhost": default_target,
             "rules": [
                 {
                     "backends": [

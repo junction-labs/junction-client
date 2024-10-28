@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use junction_api::{BackendTarget, RouteTarget};
+use junction_api::{BackendId, VirtualHost};
 
 /// A `Result` alias where the `Err` case is `junction_core::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -13,41 +13,41 @@ pub enum Error {
     #[error("invalid route configuration")]
     InvalidRoutes {
         message: &'static str,
-        target: RouteTarget,
+        vhost: VirtualHost,
         rule: usize,
     },
 
     #[error("invalid backend configuration")]
     InvalidBackends {
         message: &'static str,
-        target: BackendTarget,
+        backend: BackendId,
     },
 
     #[error(
-        "no routing info is available for any of the following targets: [{}]",
-        format_targets(.routes)
+        "no routing info is available for any of the following vhosts: [{}]",
+        format_vhosts(.routes)
     )]
-    NoRouteMatched { routes: Vec<RouteTarget> },
+    NoRouteMatched { routes: Vec<VirtualHost> },
 
     #[error("using route '{route}': no routing rules matched the request")]
-    NoRuleMatched { route: RouteTarget },
+    NoRuleMatched { route: VirtualHost },
 
-    #[error("{route}: backend not found: {backend}")]
+    #[error("{vhost}: backend not found: {backend}")]
     NoBackend {
-        route: RouteTarget,
+        vhost: VirtualHost,
         rule: usize,
-        backend: BackendTarget,
+        backend: BackendId,
     },
 
-    #[error("{backend}: no reachable endpoints")]
+    #[error("{vhost}: no reachable endpoints")]
     NoReachableEndpoints {
-        route: RouteTarget,
-        backend: BackendTarget,
+        vhost: VirtualHost,
+        backend: BackendId,
     },
 }
 
-fn format_targets(targets: &[RouteTarget]) -> String {
-    targets
+fn format_vhosts(vhosts: &[VirtualHost]) -> String {
+    vhosts
         .iter()
         .map(|a| a.to_string())
         .collect::<Vec<_>>()
