@@ -163,7 +163,7 @@ impl Client {
         let mut defaults: BTreeSet<_> = self.defaults.routes.keys().collect();
 
         for route in self.ads.cache.iter_routes() {
-            let route = if route.is_passthrough_route() {
+            let route = if is_inferred(&route) {
                 self.defaults
                     .routes
                     .get(&route.vhost)
@@ -300,6 +300,20 @@ impl Client {
     }
 }
 
+/// check whether or not a Route is inferred.
+///
+/// while moving to this, also checks is_passthrough_route so it works with
+/// older ezbakes
+pub(crate) fn is_inferred(route: &Route) -> bool {
+    let is_inferred: bool = route
+        .tags
+        .get(junction_api::http::tags::INFERRED)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(false);
+
+    is_inferred || route.is_passthrough_route()
+}
+
 /// Generate the list of Targets that this URL maps to, taking into account the
 /// URL's `port` and any search path rules. The list of targets will be returned
 /// in the most-to-least specific order.
@@ -369,7 +383,7 @@ where
     // the rule equivalence level and is so left for later.
     let matching_route = match (default_route, configured_route) {
         (Some(default_route), Some(configured_route)) => {
-            if configured_route.is_passthrough_route() {
+            if is_inferred(&configured_route) {
                 default_route.clone()
             } else {
                 configured_route
