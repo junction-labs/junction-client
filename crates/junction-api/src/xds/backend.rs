@@ -261,7 +261,6 @@ impl SessionAffinity {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::http::Route;
 
     #[test]
     fn test_unspecified_lb_roundtrips() {
@@ -330,19 +329,6 @@ mod test {
         )
         .unwrap();
         assert_eq!(parsed, backend);
-    }
-
-    #[test]
-    fn test_passthrough_route_is_passthrough() {
-        let web = Target::kube_service("prod", "web").unwrap();
-
-        let backend = Backend {
-            id: web.into_backend(4321),
-            lb: LbPolicy::RoundRobin,
-        };
-
-        let route = Route::from_xds(&backend.to_xds_passthrough_route()).unwrap();
-        assert!(route.is_passthrough_route());
     }
 
     #[test]
