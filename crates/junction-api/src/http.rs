@@ -80,31 +80,6 @@ impl Route {
             }],
         }
     }
-
-    #[doc(hidden)]
-    pub fn is_passthrough_route(&self) -> bool {
-        let rule = match &self.rules.as_slice() {
-            &[rule] => rule,
-            _ => return false,
-        };
-
-        let route_match = match &rule.matches.as_slice() {
-            &[route_match] => route_match,
-            _ => return false,
-        };
-
-        // one backend
-        rule.backends.len() == 1
-            // nothing else set
-            && rule.filters.is_empty()
-            && rule.timeouts.is_none()
-            && rule.retry.is_none()
-            // route_match is the empty path prefix match
-            && route_match == &RouteMatch {
-                path: Some(PathMatch::empty_prefix()),
-                ..Default::default()
-            }
-    }
 }
 
 /// Defines semantics for matching an HTTP request based on conditions (matches), processing it
@@ -658,15 +633,6 @@ mod tests {
         shared::Regex,
         Target,
     };
-
-    #[test]
-    fn test_passthrough_route() {
-        let route = Route::passthrough_route(VirtualHost {
-            target: Target::dns("example.com").unwrap(),
-            port: None,
-        });
-        assert!(route.is_passthrough_route())
-    }
 
     #[test]
     fn test_header_matcher() {

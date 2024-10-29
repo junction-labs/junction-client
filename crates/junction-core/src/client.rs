@@ -300,16 +300,10 @@ impl Client {
     }
 }
 
-/// check whether or not a Route is inferred.
-///
-/// while moving to this, also checks is_passthrough_route so it works with
-/// older ezbakes
-pub(crate) fn is_generated_route(route: &Route) -> bool {
-    let is_generated = route
+fn is_generated_route(route: &Route) -> bool {
+    route
         .tags
-        .contains_key(junction_api::http::tags::GENERATED_BY);
-
-    is_generated || route.is_passthrough_route()
+        .contains_key(junction_api::http::tags::GENERATED_BY)
 }
 
 /// Generate the list of Targets that this URL maps to, taking into account the
