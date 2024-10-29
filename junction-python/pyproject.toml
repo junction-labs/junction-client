@@ -12,3 +12,7 @@ build-backend = "maturin"
 
 [tool.ruff]
 exclude = ["*pb2.py", "*pb2_grpc.py"]
+
+[tool.maturin]
+include = [{ path = "LICENSE", format = "sdist" }]
+exclude = [{ path = "junction-python/samples", format = "sdist" }]
