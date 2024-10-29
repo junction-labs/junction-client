@@ -235,20 +235,16 @@ mod python {
 
     fn maturin_develop(sh: &Shell, venv: &str) -> anyhow::Result<()> {
         cmd!(
-        sh,
-        "{venv}/bin/maturin develop -m junction-python/Cargo.toml --extras=test --features extension-module"
-    )
-    .run()?;
+            sh,
+            "{venv}/bin/maturin develop -m junction-python/Cargo.toml --extras=test"
+        )
+        .run()?;
 
         Ok(())
     }
 
     fn maturin_build(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-        cmd!(
-            sh,
-            "{venv}/bin/maturin build -m junction-python/Cargo.toml --features extension-module"
-        )
-        .run()?;
+        cmd!(sh, "{venv}/bin/maturin build -m junction-python/Cargo.toml").run()?;
 
         Ok(())
     }
