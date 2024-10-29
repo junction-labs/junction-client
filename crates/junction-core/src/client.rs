@@ -8,6 +8,7 @@ use junction_api::{
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
     BackendId, Target, VirtualHost,
 };
+use rand::distributions::WeightedError;
 use std::time::Duration;
 use std::{collections::BTreeSet, sync::Arc};
 use std::{future::Future, str::FromStr};
@@ -343,8 +344,10 @@ pub struct ResolvedRoute {
     /// The resolved route.
     pub route: Arc<Route>,
 
-    /// The index of the rule that matched the request.
-    pub rule: usize,
+    /// The index of the rule that matched the request. This will be missing if
+    /// the matched route was the empty route, which trivially matches all
+    /// requests to its [VirtualHost].
+    pub rule: Option<usize>,
 
     /// The backend selected as part of route resolution.
     pub backend: BackendId,
@@ -386,6 +389,21 @@ where
         _ => return Err(crate::Error::NoRouteMatched { routes: targets }),
     };
 
+    // if this is the trivial route, match it immediately and return
+    if matching_route.rules.is_empty() {
+        let backend = matching_route
+            .vhost
+            .with_default_port(request.url.default_port())
+            .into_backend()
+            .unwrap();
+
+        return Ok(ResolvedRoute {
+            route: matching_route,
+            rule: None,
+            backend,
+        });
+    }
+
     // if we got here, we have resolved to a list of routes
     let Some((matching_rule_idx, matching_rule)) = find_matching_rule(
         &matching_route,
@@ -399,20 +417,30 @@ where
     };
 
     // pick a target at random from the list, respecting weights.
-    let backend = &crate::rand::with_thread_rng(|rng| {
+    //
+    // if the list of backends is empty, allow falling through to the Route's
+    // vhost by using either the vhost port or the request port.
+    let weighted_backend = &crate::rand::with_thread_rng(|rng| {
         matching_rule.backends.choose_weighted(rng, |wc| wc.weight)
     });
-    let Ok(backend) = backend.map(|w| w.backend.clone()) else {
-        return Err(crate::Error::InvalidRoutes {
-            message: "matched rule has no backends",
-            vhost: matching_route.vhost.clone(),
-            rule: matching_rule_idx,
-        });
+    let backend = match weighted_backend {
+        Ok(wb) => wb.backend.clone(),
+        Err(WeightedError::NoItem) => matching_route
+            .vhost
+            .with_default_port(request.url.default_port())
+            .into_backend()
+            .unwrap(),
+        Err(_) => {
+            return Err(crate::Error::InvalidRoutes {
+                message: "backends weights are invalid: total weights must be greater than zero",
+                vhost: matching_route.vhost.clone(),
+                rule: matching_rule_idx,
+            })
+        }
     };
-
     Ok(ResolvedRoute {
         route: matching_route.clone(),
-        rule: matching_rule_idx,
+        rule: Some(matching_rule_idx),
         backend,
     })
 }
@@ -469,11 +497,15 @@ fn resolve_endpoint(
         });
     };
 
-    let resolved_rule = &resolved.route.rules[resolved.rule];
-    let timeouts = resolved_rule.timeouts.clone();
-    let retry = resolved_rule.retry.clone();
-
     let url = request.url.clone();
+    let (timeouts, retry) = match resolved.rule {
+        Some(idx) => {
+            let rule = &resolved.route.rules[idx];
+            (rule.timeouts.clone(), rule.retry.clone())
+        }
+        None => (None, None),
+    };
+
     Ok(vec![crate::Endpoint {
         url,
         timeouts,
@@ -594,7 +626,7 @@ mod test {
     }
 
     #[test]
-    fn test_resolve_route_no_backends() {
+    fn test_resolve_route_no_rules() {
         let route = Route {
             vhost: Target::dns("example.com").unwrap().into_vhost(None),
             tags: Default::default(),
@@ -609,12 +641,56 @@ mod test {
             &defaults,
             HttpRequest {
                 method: &http::Method::GET,
-                url: &Url::from_str("http://example.com/users/123").unwrap(),
+                url: &Url::from_str("http://example.com:3214/users/123").unwrap(),
                 headers: &http::HeaderMap::default(),
             },
             |_| {},
-        );
-        assert!(resolved.is_err())
+        )
+        .unwrap();
+        assert_eq!(resolved.rule, None);
+        assert_eq!(
+            resolved.backend,
+            Target::dns("example.com").unwrap().into_backend(3214)
+        )
+    }
+
+    #[test]
+    fn test_resolve_route_no_backends() {
+        let route = Route {
+            vhost: Target::dns("example.com").unwrap().into_vhost(None),
+            tags: Default::default(),
+            rules: vec![RouteRule {
+                matches: vec![RouteMatch {
+                    path: Some(PathMatch::Prefix {
+                        value: "".to_string(),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+
+        let routes = StaticConfig::new(vec![route], vec![]);
+        let defaults = StaticConfig::default();
+
+        for port in [80, 7887] {
+            let resolved = resolve_routes(
+                &routes,
+                &defaults,
+                HttpRequest {
+                    method: &http::Method::GET,
+                    url: &Url::from_str(&format!("http://example.com:{port}/users/123")).unwrap(),
+                    headers: &http::HeaderMap::default(),
+                },
+                |_| {},
+            )
+            .unwrap();
+
+            assert_eq!(
+                resolved.backend,
+                Target::dns("example.com").unwrap().into_backend(port)
+            )
+        }
     }
 
     #[test]
@@ -668,7 +744,7 @@ mod test {
         )
         .unwrap();
         // should match the fallthrough rule
-        assert_eq!(resolved.rule, 1);
+        assert_eq!(resolved.rule, Some(1));
         assert_eq!(resolved.backend, backend_two);
 
         let resolved = resolve_routes(
@@ -684,7 +760,9 @@ mod test {
         .unwrap();
         // should match the first rule, with the path match
         assert_eq!(resolved.backend, backend_one);
-        assert!(!resolved.route.rules[resolved.rule].matches.is_empty());
+        assert!(!resolved.route.rules[resolved.rule.unwrap()]
+            .matches
+            .is_empty());
 
         let resolved = resolve_routes(
             &routes,
@@ -698,7 +776,7 @@ mod test {
         )
         .unwrap();
         // should match the first rule, with the path match
-        assert_eq!(resolved.rule, 0);
+        assert_eq!(resolved.rule, Some(0));
         assert_eq!(resolved.backend, backend_one);
     }
 
@@ -770,7 +848,7 @@ mod test {
             )
             .unwrap();
             // should match the fallthrough rule
-            assert_eq!(resolved.rule, 1);
+            assert_eq!(resolved.rule, Some(1));
             assert_eq!(resolved.backend, backend_two);
         }
 
@@ -795,7 +873,7 @@ mod test {
             // should match one of the query matches
             assert_eq!(
                 (resolved.rule, &resolved.backend),
-                (0, &backend_one),
+                (Some(0), &backend_one),
                 "should match the first rule: {url}"
             );
         }
