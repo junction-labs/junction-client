@@ -55,6 +55,7 @@ pub struct Route {
 
     /// The rules that determine whether a request matches and where traffic
     /// should be routed.
+    #[serde(default)]
     pub rules: Vec<RouteRule>,
 }
 
@@ -65,8 +66,6 @@ impl Route {
     /// If this RouteTarget has no port specified, `80` will be used for the
     /// backend.
     pub fn passthrough_route(target: VirtualHost) -> Route {
-        // FIXME: stop assuming 80.
-        let backend = target.with_default_port(80).into_backend().unwrap();
         Route {
             vhost: target,
             tags: Default::default(),
@@ -75,7 +74,6 @@ impl Route {
                     path: Some(PathMatch::empty_prefix()),
                     ..Default::default()
                 }],
-                backends: vec![WeightedBackend { backend, weight: 1 }],
                 ..Default::default()
             }],
         }
@@ -144,6 +142,11 @@ pub struct RouteRule {
     pub retry: Option<RouteRetry>,
 
     /// Where the traffic should route if this rule matches.
+    ///
+    /// If no backends are specified, traffic is sent to the VirtualHost this
+    /// route was defined with, using the request's port to fill in any
+    /// defaults.
+    #[serde(default)]
     pub backends: Vec<WeightedBackend>,
 }
 

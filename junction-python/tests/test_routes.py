@@ -71,6 +71,59 @@ def test_check_basic_route_with_port(nginx):
     assert matched_backend == {**nginx, "port": 1234}
 
 
+def test_check_empty_route(nginx):
+    route: config.Route = {"vhost": nginx}
+
+    (matching_route, matching_rule_idx, backend) = junction.check_route(
+        [route],
+        "GET",
+        "http://nginx.default.svc.cluster.local:1234",
+        {},
+    )
+
+    assert matching_rule_idx is None
+    assert {**nginx, "port": 1234} == backend
+
+
+def test_check_empty_rules(nginx, nginx_staging):
+    route: config.Route = {
+        "vhost": nginx,
+        "rules": [
+            # /users hits staging
+            {
+                "matches": [{"path": {"value": "/users"}}],
+                "backends": [{**nginx_staging, "port": 8910}],
+            },
+            # default to nginx
+            {
+                "retry": {
+                    "attempts": 3,
+                }
+            },
+        ],
+    }
+
+    (_, matching_rule_idx, backend) = junction.check_route(
+        [route],
+        "GET",
+        "http://nginx.default.svc.cluster.local:1234",
+        {},
+    )
+
+    assert matching_rule_idx == 1
+    assert {**nginx, "port": 1234} == backend
+
+    (_, matching_rule_idx, backend) = junction.check_route(
+        [route],
+        "GET",
+        "http://nginx.default.svc.cluster.local:1234/users",
+        {},
+    )
+
+    assert matching_rule_idx == 0
+    assert {**nginx_staging, "port": 8910} == backend
+
+
 def test_check_retry_and_timeouts(nginx):
     retry: config.RouteRetry = {
         "attempts": 32,

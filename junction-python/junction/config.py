@@ -263,7 +263,11 @@ class RouteRule(typing.TypedDict):
     """How to retry requests. If not specified, requests are not retried."""
 
     backends: typing.List[WeightedBackend]
-    """Where the traffic should route if this rule matches."""
+    """Where the traffic should route if this rule matches.
+
+    If no backends are specified, traffic is sent to the VirtualHost this
+    route was defined with, using the request's port to fill in any
+    defaults."""
 
 
 class Route(typing.TypedDict):

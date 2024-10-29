@@ -44,7 +44,7 @@ impl Route {
     pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, Error> {
         // try to parse the target as a backend name in case it's a passthrough
         // route, and then try parsing it as a regular target.
-        let vhost = BackendId::from_passthrough_route_name(&xds.name)
+        let route_vhost = BackendId::from_passthrough_route_name(&xds.name)
             .map(BackendId::into_vhost)
             .or_else(|_| VirtualHost::from_str(&xds.name))
             .with_field("name")?;
@@ -52,7 +52,7 @@ impl Route {
         let tags = tags_from_xds(&xds.metadata)?;
 
         let mut rules = vec![];
-        for (vhost_idx, vhost) in xds.virtual_hosts.iter().enumerate() {
+        for (idx, vhost) in xds.virtual_hosts.iter().enumerate() {
             let actions_and_matches = vhost.routes.iter().enumerate().map(|(route_idx, route)| {
                 (route.action.as_ref(), (route_idx, route.r#match.as_ref()))
             });
@@ -67,21 +67,29 @@ impl Route {
                 let Some(action) = &action else {
                     return Err(Error::new_static("route has no route action"))
                         .with_field_index("routes", action_idx)
-                        .with_field_index("virtual_hosts", vhost_idx);
+                        .with_field_index("virtual_hosts", idx);
                 };
 
                 rules.push(
-                    RouteRule::from_xds_action_matches(action, &matches)
-                        .with_field_index("virtual_hosts", vhost_idx)?,
+                    RouteRule::from_xds_action_matches(&route_vhost, action, &matches)
+                        .with_field_index("virtual_hosts", idx)?,
                 );
             }
         }
 
-        Ok(Route { vhost, tags, rules })
+        Ok(Route {
+            vhost: route_vhost,
+            tags,
+            rules,
+        })
     }
 
     pub fn to_xds(&self) -> xds_route::RouteConfiguration {
-        let routes = self.rules.iter().flat_map(RouteRule::to_xds).collect();
+        let routes = self
+            .rules
+            .iter()
+            .flat_map(|rule| rule.to_xds(&self.vhost))
+            .collect();
         let metadata = tags_to_xds(&self.tags);
         let virtual_hosts = vec![xds_route::VirtualHost {
             domains: vec!["*".to_string()],
@@ -151,6 +159,7 @@ fn tags_from_xds(metadata: &Option<xds_core::Metadata>) -> Result<BTreeMap<Strin
 
 impl RouteRule {
     fn from_xds_action_matches(
+        route_vhost: &VirtualHost,
         action: &xds_route::route::Action,
         route_matches: &[(usize, Option<&xds_route::RouteMatch>)],
     ) -> Result<Self, Error> {
@@ -173,7 +182,7 @@ impl RouteRule {
         let retry = action.retry_policy.as_ref().map(RouteRetry::from_xds);
         // cluster_specifier is a oneof field, so let WeightedTarget specify the
         // field names in errors.
-        let backends = WeightedBackend::from_xds(action.cluster_specifier.as_ref())?;
+        let backends = WeightedBackend::from_xds(route_vhost, action.cluster_specifier.as_ref())?;
 
         Ok(RouteRule {
             matches,
@@ -184,7 +193,7 @@ impl RouteRule {
         })
     }
 
-    pub fn to_xds(&self) -> Vec<xds_route::Route> {
+    pub fn to_xds(&self, route_vhost: &VirtualHost) -> Vec<xds_route::Route> {
         // retry policy
         let mut retry_policy = self.retry.as_ref().map(RouteRetry::to_xds);
 
@@ -210,7 +219,7 @@ impl RouteRule {
         // TODO: when we allow backends to be omitted and inferred from the
         // RouteTarget, this will have to be converted into an actual
         // RouteAction instead of None.
-        let cluster_specifier = WeightedBackend::to_xds(&self.backends);
+        let cluster_specifier = WeightedBackend::to_xds(route_vhost, &self.backends);
 
         // tie it all together into a route action that we can use for each match
         let route_action = xds_route::route::Action::Route(xds_route::RouteAction {
@@ -615,9 +624,14 @@ where
 }
 
 impl WeightedBackend {
-    pub(crate) fn to_xds(targets: &[Self]) -> Option<xds_route::route_action::ClusterSpecifier> {
+    pub(crate) fn to_xds(
+        route_vhost: &VirtualHost,
+        targets: &[Self],
+    ) -> Option<xds_route::route_action::ClusterSpecifier> {
         match targets {
-            [] => None,
+            [] => Some(xds_route::route_action::ClusterSpecifier::Cluster(
+                route_vhost.name(),
+            )),
             [wt] => Some(xds_route::route_action::ClusterSpecifier::Cluster(
                 wt.backend.name(),
             )),
@@ -642,16 +656,25 @@ impl WeightedBackend {
     }
 
     pub(crate) fn from_xds(
+        route_vhost: &VirtualHost,
         xds: Option<&xds_route::route_action::ClusterSpecifier>,
     ) -> Result<Vec<Self>, Error> {
-        // TODO: eventually will need to match a RouteTarget here and use that
-        // to mark the route being parsed as a passthrough route. for now this
-        // can just be BackendTarget::from_name
         match xds {
-            Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => Ok(vec![Self {
-                backend: BackendId::from_str(name).with_field("cluster")?,
-                weight: 1,
-            }]),
+            Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => {
+                // try to parse the Cluster name as a BackendId with a port.
+                //
+                // if that fails, try to parse it as a vhost (without a port)
+                // and compare it to the RouteConfiguration's vhost. if it's the
+                // same, we're okay to return no backends.
+                let backend_err = match BackendId::from_str(name).with_field("cluster") {
+                    Ok(backend) => return Ok(vec![Self { backend, weight: 1 }]),
+                    Err(e) => e,
+                };
+                match VirtualHost::from_str(name) {
+                    Ok(vhost) if &vhost == route_vhost => Ok(vec![]),
+                    _ => Err(backend_err),
+                }
+            }
             Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(
                 weighted_clusters,
             )) => {
@@ -729,20 +752,59 @@ mod test {
             }],
         };
 
-        let mut converted = Route::from_xds(&original.to_xds()).unwrap();
-        let converted_matches = std::mem::take(&mut converted.rules[0].matches);
-        assert_eq!(
-            converted_matches,
-            vec![RouteMatch {
-                path: Some(PathMatch::empty_prefix()),
+        let round_tripped = Route::from_xds(&original.to_xds()).unwrap();
+        let expected = Route {
+            vhost: VirtualHost {
+                target: web.clone(),
+                port: None,
+            },
+            tags: Default::default(),
+            rules: vec![RouteRule {
+                matches: vec![RouteMatch {
+                    path: Some(PathMatch::empty_prefix()),
+                    ..Default::default()
+                }],
+                backends: vec![WeightedBackend {
+                    weight: 1,
+                    backend: BackendId {
+                        target: web.clone(),
+                        port: 80,
+                    },
+                }],
                 ..Default::default()
             }],
-            "match should be the empty prefix match",
-        );
-        assert_eq!(
-            converted, original,
-            "should be equal after removing matches"
-        );
+        };
+        assert_eq!(round_tripped, expected)
+    }
+
+    #[test]
+    fn test_passthrough_route() {
+        let web = Target::kube_service("prod", "web").unwrap();
+
+        let original = Route {
+            vhost: web.clone().into_vhost(None),
+            tags: Default::default(),
+            rules: vec![RouteRule {
+                ..Default::default()
+            }],
+        };
+
+        let round_tripped = Route::from_xds(&original.to_xds()).unwrap();
+        let expected = Route {
+            vhost: VirtualHost {
+                target: web.clone(),
+                port: None,
+            },
+            tags: Default::default(),
+            rules: vec![RouteRule {
+                matches: vec![RouteMatch {
+                    path: Some(PathMatch::empty_prefix()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        assert_eq!(round_tripped, expected)
     }
 
     #[test]

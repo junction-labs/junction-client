@@ -725,6 +725,39 @@ spec:
     }
 
     #[test]
+    fn test_passsthrough_route() {
+        let kube_route = HTTPRoute {
+            metadata: ObjectMeta {
+                namespace: Some("prod".to_string()),
+                name: Some("web".to_string()),
+                ..Default::default()
+            },
+            spec: HTTPRouteSpec {
+                parent_refs: Some(vec![HTTPRouteParentRefs {
+                    group: Some("".to_string()),
+                    kind: Some("Service".to_string()),
+                    namespace: Some("prod".to_string()),
+                    name: "cool-service".to_string(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            status: None,
+        };
+
+        assert_eq!(
+            crate::http::Route::from_gateway_httproute(&kube_route).unwrap(),
+            crate::http::Route {
+                vhost: Target::kube_service("prod", "cool-service")
+                    .unwrap()
+                    .into_vhost(None),
+                tags: Default::default(),
+                rules: vec![],
+            }
+        );
+    }
+
+    #[test]
     fn test_roundtrip() {
         let route = crate::http::Route {
             vhost: Target::kube_service("default", "example-gateway")

@@ -35,7 +35,7 @@ pub enum Error {
     #[error("{vhost}: backend not found: {backend}")]
     NoBackend {
         vhost: VirtualHost,
-        rule: usize,
+        rule: Option<usize>,
         backend: BackendId,
     },
 

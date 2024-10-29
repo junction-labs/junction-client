@@ -285,7 +285,7 @@ fn check_route(
     method: &str,
     url: &str,
     headers: &Bound<PyMapping>,
-) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
+) -> PyResult<(Py<PyAny>, Option<usize>, Py<PyAny>)> {
     let url: junction_core::Url = url
         .parse()
         .map_err(|e| PyValueError::new_err(format!("{e}")))?;
@@ -428,7 +428,7 @@ impl Junction {
         url: &str,
         headers: &Bound<PyMapping>,
         dynamic: bool,
-    ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
+    ) -> PyResult<(Py<PyAny>, Option<usize>, Py<PyAny>)> {
         let method = method_from_py(method)?;
         let url =
             junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
