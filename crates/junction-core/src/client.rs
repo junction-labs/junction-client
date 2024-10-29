@@ -163,7 +163,7 @@ impl Client {
         let mut defaults: BTreeSet<_> = self.defaults.routes.keys().collect();
 
         for route in self.ads.cache.iter_routes() {
-            let route = if is_inferred(&route) {
+            let route = if is_generated_route(&route) {
                 self.defaults
                     .routes
                     .get(&route.vhost)
@@ -304,14 +304,12 @@ impl Client {
 ///
 /// while moving to this, also checks is_passthrough_route so it works with
 /// older ezbakes
-pub(crate) fn is_inferred(route: &Route) -> bool {
-    let is_inferred: bool = route
+pub(crate) fn is_generated_route(route: &Route) -> bool {
+    let is_generated = route
         .tags
-        .get(junction_api::http::tags::INFERRED)
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(false);
+        .contains_key(junction_api::http::tags::GENERATED_BY);
 
-    is_inferred || route.is_passthrough_route()
+    is_generated || route.is_passthrough_route()
 }
 
 /// Generate the list of Targets that this URL maps to, taking into account the
@@ -383,7 +381,7 @@ where
     // the rule equivalence level and is so left for later.
     let matching_route = match (default_route, configured_route) {
         (Some(default_route), Some(configured_route)) => {
-            if is_inferred(&configured_route) {
+            if is_generated_route(&configured_route) {
                 default_route.clone()
             } else {
                 configured_route
