@@ -55,12 +55,6 @@ We're still early enough that we don't want to push packaged versions of our cod
 to PyPi and crates.io yet. For the meantime, we're going to ask you to build and
 install Junction and a simple control plane from source.
 
-### Rust and Python
-
-To get going on Junction, you need a working Rust toolchain and a system Python
-that you can use to bootstrap a virtualenv. If you don't have Rust installed,
-use [rustup](https://rustup.rs/) to get started.
-
 ### Kubernetes
 
 To do anything interesting with Junction, you currently need a running
@@ -78,18 +72,19 @@ instructions in [its README][ezbake-readme].
 
 ## Using Junction in Python
 
-To install `junction` into a virtualenv in this directory (`.venv`), run:
+Even though Junction is not installable through pypi, it's installable through
+our GitHub releases through `pip` or your favorite python dependency management
+tool. Head on over [to the `Python Tip` release] and find the appropriate
+package for your architecture, and use that URL as your package name.
+
+For example, to install `junction` on Apple Silicon with `pip`, run:
 
 ```shell
-cargo xtask python-build
+pip install --upgrade https://github.com/junction-labs/junction-client/releases/download/tip-python/junction-0.1.0-cp38-abi3-macosx_11_0_arm64.whl
 ```
 
-That's it! After you're done, run `source .venv/bin/activate` to activate your
-virtualenv and get started with `import junction`. Head back to the `README` and
-our samples and see what you can cook up.
-
-> **ADVANCED TIP**: To install `junction` into any other virtualenv, set your
-`VIRTUAL_ENV` environment variable and run `cargo xtask python-build`
+That's it! If you run into installation issues or would like to build from
+source, please let us know.
 
 ### Using Junction in Rust
 
