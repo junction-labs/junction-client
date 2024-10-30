@@ -20,11 +20,11 @@ for a simple server that lets you save Junction config using the
 
 ### Project status
 
-Junction is alpha software, developed in the open. We're
-still iterating rapidly on core code and APIs. At this stage you should expect
-occasional breaking changes as the library evolves. At the moment, Junction only
-supports talking to Kubernetes services, with support for routing to any
-existing DNS name coming very soon.
+Junction is alpha software, developed in the open. We're still iterating rapidly
+on core code and APIs. At this stage you should expect occasional breaking
+changes as the library evolves. At the moment, Junction only supports talking to
+Kubernetes services, with support for routing to any existing DNS name coming
+very soon.
 
 ### Features
 
