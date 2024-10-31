@@ -1,12 +1,53 @@
-//! Junction API Configuration.
+//! The Junction configuration API. This crate allows you to build configuration
+//! for a dynamic HTTP client and export it to a control plane or pass it
+//! directly to an in-process client. Junction configuration is expressable as
+//! plain Rust strucs, and can be serialized/deserialized with a [serde]
+//! compatible library.
 //!
-//! These types let you express routing and load balancing configuration as data
-//! structures. The `kube` and `xds` features of this crate let you convert
-//! Junction configuration to Kubernetes objects and xDS resources respectively.
+//! All of the configuration here should be correct by construction - if you can
+//! create a struct, it's valid Junction configuration. Different
+//! representations of the same configuration are possible, and clients and
+//! control planes may normalize your configuration differently, so when writing
+//! tests for your configuration be aware that it may be normalized while
+//! converting between different formats or data sources.
 //!
-//! Use this crate directly if you're looking to build and export configuration.
-//! Use the `junction-client` crate if you want to make requests and resolve
-//! addresses with Junction.
+//! # Core Concepts
+//!
+//! ## Targets
+//!
+//! The Junction API is built around the idea of a traffic [Target], a a unique
+//! identifier for a place to send traffic. Targets are logical; a Kubernetes
+//! Service target represents the entire service, running [anywhere in a
+//! multi-cluster deployment][ns-position], not an individual Pod or Node or
+//! Service object.
+//!
+//! [ns-position]: https://github.com/kubernetes/community/blob/master/sig-multicluster/namespace-sameness-position-statement.md
+//!
+//! ## Routes
+//!
+//! An HTTP [Route][crate::http::Route] is the client facing half of Junction,
+//! and contains most of the things you'd traditionally find in a hand-rolled
+//! HTTP client - timeouts, retries, URL rewriting and more.  The [http]
+//! module's documentation goes into detail on how and why to configure a Route.
+//!
+//! ## Backends
+//!
+//! A [Backend][crate::backend::Backend] is the Service oriented half of
+//! Junction configuration. Backends configuration gives you control over the
+//! things you'd normally configure in a reverse proxy or a traditional load
+//! balancer, like load balancing. See the [backend] module's documentation for
+//! more detail.
+//!
+//! # Crate Feature Flags
+//!
+//! The following feature flags are available:
+//!
+//! * The `kube` feature includes conversions from Junction configuration to and
+//!   from Kubernetes objects. This feature depends on the `kube` and
+//!   `k8s-openapi` crates. See the [kube] module docs for more detail.
+//!
+//! * The `xds` feature includes conversions from Junction configuration to and
+//!   from xDS types. This feature depends on the [xds-api][xds_api] crate.
 
 mod error;
 use std::{ops::Deref, str::FromStr};

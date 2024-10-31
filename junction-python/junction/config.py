@@ -76,13 +76,16 @@ class Fraction(typing.TypedDict):
 
 
 class WeightedBackend(typing.TypedDict):
-    """A [backend id][BackendId] and a weight."""
+    """The combination of a backend and a weight."""
 
     weight: int
     """The relative weight of this backend relative to any other backends in
     [the list][RouteRule::backends].
 
-    If not specified, defaults to `1`."""
+    If not specified, defaults to `1`.
+
+    An individual backend may have a weight of `0`, but specifying every
+    backend with `0` weight is an error."""
 
     hostname: str
     """A valid RFC1123 DNS domain name."""
@@ -103,36 +106,35 @@ class RouteTimeouts(typing.TypedDict):
     """Defines timeouts that can be configured for a HTTP Route."""
 
     request: Duration
-    """Specifies the maximum duration for a HTTP request. This timeout is intended to cover as
-    close to the whole request-response transaction as possible.
+    """Specifies the maximum duration for a HTTP request. This timeout is
+    intended to cover as close to the whole request-response transaction as
+    possible.
 
-    An entire client HTTP transaction may result in more than one call to destination backends,
-    for example, if automatic retries are supported.
-
-    Specifying a zero value such as "0s" is interpreted as no timeout."""
+    An entire client HTTP transaction may result in more than one call to
+    destination backends, for example, if automatic retries are configured."""
 
     backend_request: Duration
-    """Specifies a timeout for an individual request to a backend. This covers the time from when
-    the request first starts being sent to when the full response has been received from the
-    backend.
+    """Specifies a timeout for an individual request to a backend. This covers
+    the time from when the request first starts being sent to when the full
+    response has been received from the backend.
 
-    An entire client HTTP transaction may result in more than one call to the destination
-    backend, for example, if retries are configured.
-
-    Because the Request timeout encompasses the BackendRequest timeout, the value of
-    BackendRequest must be <= the value of Request timeout.
-
-    Specifying a zero value such as "0s" is interpreted as no timeout."""
+    Because the overall request timeout encompasses the backend request
+    timeout, the value of this timeout must be less than or equal to the
+    value of the overall timeout."""
 
 
 class RouteRetry(typing.TypedDict):
-    """Specifies a way of configuring client retry policy.
-
-    Modelled on the forthcoming [Gateway API type](https://gateway-api.sigs.k8s.io/geps/gep-1731/)."""
+    """Configure client retry policy."""
 
     codes: typing.List[int]
+    """The HTTP error codes that retries should be applied to."""
+
     attempts: int
+    """The total number of attempts to make when retrying this request."""
+
     backoff: Duration
+    """The amount of time to back off between requests during a series of
+    retries."""
 
 
 class HeaderValue(typing.TypedDict):
@@ -193,70 +195,45 @@ PathMatch = PathMatchPrefix | PathMatchRegularExpression | PathMatchExact
 
 
 class RouteMatch(typing.TypedDict):
-    """Defines the predicate used to match requests to a given action. Multiple match types are ANDed
-    together, i.e. the match will evaluate to true only if all conditions are satisfied.
+    """Defines the predicate used to match requests to a given action. Multiple
+    match types are ANDed together; the match will evaluate to true only if all
+    conditions are satisfied. For example, if a match specifies a `path` match
+    and two `query_params` matches, it will match only if the request's path
+    matches and both of the `query_params` are matches.
 
-    For example, the match below will match a HTTP request only if its path starts with `/foo` AND
-    it contains the `version: v1` header::
-
-     ```yaml
-     match:
-       path:
-         value: "/foo"
-       headers:
-       - name: "version"
-         value "v1"
-     ```"""
+    The default RouteMatch functions like a path match on the empty prefix,
+    which matches every request."""
 
     path: PathMatch
-    """Specifies a HTTP request path matcher. If this field is not specified, a default prefix
-    match on the "/" path is provided."""
+    """Specifies a HTTP request path matcher."""
 
     headers: typing.List[HeaderMatch]
-    """Specifies HTTP request header matchers. Multiple match values are ANDed together, meaning, a
-    request must match all the specified headers to select the route."""
+    """Specifies HTTP request header matchers. Multiple match values are ANDed
+    together, meaning, a request must match all the specified headers."""
 
     query_params: typing.List[QueryParamMatch]
-    """Specifies HTTP query parameter matchers. Multiple match values are ANDed together, meaning,
-    a request must match all the specified query parameters to select the route."""
+    """Specifies HTTP query parameter matchers. Multiple match values are ANDed
+    together, meaning, a request must match all the specified query
+    parameters."""
 
     method: str
-    """Specifies HTTP method matcher. When specified, this route will be matched only if the
-    request has the specified method."""
+    """Specifies HTTP method matcher. When specified, this route will be
+    matched only if the request has the specified method."""
 
 
 class RouteRule(typing.TypedDict):
-    """Defines semantics for matching an HTTP request based on conditions (matches), processing it
-    (filters), and forwarding the request to an API object (backendRefs)."""
+    """A RouteRule contains a set of matches that define which requests it applies
+    to, processing rules, and the final destination(s) for matching traffic.
+
+    See the Junction docs for a high level description of how Routes and
+    RouteRules behave."""
 
     matches: typing.List[RouteMatch]
-    """Defines conditions used for matching the rule against incoming HTTP requests. Each match is
-    independent, i.e. this rule will be matched if **any** one of the matches is satisfied.
+    """A list of match rules applied to an outgoing request.  Each match is
+    independent; this rule will be matched if **any** of the listed matches
+    is satsified.
 
-    For example, take the following matches configuration::
-
-     ```yaml
-     matches:
-     - path:
-         value: "/foo"
-       headers:
-       - name: "version"
-         value: "v2"
-     - path:
-         value: "/v2/foo"
-     ```
-
-    For a request to match against this rule, a request must satisfy EITHER of the two
-    conditions:
-
-    - path prefixed with `/foo` AND contains the header `version: v2`
-    - path prefix of `/v2/foo`
-
-    See the documentation for RouteMatch on how to specify multiple match conditions that should
-    be ANDed together.
-
-    If no matches are specified, the default is a prefix path match on "/", which has the effect
-    of matching every HTTP request."""
+    If no matches are specified, this Rule matches any outgoing request."""
 
     timeouts: RouteTimeouts
     retry: RouteRetry
@@ -271,24 +248,11 @@ class RouteRule(typing.TypedDict):
 
 
 class Route(typing.TypedDict):
-    """A Route is high level policy that describes how a request to a specific
-    [virtual host][crate::VirtualHost] should be routed.
-
-    After a Route is selected based on matching a request URL's Authority
-    against a VirtualHost, the method, headers, and rest of the URL are used to
-    match against the rules in this Route. When a rule matches, traffic is sent
-    to one of the [Backend][crate::backend::Backend]s it contains.
-
-    A Route also contains high-level resilience features like retry policies and
-    timeouts. Generally, anything you would usually configure in simple
-    client-side code can be found in a Route.
-
-    For more detail on how matching works or backends are selected see the docs
-    on [RouteRule] and [RouteMatch]."""
+    """A Route is a policy that describes how a request to a specific virtual
+    host should be routed."""
 
     vhost: VirtualHost
-    """This route's virtual host. Traffic to this virutal host will use the
-    list of `rules` to route traffic."""
+    """A virtual hostname that uniquely identifies this route."""
 
     tags: typing.Dict[str, str]
     """A list of arbitrary tags that can be added to a Route."""

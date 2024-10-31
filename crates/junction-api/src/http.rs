@@ -1,7 +1,133 @@
-//! HTTP routing configuration.
+//! HTTP [Route] configuration. [Route]s dynamically congfigure things you might
+//! put directly in client code like timeouts and retries, failure detection, or
+//! picking a different backend based on request data.
 //!
-//! A [Route] specifies the all of the top-level configuration for all HTTP
-//! traffic that matches a particular URL.
+//! # Routes and URLs
+//!
+//! [Route]s are uniquely identified by a [VirtualHost], which is the
+//! combination of a [Target] and an optional port. Every [VirtualHost] has a
+//! DNS hostname and port. When making an HTTP request a Route is selected by
+//! using the hostname and port the request URL as the [name of a
+//! VirtualHost][VirtualHost::name] and finding a matching route.
+//!
+//! Once a [Route] has been selected, each [rule][RouteRule] is applied to an
+//! entire request to find an appropriate match. See the next section for a
+//! high-level description of matching, and the documentation of
+//! [matches][RouteRule::matches] and [RouteMatch] for more detail.
+//!
+//! # Route Rules
+//!
+//! A [Route] contains zero or more [rules][RouteRule] that describe how to
+//! match a request. Each rule is made of up a set of
+//! [matches][RouteRule::matches], a set of [backends][RouteRule::backends] to
+//! send the request to once a match has been found, and policy on how to handle
+//! retries and failures. For example, the following `Route` uses a Kubernetes
+//! Service as a VirtualHost, matches all traffic to it, and splits it evenly
+//! between a DNS and a Service backend, while applying a simple retry policy:
+//!
+//! ```
+//! # use junction_api::*;
+//! # use junction_api::http::*;
+//! // an example route
+//! let route = Route {
+//!     vhost: Target::kube_service("prod", "example-svc").unwrap().into_vhost(None),
+//!     tags: Default::default(),
+//!     rules: vec![
+//!         RouteRule {
+//!             retry: Some(RouteRetry {
+//!                 codes: vec![500, 503],
+//!                 attempts: Some(3),
+//!                 backoff: Some(Duration::from_millis(500).unwrap()),
+//!             }),
+//!             backends: vec![
+//!                 WeightedBackend {
+//!                     weight: 1,
+//!                     backend: Target::dns("prod.old-thing.internal")
+//!                         .unwrap()
+//!                         .into_backend(1234),
+//!                 },
+//!                 WeightedBackend {
+//!                     weight: 1,
+//!                     backend: Target::kube_service("prod", "new-thing")
+//!                         .unwrap()
+//!                         .into_backend(8891),
+//!                 },
+//!             ],
+//!             ..Default::default()
+//!         }
+//!     ],
+//! };
+//! ```
+//!
+//! See the [RouteRule] documentation for all of your configuration options,
+//! and [RouteMatch] for different ways to match an incoming request.
+//!
+//! # Matching
+//!
+//! A `RouteRule`s is applied to an outgoing request if any of it's
+//! [matches][RouteRule::matches] matches a request. For example, a rule with
+//! the following matches:
+//!
+//! ```
+//! # use junction_api::*;
+//! # use junction_api::http::*;
+//! let matches = vec![
+//!     RouteMatch {
+//!         path: Some(PathMatch::Exact { value: "/foo".to_string() }),
+//!         headers: vec![
+//!             HeaderMatch::Exact { name: "version".to_string(), value: "v2".to_string() },
+//!         ],
+//!         ..Default::default()
+//!     },
+//!     RouteMatch {
+//!         path: Some(PathMatch::Prefix { value: "/v2/foo".to_string() }),
+//!         ..Default::default()
+//!     },
+//! ];
+//! ```
+//!
+//! would match a request with path `/v2/foo` OR a request with path `/foo` and
+//! the `version: v2` header set. Any request to `/foo` without that header set
+//! would not match.
+//!
+//! # Passthrough Routes
+//!
+//! A [RouteRule] with no backends is called a "passthrough rule". Instead of
+//! dead-ending traffic, it uses the Route's [VirtualHost] as a traffic target,
+//! convering it into a [BackendId] on the fly, using the port of the incoming
+//! request if the [VirtualHost] has no port specified. (see
+//! [VirtualHost::into_backend]).
+//!
+//! For example, given the following route will apply a retry policy to all
+//! requests to `http://example.internal` and use the request port to find
+//! a backend.
+//!
+//! ```
+//! # use junction_api::*;
+//! # use junction_api::http::*;
+//! let route = Route {
+//!     vhost: Target::dns("example.internal").unwrap().into_vhost(None),
+//!     tags: Default::default(),
+//!     rules: vec![
+//!         RouteRule {
+//!             retry: Some(RouteRetry {
+//!                 codes: vec![500, 503],
+//!                 attempts: Some(3),
+//!                 ..Default::default()
+//!             }),
+//!             ..Default::default()
+//!         }
+//!     ],
+//! };
+//! ```
+//!
+//! A request to `http://example.internal:8801` would get sent to a
+//! [backend][BackendId] with the port `8801` and a request to
+//! `http://example.internal:443` would get sent to a backend with port `:443`.
+//!
+//! A route with no rules is a more general case of a passthrough route; it's
+//! equivalent to specifying a single [RouteRule] with no backends that always
+//! matches.
 
 use std::collections::BTreeMap;
 
@@ -27,30 +153,18 @@ pub mod tags {
     pub const GENERATED_BY: &str = "junctionlabs.io/generated-by";
 }
 
-/// A Route is high level policy that describes how a request to a specific
-/// [virtual host][crate::VirtualHost] should be routed.
-///
-/// After a Route is selected based on matching a request URL's Authority
-/// against a VirtualHost, the method, headers, and rest of the URL are used to
-/// match against the rules in this Route. When a rule matches, traffic is sent
-/// to one of the [Backend][crate::backend::Backend]s it contains.
-///
-/// A Route also contains high-level resilience features like retry policies and
-/// timeouts. Generally, anything you would usually configure in simple
-/// client-side code can be found in a Route.
-///
-/// For more detail on how matching works or backends are selected see the docs
-/// on [RouteRule] and [RouteMatch].
+/// A Route is a policy that describes how a request to a specific virtual
+/// host should be routed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
-    /// This route's virtual host. Traffic to this virutal host will use the
-    /// list of `rules` to route traffic.
+    /// A virtual hostname that uniquely identifies this route.
     pub vhost: VirtualHost,
 
     /// A list of arbitrary tags that can be added to a Route.
     #[serde(default)]
+    // TODO: limit this a-la kube annotation keys/values.
     pub tags: BTreeMap<String, String>,
 
     /// The rules that determine whether a request matches and where traffic
@@ -80,39 +194,20 @@ impl Route {
     }
 }
 
-/// Defines semantics for matching an HTTP request based on conditions (matches), processing it
-/// (filters), and forwarding the request to an API object (backendRefs).
+/// A RouteRule contains a set of matches that define which requests it applies
+/// to, processing rules, and the final destination(s) for matching traffic.
+///
+/// See the Junction docs for a high level description of how Routes and
+/// RouteRules behave.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRule {
-    /// Defines conditions used for matching the rule against incoming HTTP requests. Each match is
-    /// independent, i.e. this rule will be matched if **any** one of the matches is satisfied.
+    /// A list of match rules applied to an outgoing request.  Each match is
+    /// independent; this rule will be matched if **any** of the listed matches
+    /// is satsified.
     ///
-    /// For example, take the following matches configuration::
-    ///
-    ///  ```yaml
-    ///  matches:
-    ///  - path:
-    ///      value: "/foo"
-    ///    headers:
-    ///    - name: "version"
-    ///      value: "v2"
-    ///  - path:
-    ///      value: "/v2/foo"
-    ///  ```
-    ///
-    /// For a request to match against this rule, a request must satisfy EITHER of the two
-    /// conditions:
-    ///
-    /// - path prefixed with `/foo` AND contains the header `version: v2`
-    /// - path prefix of `/v2/foo`
-    ///
-    /// See the documentation for RouteMatch on how to specify multiple match conditions that should
-    /// be ANDed together.
-    ///
-    /// If no matches are specified, the default is a prefix path match on "/", which has the effect
-    /// of matching every HTTP request.
+    /// If no matches are specified, this Rule matches any outgoing request.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matches: Vec<RouteMatch>,
 
@@ -120,11 +215,11 @@ pub struct RouteRule {
     ///
     /// The effects of ordering of multiple behaviors are currently unspecified.
     ///
-    /// Specifying the same filter multiple times is not supported unless explicitly indicated in
-    /// the filter.
+    /// Specifying the same filter multiple times is not supported unless
+    /// explicitly indicated in the filter.
     ///
-    /// All filters are compatible with each other except for the URLRewrite and RequestRedirect
-    /// filters, which may not be combined.
+    /// All filters are compatible with each other except for the URLRewrite and
+    /// RequestRedirect filters, which may not be combined.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[doc(hidden)]
     pub filters: Vec<RouteFilter>,
@@ -155,27 +250,22 @@ pub struct RouteRule {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteTimeouts {
-    /// Specifies the maximum duration for a HTTP request. This timeout is intended to cover as
-    /// close to the whole request-response transaction as possible.
+    /// Specifies the maximum duration for a HTTP request. This timeout is
+    /// intended to cover as close to the whole request-response transaction as
+    /// possible.
     ///
-    /// An entire client HTTP transaction may result in more than one call to destination backends,
-    /// for example, if automatic retries are supported.
-    ///
-    /// Specifying a zero value such as "0s" is interpreted as no timeout.
+    /// An entire client HTTP transaction may result in more than one call to
+    /// destination backends, for example, if automatic retries are configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<Duration>,
 
-    /// Specifies a timeout for an individual request to a backend. This covers the time from when
-    /// the request first starts being sent to when the full response has been received from the
-    /// backend.
+    /// Specifies a timeout for an individual request to a backend. This covers
+    /// the time from when the request first starts being sent to when the full
+    /// response has been received from the backend.
     ///
-    /// An entire client HTTP transaction may result in more than one call to the destination
-    /// backend, for example, if retries are configured.
-    ///
-    /// Because the Request timeout encompasses the BackendRequest timeout, the value of
-    /// BackendRequest must be <= the value of Request timeout.
-    ///
-    /// Specifying a zero value such as "0s" is interpreted as no timeout.
+    /// Because the overall request timeout encompasses the backend request
+    /// timeout, the value of this timeout must be less than or equal to the
+    /// value of the overall timeout.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -184,53 +274,41 @@ pub struct RouteTimeouts {
     pub backend_request: Option<Duration>,
 }
 
-/// Defines the predicate used to match requests to a given action. Multiple match types are ANDed
-/// together, i.e. the match will evaluate to true only if all conditions are satisfied.
+/// Defines the predicate used to match requests to a given action. Multiple
+/// match types are ANDed together; the match will evaluate to true only if all
+/// conditions are satisfied. For example, if a match specifies a `path` match
+/// and two `query_params` matches, it will match only if the request's path
+/// matches and both of the `query_params` are matches.
 ///
-/// For example, the match below will match a HTTP request only if its path starts with `/foo` AND
-/// it contains the `version: v1` header::
-///
-///  ```yaml
-///  match:
-///    path:
-///      value: "/foo"
-///    headers:
-///    - name: "version"
-///      value "v1"
-///  ```
+/// The default RouteMatch functions like a path match on the empty prefix,
+/// which matches every request.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteMatch {
-    /// Specifies a HTTP request path matcher. If this field is not specified, a default prefix
-    /// match on the "/" path is provided.
+    /// Specifies a HTTP request path matcher.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathMatch>,
 
-    /// Specifies HTTP request header matchers. Multiple match values are ANDed together, meaning, a
-    /// request must match all the specified headers to select the route.
+    /// Specifies HTTP request header matchers. Multiple match values are ANDed
+    /// together, meaning, a request must match all the specified headers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<HeaderMatch>,
 
-    /// Specifies HTTP query parameter matchers. Multiple match values are ANDed together, meaning,
-    /// a request must match all the specified query parameters to select the route.
+    /// Specifies HTTP query parameter matchers. Multiple match values are ANDed
+    /// together, meaning, a request must match all the specified query
+    /// parameters.
     #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "queryParams")]
     pub query_params: Vec<QueryParamMatch>,
 
-    /// Specifies HTTP method matcher. When specified, this route will be matched only if the
-    /// request has the specified method.
+    /// Specifies HTTP method matcher. When specified, this route will be
+    /// matched only if the request has the specified method.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<Method>,
 }
 
-/// Describes how to select a HTTP route by matching the HTTP request path.
-///
-/// The `type` specifies the semantics of how HTTP paths should be compared. Valid PathMatchType
-/// values are:
-///
-/// * "Exact"
-/// * "PathPrefix"
-/// * "RegularExpression"
+/// Describes how to select a HTTP route by matching the HTTP request path.  The
+/// `type` of a match specifies how HTTP paths should be compared.
 ///
 /// PathPrefix and Exact paths must be syntactically valid:
 /// - Must begin with the `/` character
@@ -270,20 +348,26 @@ impl PathMatch {
 ///
 /// Invalid values include:
 ///
-/// * ":method" - ":" is an invalid character. This means that HTTP/2 pseudo headers are not
-///   currently supported by this type.
+/// * ":method" - ":" is an invalid character. This means that HTTP/2 pseudo
+///    headers are not currently supported by this type.
+///
 /// * "/invalid" - "/" is an invalid character
+//
+// FIXME: newtype and validate this. probably also make this Bytes or SmolString
 pub type HeaderName = String;
 
 /// Describes how to select a HTTP route by matching HTTP request headers.
 ///
-/// `name` is the name of the HTTP Header to be matched. Name matching is case insensitive. (See
-/// <https://tools.ietf.org/html/rfc7230#section-3.2>).
+/// `name` is the name of the HTTP Header to be matched. Name matching is case
+/// insensitive. (See <https://tools.ietf.org/html/rfc7230#section-3.2>).
 ///
-/// If multiple entries specify equivalent header names, only the first entry with an equivalent
-/// name WILL be considered for a match. Subsequent entries with an equivalent header name WILL be
-/// ignored. Due to the case-insensitivity of header names, "foo" and "Foo" are considered
+/// If multiple entries specify equivalent header names, only the first entry
+/// with an equivalent name WILL be considered for a match. Subsequent entries
+/// with an equivalent header name WILL be ignored. Due to the
+/// case-insensitivity of header names, "foo" and "Foo" are considered
 /// equivalent.
+//
+// FIXME: actually do this only-the-first-entry matching thing
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 #[serde(tag = "type", deny_unknown_fields)]
@@ -351,9 +435,12 @@ impl QueryParamMatch {
 /// 7231](https://datatracker.ietf.org/doc/html/rfc7231#section-4) and [RFC
 /// 5789](https://datatracker.ietf.org/doc/html/rfc5789#section-2). The value is expected in upper
 /// case.
+//
+// FIXME: replace with http::Method
 pub type Method = String;
 
-/// Defines processing steps that must be completed during the request or response lifecycle.
+/// Defines processing steps that must be completed during the request or
+/// response lifecycle.
 //
 // TODO: This feels very gateway-ey and redundant to type out in config. Should we switch to
 // untagged here? Something else?
@@ -583,19 +670,23 @@ pub struct RequestMirrorFilter {
     pub backend: Target,
 }
 
-/// Specifies a way of configuring client retry policy.
-///
-/// Modelled on the forthcoming [Gateway API type](https://gateway-api.sigs.k8s.io/geps/gep-1731/).
+/// Configure client retry policy.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRetry {
+    /// The HTTP error codes that retries should be applied to.
+    //
+    // TODO: should this be http::StatusCode?
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codes: Vec<u32>,
 
+    /// The total number of attempts to make when retrying this request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempts: Option<u32>,
 
+    /// The amount of time to back off between requests during a series of
+    /// retries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backoff: Option<Duration>,
 }
@@ -604,7 +695,8 @@ const fn default_weight() -> u32 {
     1
 }
 
-/// A [backend id][BackendId] and a weight.
+/// The combination of a backend and a weight.
+//
 // TODO: gateway API also allows filters here under an extended support
 // condition we need to decide whether this is one where its simpler just to
 // drop it.
@@ -615,6 +707,9 @@ pub struct WeightedBackend {
     /// [the list][RouteRule::backends].
     ///
     /// If not specified, defaults to `1`.
+    ///
+    /// An individual backend may have a weight of `0`, but specifying every
+    /// backend with `0` weight is an error.
     #[serde(default = "default_weight")]
     pub weight: u32,
 
