@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use http::uri::{Authority, PathAndQuery, Scheme};
 
-use crate::{Error, Result};
+use crate::Error;
 
 /// An [http::Uri] that has an `http` or `https` scheme and a non-empty
 /// `authority`.
@@ -48,22 +48,22 @@ impl std::fmt::Display for Url {
 
 // FIXME: use some of the Bytes machinery to avoid copying input uris
 impl Url {
-    pub fn new(uri: http::Uri) -> Result<Self> {
+    pub fn new(uri: http::Uri) -> crate::Result<Self> {
         let uri = uri.into_parts();
 
         let Some(authority) = uri.authority else {
-            return Err(Error::InvalidUrl("missing hostname".into()));
+            return Err(Error::invalid_url("missing hostname"));
         };
         if !authority.as_str().starts_with(authority.host()) {
-            return Err(Error::InvalidUrl(
-                "url must not contain a username or password".into(),
+            return Err(Error::invalid_url(
+                "url must not contain a username or password",
             ));
         }
 
         let scheme = match uri.scheme.as_ref().map(|s| s.as_str()) {
             Some("http") | Some("https") => uri.scheme.unwrap(),
-            Some(_) => return Err(Error::InvalidUrl("unknown scheme".into())),
-            _ => return Err(Error::InvalidUrl("missing scheme".into())),
+            Some(_) => return Err(Error::invalid_url("unknown scheme")),
+            _ => return Err(Error::invalid_url("missing scheme")),
         };
         let path_and_query = uri
             .path_and_query
@@ -78,13 +78,10 @@ impl Url {
 }
 
 impl FromStr for Url {
-    type Err = crate::Error;
+    type Err = Error;
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let uri = http::Uri::from_str(s).map_err(|e| {
-            let message = e.to_string().into();
-            crate::Error::InvalidUrl(message)
-        })?;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let uri = http::Uri::from_str(s).map_err(|e| Error::into_invalid_url(e.to_string()))?;
 
         Self::new(uri)
     }
