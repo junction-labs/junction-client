@@ -1,7 +1,7 @@
 use crate::{
     load_balancer::BackendLb,
     xds::{self, AdsClient},
-    ConfigCache, Endpoint, StaticConfig,
+    ConfigCache, Endpoint, Error, StaticConfig,
 };
 use junction_api::{
     backend::Backend,
@@ -31,7 +31,7 @@ pub struct Client {
 // NOTE: we've largely been ignoring this and trying to make Route and Backend
 // correct-by-construction. the hook is still here as a reminder to check back
 // on whether this is true before we release a stable version.
-fn validate_defaults(_: &[Route], _: &[Backend]) -> Result<(), crate::Error> {
+fn validate_defaults(_: &[Route], _: &[Backend]) -> crate::Result<()> {
     Ok(())
 }
 
@@ -107,7 +107,7 @@ impl Client {
         self,
         default_routes: Vec<Route>,
         default_backends: Vec<Backend>,
-    ) -> Result<Client, crate::Error> {
+    ) -> crate::Result<Client> {
         validate_defaults(&default_routes, &default_backends)?;
         let defaults = StaticConfig::new(default_routes, default_backends);
         self.subscribe_to_defaults(&defaults);
@@ -290,7 +290,7 @@ impl Client {
         self.resolve(request)
     }
 
-    fn resolve(&self, request: HttpRequest<'_>) -> Result<Vec<crate::Endpoint>, crate::Error> {
+    fn resolve(&self, request: HttpRequest<'_>) -> crate::Result<Vec<crate::Endpoint>> {
         let resolved_route = self.resolve_routes(ConfigMode::Dynamic, request)?;
 
         self.ads
@@ -314,9 +314,9 @@ fn is_generated_route(route: &Route) -> bool {
 /// The URL's explicitly listed port or the default port for the URL's scheme
 /// will also be used to first specify a port-specific target before falling
 /// back to a port-less target.
-pub(crate) fn targets_for_url(url: &crate::Url) -> Result<Vec<VirtualHost>, crate::Error> {
+pub(crate) fn vhosts_for_url(url: &crate::Url) -> crate::Result<Vec<VirtualHost>> {
     let target =
-        Target::from_str(url.hostname()).map_err(|e| crate::Error::invalid_url(e.to_string()))?;
+        Target::from_str(url.hostname()).map_err(|e| Error::into_invalid_url(e.to_string()))?;
 
     Ok(vec![
         target.clone().into_vhost(Some(url.default_port())),
@@ -358,19 +358,19 @@ pub(crate) fn resolve_routes<F>(
     defaults: &impl ConfigCache,
     request: HttpRequest<'_>,
     subscribe: F,
-) -> Result<ResolvedRoute, crate::Error>
+) -> crate::Result<ResolvedRoute>
 where
     F: Fn(String),
 {
     use rand::seq::SliceRandom;
 
-    let targets = targets_for_url(request.url)?;
-    for target in &targets {
+    let vhosts = vhosts_for_url(request.url)?;
+    for target in &vhosts {
         subscribe(target.name());
     }
 
-    let default_route = defaults.get_route_with_fallbacks(&targets);
-    let configured_route = cache.get_route_with_fallbacks(&targets);
+    let default_route = defaults.get_route_with_fallbacks(&vhosts);
+    let configured_route = cache.get_route_with_fallbacks(&vhosts);
 
     // FIXME: for now, the default routes are only looked up if there is no
     // route coming from XDS. Whereas in reality we likely want to merge the
@@ -386,7 +386,7 @@ where
         }
         (None, Some(configured_route)) => configured_route,
         (Some(default_route), None) => default_route.clone(),
-        _ => return Err(crate::Error::NoRouteMatched { routes: targets }),
+        _ => return Err(Error::no_route_matched(vhosts)),
     };
 
     // if this is the trivial route, match it immediately and return
@@ -411,9 +411,7 @@ where
         request.url,
         request.headers,
     ) else {
-        return Err(crate::Error::NoRuleMatched {
-            route: matching_route.vhost.clone(),
-        });
+        return Err(Error::no_rule_matched(matching_route.vhost.clone()));
     };
 
     // pick a target at random from the list, respecting weights.
@@ -431,11 +429,11 @@ where
             .into_backend()
             .unwrap(),
         Err(_) => {
-            return Err(crate::Error::InvalidRoutes {
-                message: "backends weights are invalid: total weights must be greater than zero",
-                vhost: matching_route.vhost.clone(),
-                rule: matching_rule_idx,
-            })
+            return Err(Error::invalid_route(
+                "backends weights are invalid: total weights must be greater than zero",
+                matching_route.vhost.clone(),
+                matching_rule_idx,
+            ))
         }
     };
     Ok(ResolvedRoute {
@@ -450,7 +448,7 @@ fn resolve_endpoint(
     defaults: &impl ConfigCache,
     resolved: ResolvedRoute,
     request: HttpRequest<'_>,
-) -> Result<Vec<Endpoint>, crate::Error> {
+) -> crate::Result<Vec<Endpoint>> {
     let (backend, endpoints) = match cache.get_backend(&resolved.backend) {
         (Some(backend), Some(endpoints)) => {
             let lb = if backend.config.lb.is_unspecified() {
@@ -462,10 +460,10 @@ fn resolve_endpoint(
             (lb, endpoints)
         }
         (Some(backend), None) => {
-            return Err(crate::Error::NoReachableEndpoints {
-                vhost: resolved.route.vhost.clone(),
-                backend: backend.config.id.clone(),
-            })
+            return Err(Error::no_reachable_endpoints(
+                resolved.route.vhost.clone(),
+                backend.config.id.clone(),
+            ))
         }
         // FIXME: does this case even make sense?
         (None, Some(_)) => {
@@ -479,11 +477,11 @@ fn resolve_endpoint(
             // still need to check client defaults as its entirly possible
             // its a DNS address that xDS knows nothing about but we can
             // still route to.
-            return Err(crate::Error::NoBackend {
-                vhost: resolved.route.vhost.clone(),
-                rule: resolved.rule,
-                backend: resolved.backend,
-            });
+            return Err(Error::no_backend(
+                resolved.route.vhost.clone(),
+                resolved.rule,
+                resolved.backend,
+            ));
         }
     };
 
@@ -491,10 +489,10 @@ fn resolve_endpoint(
         .load_balancer
         .load_balance(request.url, request.headers, &endpoints);
     let Some(endpoint) = endpoint else {
-        return Err(crate::Error::NoReachableEndpoints {
-            vhost: resolved.route.vhost.clone(),
-            backend: resolved.backend,
-        });
+        return Err(Error::no_reachable_endpoints(
+            resolved.route.vhost.clone(),
+            resolved.backend,
+        ));
     };
 
     let url = request.url.clone();
