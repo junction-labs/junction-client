@@ -94,19 +94,19 @@ impl ClientStatusDiscoveryService for Server {
 ///
 /// There's no way on GenericXdsConfig to indicate that you've ACKed one version
 /// of a config but rejected another. Since xDS generally gets cranky when you
-/// specify a duplicate resource name, we're currently just only showing a
-/// single successful config and hiding any errors.
+/// specify a duplicate resource name, we're currently just only showing an error
+/// if there was any error at all.
 ///
 /// This is weird but so is xDS. There's a hidden field that describes the last
 /// error trying to apply this config that would do what we want, but it's hidden
-/// as not-implemented!
+/// as not-implemented, so not in our protobufs.
 ///
 /// Either figure out how to use the hidden field, or return MULTIPLE statuses for
 /// resources that have a valid and an invalid resource.
 fn to_generic_config(config: XdsConfig) -> GenericXdsConfig {
     let client_status = match (&config.xds, &config.last_error) {
-        (Some(_), _) => ClientResourceStatus::Nacked,
-        (None, Some(_)) => ClientResourceStatus::Nacked,
+        (_, Some(_)) => ClientResourceStatus::Nacked,
+        (Some(_), None) => ClientResourceStatus::Acked,
         _ => ClientResourceStatus::Unknown,
     };
 
