@@ -11,8 +11,8 @@ fn main() -> anyhow::Result<()> {
 
     match &args.command {
         // rust
-        Commands::Check { crates } => rust::cargo_cmd(&sh, "check", &[], crates),
-        Commands::Doc { crates, deps, ci } => rust::docs(&sh, crates, *deps, *ci),
+        Commands::CITest => rust::ci_test(&sh),
+        Commands::CIDoc => rust::ci_doc(&sh),
         Commands::CIClippy {
             crates,
             fix,
@@ -26,6 +26,7 @@ fn main() -> anyhow::Result<()> {
         } => python::build(&sh, &venv, maturin, !*skip_stubs),
         Commands::PythonLint { fix } => python::lint(&sh, &venv, *fix),
         Commands::PythonTest => python::test(&sh, &venv),
+        Commands::PythonDocs => python::docs(&sh, &venv),
     }
 }
 
@@ -51,14 +52,6 @@ enum MaturinOption {
 #[allow(clippy::enum_variant_names)]
 #[derive(Subcommand)]
 enum Commands {
-    /// Run `cargo check` for a crate or crates, with appropriate environment
-    /// variables set.
-    Check {
-        /// The crates to check.
-        #[clap(long, num_args=1.., default_value = "junction-api")]
-        crates: Vec<String>,
-    },
-
     /// Run `cargo clippy` with some extra lints, and deny all default warnings.
     CIClippy {
         /// The crates to check. Defaults to the workspace defaults.
@@ -76,22 +69,12 @@ enum Commands {
         allow_staged: bool,
     },
 
-    /// Run `cargo doc` for a crate or crates, appropriate environment
-    /// variables set.
-    Doc {
-        /// The crates to run rustdoc for.
-        #[clap(long, num_args=1.., default_value = "junction-api")]
-        crates: Vec<String>,
+    /// Run tests for all core crates with appropriate features enabled.
+    CITest,
 
-        /// Run docs for all deps. By default, `doc` runs `cargo doc --no-deps`.
-        #[clap(long)]
-        deps: bool,
-
-        /// When set, run as a CI check to make sure that docs are valid and
-        /// will render correctly on docsrs.
-        #[clap(long)]
-        ci: bool,
-    },
+    /// Run `cargo doc` for junction-core and junction-api with the appropriate
+    /// features set for public docs.
+    CIDoc,
 
     /// Build and install junction-python in a .venv.
     PythonBuild {
@@ -118,44 +101,41 @@ enum Commands {
 
     /// Clean the current virtualenv and any Python caches.
     PythonClean,
+
+    /// Build Python docs with sphinx.
+    PythonDocs,
 }
 
 mod rust {
     use super::*;
 
-    const K8S_OPENAPI_VERSION: &'static str = "K8S_OPENAPI_ENABLED_VERSION";
+    pub(super) fn ci_test(sh: &Shell) -> anyhow::Result<()> {
+        #[rustfmt::skip]
+        let default_features = [
+            "-F", "junction-api/kube", "-F", "junction-api/xds",
+        ];
 
-    pub(super) fn cargo_cmd(
-        sh: &Shell,
-        cmd: &'static str,
-        args: &[&'static str],
-        crates: &[String],
-    ) -> anyhow::Result<()> {
-        let crate_args: Vec<_> = crates.iter().map(|name| ["-p", &name]).flatten().collect();
-
-        let _env = loud_env(sh, K8S_OPENAPI_VERSION, "1.29");
-        cmd!(sh, "cargo {cmd} {args...} {crate_args...}").run()?;
+        // relies on the fact that Cargo.toml has all crates in crates/* listed
+        // as default targets
+        cmd!(sh, "cargo test {default_features...}").run()?;
 
         Ok(())
     }
 
-    pub(super) fn docs(sh: &Shell, crates: &[String], deps: bool, ci: bool) -> anyhow::Result<()> {
-        let crate_args = crate_args(crates);
+    pub(super) fn ci_doc(sh: &Shell) -> anyhow::Result<()> {
+        let _rustdoc_flags = loud_env(
+            sh,
+            "RUSTDOCFLAGS",
+            "--cfg docsrs -D warnings --allow=rustdoc::redundant-explicit-links",
+        );
 
-        let _k8s_version = loud_env(sh, K8S_OPENAPI_VERSION, "1.29");
-        let _rustdoc_flags = if ci {
-            Some(loud_env(
-                sh,
-                "RUSTDOCFLAGS",
-                "--cfg docsrs -D warnings --allow=rustdoc::redundant-explicit-links",
-            ))
-        } else {
-            None
-        };
+        #[rustfmt::skip]
+        let crate_args = [
+            "-p", "junction-api", "-F", "junction-api/kube", "-F", "junction-api/xds",
+            "-p", "junction-core",
+        ];
 
-        let args = if deps { vec![] } else { vec!["--no-deps"] };
-
-        cmd!(sh, "cargo doc {args...} {crate_args...}").run()?;
+        cmd!(sh, "cargo doc --no-deps {crate_args...}").run()?;
 
         Ok(())
     }
@@ -168,7 +148,14 @@ mod rust {
     ) -> anyhow::Result<()> {
         let crate_args = crate_args(crates);
 
-        let mut options = vec!["--tests", "--all-features", "--no-deps"];
+        let mut options = vec![
+            "--tests",
+            "-F",
+            "junction-api/xds",
+            "-F",
+            "junction-api/kube",
+            "--no-deps",
+        ];
         if fix {
             options.push("--fix");
         }
@@ -283,6 +270,24 @@ mod python {
         Ok(())
     }
 
+    pub(super) fn docs(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        ensure_venv(sh, venv)?;
+
+        cmd!(
+            sh,
+            "{venv}/bin/uv pip install --upgrade --compile-bytecode -r junction-python/docs/requirements.txt"
+        ).run()?;
+
+        let _dir = sh.push_dir("junction-python/docs/");
+        cmd!(
+            sh,
+            "../../.venv/bin/sphinx-build -M html source build -j auto -W"
+        )
+        .run()?;
+
+        Ok(())
+    }
+
     pub(super) fn lint(sh: &Shell, venv: &str, fix: bool) -> anyhow::Result<()> {
         ensure_venv(sh, venv)?;
 
@@ -336,10 +341,10 @@ mod python {
     fn install_packages(sh: &Shell, venv: &str) -> anyhow::Result<()> {
         cmd!(sh, "{venv}/bin/python -m pip install --upgrade uv").run()?;
         cmd!(
-        sh,
-        "{venv}/bin/uv pip install --upgrade --compile-bytecode -r junction-python/requirements-dev.txt"
-    )
-    .run()?;
+            sh,
+            "{venv}/bin/uv pip install --upgrade --compile-bytecode -r junction-python/requirements-dev.txt"
+        )
+        .run()?;
 
         Ok(())
     }

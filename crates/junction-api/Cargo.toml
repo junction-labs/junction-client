@@ -41,8 +41,12 @@ typeinfo = ["dep:junction-typeinfo"]
 # enable xds conversion for core types.
 xds = ["dep:xds-api"]
 
-# enable kube conversion for core types. each of these flags sets a MINIMUM
-# version of the kubernetes API to be compatible with.
+# enable kube conversion for core types. this is a shorthand for the minimum
+# available kube_v1_* feature.
+kube = ["kube_v1_29"]
+
+# each of these flags sets a MINIMUM version of the kubernetes API to be compatible
+# with.
 #
 # because k8s-openapi does kube version selection with Cargo features, we're
 # priced in to doing it as well. doing it this way means downstream crates don't

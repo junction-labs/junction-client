@@ -45,7 +45,7 @@ jobs:
           toolchain: ${{ env.rust_stable }}
     - uses: Swatinem/rust-cache@v2
     - name: clippy
-      run: cargo clippy -p junction-python --tests --all-features --no-deps -- -D warnings -D clippy::dbg_macro
+      run: cargo xtask ci-clippy --crates junction-python
 
   rustfmt:
     runs-on: ubuntu-latest
