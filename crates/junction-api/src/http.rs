@@ -37,7 +37,7 @@
 //!             retry: Some(RouteRetry {
 //!                 codes: vec![500, 503],
 //!                 attempts: Some(3),
-//!                 backoff: Some(Duration::from_millis(500).unwrap()),
+//!                 backoff: Some(Duration::from_millis(500)),
 //!             }),
 //!             backends: vec![
 //!                 WeightedBackend {
@@ -763,7 +763,8 @@ mod tests {
         let test_json = json!({
             "codes":[ 1, 2 ],
             "attempts": 3,
-            "backoff": "1m"
+            // NOTE: serde will happily read an int here, but Duration serializes as a float
+            "backoff": 60.0,
         });
         let obj: RouteRetry = serde_json::from_value(test_json.clone()).unwrap();
         let output_json = serde_json::to_value(obj).unwrap();
@@ -800,7 +801,7 @@ mod tests {
                 { "weight": 1, "name": "timeout-svc", "namespace": "foo", "port": 80 }
             ],
             "timeouts": {
-                "request": "1s"
+                "request": 1.0,
             }
         });
         let obj: RouteRule = serde_json::from_value(test_json.clone()).unwrap();

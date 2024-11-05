@@ -925,7 +925,7 @@ mod test {
                         ..Default::default()
                     }],
                     timeouts: Some(RouteTimeouts {
-                        request: Some(Duration::from_secs(123).unwrap()),
+                        request: Some(Duration::from_secs(123)),
                         backend_request: None,
                     }),
                     backends: vec![WeightedBackend {
@@ -958,7 +958,7 @@ mod test {
                     retry: Some(RouteRetry {
                         codes: vec![500, 503],
                         attempts: Some(123),
-                        backoff: Some(Duration::from_secs(1).unwrap()),
+                        backoff: Some(Duration::from_secs(1)),
                     }),
                     backends: vec![WeightedBackend {
                         weight: 1,

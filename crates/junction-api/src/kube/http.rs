@@ -178,15 +178,7 @@ impl TryFrom<&HTTPRouteRulesRetry> for crate::http::RouteRetry {
             .map_err(|_| Error::new_static("invalid u32"))
             .with_field("attempts")?;
 
-        let backoff = retry
-            .backoff
-            .as_ref()
-            .map(|s| {
-                Duration::from_str(s)
-                    .map_err(Error::new)
-                    .with_field("backoff")
-            })
-            .transpose()?;
+        let backoff = parse_duration(&retry.backoff)?;
 
         Ok(crate::http::RouteRetry {
             codes,
@@ -194,16 +186,6 @@ impl TryFrom<&HTTPRouteRulesRetry> for crate::http::RouteRetry {
             backoff,
         })
     }
-}
-
-fn parse_duration(d: &Option<String>) -> Result<Option<crate::shared::Duration>, Error> {
-    d.as_ref()
-        .map(|d_str| {
-            d_str
-                .parse()
-                .map_err(|e| Error::new(format!("invalid duration: {e}")))
-        })
-        .transpose()
 }
 
 impl TryFrom<&HTTPRouteRulesMatches> for crate::http::RouteMatch {
@@ -461,9 +443,15 @@ impl TryFrom<&crate::http::RouteTimeouts> for HTTPRouteRulesTimeouts {
     type Error = Error;
 
     fn try_from(timeouts: &crate::http::RouteTimeouts) -> Result<HTTPRouteRulesTimeouts, Error> {
+        let request = timeouts.request.map(serialize_duration).transpose()?;
+        let backend_request = timeouts
+            .backend_request
+            .map(serialize_duration)
+            .transpose()?;
+
         Ok(HTTPRouteRulesTimeouts {
-            backend_request: timeouts.backend_request.map(|d| d.to_string()),
-            request: timeouts.request.map(|d| d.to_string()),
+            backend_request,
+            request,
         })
     }
 }
@@ -473,7 +461,7 @@ impl TryFrom<&crate::http::RouteRetry> for HTTPRouteRulesRetry {
 
     fn try_from(retry: &crate::http::RouteRetry) -> Result<Self, Self::Error> {
         let attempts = retry.attempts.map(|n| n as i64);
-        let backoff = retry.backoff.map(|d| d.to_string());
+        let backoff = retry.backoff.map(serialize_duration).transpose()?;
         let codes = if retry.codes.is_empty() {
             None
         } else {
@@ -642,6 +630,33 @@ fn group_kind(target: &Target) -> (&'static str, &'static str) {
     }
 }
 
+fn parse_duration(d: &Option<String>) -> Result<Option<crate::shared::Duration>, Error> {
+    use gateway_api::duration::Duration as GatewayDuration;
+
+    let Some(d) = d else {
+        return Ok(None);
+    };
+
+    let kube_duration =
+        GatewayDuration::from_str(d).map_err(|e| Error::new(format!("invalid duration: {e}")))?;
+
+    let secs = kube_duration.as_secs();
+    let nanos = kube_duration.subsec_nanos();
+    Ok(Some(Duration::new(secs, nanos)))
+}
+
+fn serialize_duration(d: Duration) -> Result<String, Error> {
+    use gateway_api::duration::Duration as GatewayDuration;
+
+    let kube_duration = GatewayDuration::try_from(std::time::Duration::from(d)).map_err(|e| {
+        Error::new(format!(
+            "failed to convert a duration to a Gateway duration: {e}"
+        ))
+    })?;
+
+    Ok(kube_duration.to_string())
+}
+
 #[cfg(test)]
 mod test {
     use std::collections::BTreeMap;
@@ -672,7 +687,7 @@ spec:
       attempts: 3
       backoff: 1m2s3ms
     timeouts:
-      request: 1m2s3ms
+      request: 4m5s6ms
     backendRefs:
     - name: foo-svc
       namespace: prod
@@ -695,10 +710,10 @@ spec:
                 retry: Some(crate::http::RouteRetry {
                     codes: vec![],
                     attempts: Some(3),
-                    backoff: Some(Duration::from_str("1m2s3ms").unwrap()),
+                    backoff: Some(Duration::from_secs_f64(62.003)),
                 }),
                 timeouts: Some(crate::http::RouteTimeouts {
-                    request: Some(Duration::from_str("1m2s3ms").unwrap()),
+                    request: Some(Duration::from_secs_f64(245.006)),
                     backend_request: None,
                 }),
                 backends: vec![crate::http::WeightedBackend {
@@ -777,11 +792,11 @@ spec:
                 retry: Some(crate::http::RouteRetry {
                     codes: vec![500, 503],
                     attempts: Some(3),
-                    backoff: Some(Duration::from_secs(2).unwrap()),
+                    backoff: Some(Duration::from_secs(2)),
                 }),
                 timeouts: Some(crate::http::RouteTimeouts {
-                    request: Some(Duration::from_secs(2).unwrap()),
-                    backend_request: Some(Duration::from_secs(1).unwrap()),
+                    request: Some(Duration::from_secs(2)),
+                    backend_request: Some(Duration::from_secs(1)),
                 }),
                 backends: vec![crate::http::WeightedBackend {
                     weight: 1,

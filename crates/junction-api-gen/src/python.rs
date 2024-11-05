@@ -76,9 +76,7 @@ impl PyDef {
     fn duration() -> Self {
         PyDef::Union(PyUnion {
             name: "Duration",
-            doc: Some(
-                "A duration expressed as a number of seconds or a string like '1h30m27s42ms'",
-            ),
+            doc: Some("A duration expressed as a total number of seconds. Durations should never be negative."),
             types: vec![PyType::Str, PyType::Int, PyType::Float],
         })
     }
