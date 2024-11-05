@@ -5,7 +5,7 @@ import typing
 
 
 Duration = str | int | float
-"""A duration expressed as a number of seconds or a string like '1h30m27s42ms'"""
+"""A duration expressed as a total number of seconds. Durations should never be negative."""
 
 
 class TargetDns(typing.TypedDict):

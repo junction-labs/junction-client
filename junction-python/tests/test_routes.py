@@ -127,11 +127,11 @@ def test_check_empty_rules(nginx, nginx_staging):
 def test_check_retry_and_timeouts(nginx):
     retry: config.RouteRetry = {
         "attempts": 32,
-        "backoff": "200ms",
+        "backoff": 0.2,
         "codes": list(range(400, 499)),
     }
     timeouts: config.RouteTimeouts = {
-        "request": "100ms",
+        "request": 0.1,
     }
 
     route: config.Route = {

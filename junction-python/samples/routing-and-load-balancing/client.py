@@ -50,7 +50,9 @@ def retry_sample(args):
                         }
                     ],
                     "retry": junction.config.RouteRetry(
-                        codes=[502], attempts=2, backoff="1ms"
+                        codes=[502],
+                        attempts=2,
+                        backoff=0.001,
                     ),
                     "backends": [
                         {**feature_target, "port": 8008},
@@ -206,7 +208,7 @@ def timeouts_sample(args):
                     "backends": [
                         {**default_target, "port": 8008},
                     ],
-                    "timeouts": {"backend_request": "50ms"},
+                    "timeouts": {"backend_request": 0.05},
                 }
             ],
         }
@@ -250,7 +252,7 @@ def urllib3_sample(args):
                     "backends": [
                         {**default_target, "port": 8008},
                     ],
-                    "timeouts": {"backend_request": "50ms"},
+                    "timeouts": {"backend_request": 0.05},
                 }
             ],
         }
