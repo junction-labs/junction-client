@@ -63,7 +63,7 @@ pub use shared::{Duration, Fraction, Regex};
 #[cfg(feature = "xds")]
 mod xds;
 
-#[cfg(feature = "kube")]
+#[cfg(any(feature = "kube_v1_29", feature = "kube_v1_30", feature = "kube_v1_31"))]
 pub mod kube;
 
 #[cfg(feature = "typeinfo")]
