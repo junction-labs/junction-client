@@ -40,6 +40,15 @@ def retry_sample(args):
     default_routes: List[junction.config.Route] = [
         {
             "vhost": default_target,
+            "rate-limit": junction.config.RouteLimit(
+                interval=10,
+                refill_rate=10,
+                capacity=100,
+                bucket_by=[
+                    {"header": "X-User-Id"},
+                    {"query_param": "limited"},
+                ],
+            ),
             "rules": [
                 {
                     "matches": [
@@ -49,6 +58,14 @@ def retry_sample(args):
                             ]
                         }
                     ],
+                    "rate-limit": junction.config.RateLimit(
+                        bucket_by=[{
+                            "header": "X-User-Id",
+                        }],
+                        interval=10,
+                        refill_rate=10,
+                        capacity=100,
+                    ),
                     "retry": junction.config.RouteRetry(
                         codes=[502],
                         attempts=2,
