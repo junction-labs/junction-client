@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 [dependencies]
 http = { workspace = true }
 junction-core = { workspace = true }
-junction-api = { workspace = true }
+junction-api = { workspace = true, features = ["kube", "xds"] }
 k8s-openapi = { version = "0.23", features = ["v1_29"] }
 once_cell = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

@@ -40,6 +40,19 @@ impl Error {
         path_str(None, self.path.iter().rev())
     }
 
+    /// Create a new error with a static message.
+    pub(crate) fn new_static(message: &'static str) -> Self {
+        Self {
+            message: message.to_string(),
+            path: vec![],
+        }
+    }
+}
+
+// these are handy, but mostly used in xds/kube conversion. don't gate them
+// behind feature flags for now, just allow them to be unused.
+#[allow(unused)]
+impl Error {
     /// Create a new error with a message.
     pub(crate) fn new(message: String) -> Self {
         Self {
@@ -48,19 +61,13 @@ impl Error {
         }
     }
 
-    /// Create a new error with a static message.
-    pub(crate) fn new_static(message: &'static str) -> Self {
-        Self {
-            message: message.to_string(),
-            path: vec![],
-        }
-    }
-
+    /// Append a new field to this error's path.
     pub(crate) fn with_field(mut self, field: &'static str) -> Self {
         self.path.push(PathEntry::from(field));
         self
     }
 
+    /// Append a new field index to this error's path.
     pub(crate) fn with_index(mut self, index: usize) -> Self {
         self.path.push(PathEntry::Index(index));
         self
@@ -101,6 +108,11 @@ where
 ///
 /// This trait isn't meant to be implemented, but it's not explicitly sealed
 /// because it's only `pub(crate)`. Don't implement it!
+///
+/// This trait is mostly used in xds/kube conversions, but leave it available
+/// for now. It's not much code and may be helpful for identifying errors in
+/// routes etc.
+#[allow(unused)]
 pub(crate) trait ErrorContext<T>: Sized {
     fn with_field(self, field: &'static str) -> Result<T, Error>;
     fn with_index(self, index: usize) -> Result<T, Error>;

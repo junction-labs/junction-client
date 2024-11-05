@@ -30,7 +30,7 @@ tracing = { workspace = true }
 xds-api = { workspace = true, features = ["descriptor"] }
 xxhash-rust = { workspace = true }
 
-junction-api = { workspace = true }
+junction-api = { workspace = true, features = ["xds"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread"] }
