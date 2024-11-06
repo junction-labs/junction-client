@@ -413,24 +413,32 @@ impl QueryParamMatch {
         let (name, matcher) = match self {
             QueryParamMatch::RegularExpression { name, value } => {
                 let name = name.clone();
-                let matcher = MatchPattern::SafeRegex(regex_matcher(value));
+                let matcher = QueryParameterMatchSpecifier::StringMatch(StringMatcher {
+                    match_pattern: Some(MatchPattern::SafeRegex(regex_matcher(value))),
+                    ignore_case: false,
+                });
+
                 (name, matcher)
             }
             QueryParamMatch::Exact { name, value } => {
                 let name = name.clone();
-                let matcher = MatchPattern::Exact(value.to_string());
+                let matcher = QueryParameterMatchSpecifier::StringMatch(StringMatcher {
+                    match_pattern: Some(MatchPattern::Exact(value.to_string())),
+                    ignore_case: false,
+                });
+
+                (name, matcher)
+            }
+            QueryParamMatch::Present { name, value } => {
+                let name = name.clone();
+                let matcher = QueryParameterMatchSpecifier::PresentMatch(*value);
                 (name, matcher)
             }
         };
 
         xds_route::QueryParameterMatcher {
             name,
-            query_parameter_match_specifier: Some(QueryParameterMatchSpecifier::StringMatch(
-                StringMatcher {
-                    match_pattern: Some(matcher),
-                    ignore_case: false,
-                },
-            )),
+            query_parameter_match_specifier: Some(matcher),
         }
     }
 }
@@ -479,6 +487,13 @@ impl HeaderMatch {
                 name: name.clone(),
                 header_match_specifier: Some(
                     xds_route::header_matcher::HeaderMatchSpecifier::ExactMatch(value.to_string()),
+                ),
+                ..Default::default()
+            },
+            HeaderMatch::Present { name, value } => xds_route::HeaderMatcher {
+                name: name.clone(),
+                header_match_specifier: Some(
+                    xds_route::header_matcher::HeaderMatchSpecifier::PresentMatch(*value),
                 ),
                 ..Default::default()
             },

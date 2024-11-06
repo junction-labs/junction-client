@@ -379,6 +379,11 @@ pub enum HeaderMatch {
     )]
     RegularExpression { name: String, value: Regex },
 
+    Present {
+        name: String,
+        value: bool,
+    },
+
     #[serde(untagged)]
     Exact { name: String, value: String },
 }
@@ -388,6 +393,7 @@ impl HeaderMatch {
         match self {
             HeaderMatch::RegularExpression { name, .. } => name,
             HeaderMatch::Exact { name, .. } => name,
+            HeaderMatch::Present { name, .. } => name,
         }
     }
 
@@ -395,6 +401,7 @@ impl HeaderMatch {
         match self {
             HeaderMatch::RegularExpression { value, .. } => value.is_match(header_value),
             HeaderMatch::Exact { value, .. } => value == header_value,
+            HeaderMatch::Present { value, .. } => *value,
         }
     }
 }
@@ -409,10 +416,21 @@ pub enum QueryParamMatch {
         alias = "regular_expression",
         alias = "regularExpression"
     )]
-    RegularExpression { name: String, value: Regex },
+    RegularExpression {
+        name: String,
+        value: Regex,
+    },
+
+    Present {
+        name: String,
+        value: bool,
+    },
 
     #[serde(untagged)]
-    Exact { name: String, value: String },
+    Exact {
+        name: String,
+        value: String,
+    },
 }
 
 impl QueryParamMatch {
@@ -420,6 +438,7 @@ impl QueryParamMatch {
         match self {
             QueryParamMatch::RegularExpression { name, .. } => name,
             QueryParamMatch::Exact { name, .. } => name,
+            QueryParamMatch::Present { name, .. } => name,
         }
     }
 
@@ -427,6 +446,7 @@ impl QueryParamMatch {
         match self {
             QueryParamMatch::RegularExpression { value, .. } => value.is_match(param_value),
             QueryParamMatch::Exact { value, .. } => value == param_value,
+            QueryParamMatch::Present { value, .. } => *value,
         }
     }
 }

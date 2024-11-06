@@ -519,6 +519,8 @@ impl TryFrom<&crate::http::QueryParamMatch> for HTTPRouteRulesMatchesQueryParams
                     value: value.clone(),
                 }
             }
+            // TODO: Should this be handled?
+            _ => unimplemented!(),
         })
     }
 }
@@ -566,6 +568,8 @@ impl TryFrom<&crate::http::HeaderMatch> for HTTPRouteRulesMatchesHeaders {
                 r#type: Some(HTTPRouteRulesMatchesHeadersType::Exact),
                 value: value.clone(),
             },
+            // TODO: Should this be handled?
+            _ => unimplemented!(),
         })
     }
 }
