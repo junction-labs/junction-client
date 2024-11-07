@@ -146,14 +146,20 @@ jobs:
   pypi-publish:
     name: Publish to PyPI
     needs: [linux, musllinux, windows, macos, sdist]
+    environment:
+      name: release-python
+      url: https://pypi.org/project/junction-python/
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+
     steps:
       - uses: actions/checkout@v4
       - name: download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
-          merge-mutliple: true
+          merge-multiple: true
       - name: show artifacts
         run: ls -lah dist/*
       - name: publish
