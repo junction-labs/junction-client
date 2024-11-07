@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "junction-python"
-version = "0.1.0"
+version = "0.1.0-alpha1"
 dependencies = [
  "http 1.1.0",
  "junction-api",

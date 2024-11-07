@@ -1,7 +1,26 @@
 [project]
-name = "junction"
-version = "0.1.0"
+name = "junction-python"
+readme = "README.md"
+authors = [{ name = "Ben Linsay", email = "blinsay@gmail.com" }]
 dependencies = ["requests>2.0", "urllib3>2.0"]
+description = "An embeddable, dynamically configurable HTTP library"
+requires-python = ">=3.9"
+keywords = ["service discovery", "http"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+]
+
+[project.urls]
+Homepage = "https://junctionlabs.io"
+Repository = "https://github.com/junction-labs/junction-client"
 
 [project.optional-dependencies]
 test = ["pytest"]
