@@ -3,6 +3,11 @@ name = "junction-typeinfo-derive"
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+description = """
+TypeInfo derive macro
+"""
 
 [lib]
 proc-macro = true

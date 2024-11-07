@@ -2,6 +2,13 @@
 name = "junction-python"
 version = "0.1.0"
 edition = "2021"
+description = """
+Dynamically configurable HTTP service discovery bindings for Python
+"""
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+categories = ["api-bindings", "network-programming"]
 
 [lib]
 name = "junction"
