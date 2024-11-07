@@ -3,6 +3,11 @@ name = "junction-api-gen"
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+description = """
+cross-language API generation for Junction
+""""
 
 [dependencies]
 anyhow = "1.0"

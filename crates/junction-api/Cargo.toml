@@ -2,6 +2,13 @@
 name = "junction-api"
 version = "0.1.0"
 edition = "2021"
+description = """
+The Junction API
+"""
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+categories = ["api-bindings", "network-programming"]
 
 [dependencies]
 http = { workspace = true }
