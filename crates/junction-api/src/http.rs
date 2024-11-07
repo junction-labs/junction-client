@@ -171,6 +171,10 @@ pub struct Route {
     /// should be routed.
     #[serde(default)]
     pub rules: Vec<RouteRule>,
+
+    /// Default rate limits for this route.
+    #[serde(default)]
+    pub rate_limits: Vec<RateLimit>,
 }
 
 impl Route {
@@ -190,6 +194,7 @@ impl Route {
                 }],
                 ..Default::default()
             }],
+            rate_limits: Default::default(),
         }
     }
 }
@@ -235,6 +240,10 @@ pub struct RouteRule {
     /// How to retry requests. If not specified, requests are not retried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RouteRetry>,
+
+    /// Rate limit routes
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rate_limits: Vec<RateLimit>,
 
     /// Where the traffic should route if this rule matches.
     ///
@@ -381,6 +390,7 @@ pub enum HeaderMatch {
 
     Present {
         name: String,
+        /// true matches if the header is present, false matches if the header is not present
         value: bool,
     },
 
@@ -711,6 +721,28 @@ pub struct RouteRetry {
     pub backoff: Option<Duration>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub enum RateLimitBucket {
+    Header(HeaderMatch),
+    QueryParam(QueryParamMatch),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct RateLimit {
+    /// The interval at which the bucket is refilled.
+    pub interval: Duration,
+    /// Number of tokens to add to the bucket at each interval
+    pub refill_rate: u32,
+    /// The maximum number of tokens in the bucket.
+    pub capacity: u32,
+    /// A list of filters that must all match for a request to be rate limited.
+    /// If empty, all requests will be rate limited.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bucket_by: Vec<RateLimitBucket>,
+}
+
 const fn default_weight() -> u32 {
     1
 }
@@ -846,11 +878,13 @@ mod tests {
                     port: None,
                 },
                 tags: Default::default(),
+                rate_limits: Default::default(),
                 rules: vec![RouteRule {
                     matches: vec![],
                     filters: vec![],
                     timeouts: None,
                     retry: None,
+                    rate_limits: vec![],
                     backends: vec![WeightedBackend {
                         backend: BackendId {
                             target: Target::kube_service("bar", "foo").unwrap(),

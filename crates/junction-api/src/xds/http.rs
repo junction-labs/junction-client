@@ -754,6 +754,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 backends: vec![WeightedBackend {
@@ -773,6 +774,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
@@ -798,6 +800,7 @@ mod test {
 
         let original = Route {
             vhost: web.clone().into_vhost(None),
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 ..Default::default()
@@ -810,6 +813,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
@@ -831,6 +835,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: BTreeMap::from_iter([("foo".to_string(), "bar".to_string())]),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
@@ -862,6 +867,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -914,6 +920,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -961,6 +968,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -1014,6 +1022,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -1060,6 +1069,7 @@ mod test {
                     target: web.clone(),
                     port: None,
                 },
+                rate_limits: Default::default(),
                 tags: Default::default(),
                 rules: vec![RouteRule {
                     matches: vec![
@@ -1098,6 +1108,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![
@@ -1142,6 +1153,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
