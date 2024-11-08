@@ -1196,6 +1196,29 @@ mod test {
     }
 
     #[test]
+    fn test_rate_limit_roundtrip() {
+        let web = Target::kube_service("prod", "web").unwrap();
+
+        assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
+            vhost: VirtualHost {
+                target: web.clone(),
+                port: None,
+            },
+            rate_limits: vec![RateLimit {
+                interval: Duration::from_secs(1),
+                refill_rate: 1,
+                capacity: 1,
+                bucket_by: vec![RateLimitBucket::Header(HeaderMatch::Present {
+                    name: "foo".to_string(),
+                    value: true,
+                })],
+            }],
+            tags: Default::default(),
+            rules: vec![],
+        });
+    }
+
+    #[test]
     fn test_multiple_rules_roundtrip() {
         let web = Target::kube_service("prod", "web").unwrap();
         let staging = Target::kube_service("staging", "web").unwrap();
