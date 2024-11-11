@@ -401,7 +401,7 @@ impl ConfigCache for CacheReader {
 /// to other resource types.
 #[derive(Default, Debug)]
 pub(super) struct Cache {
-    refs: DiGraph<GCData, ()>,
+    refs: DiGraph<RefData, ()>,
     data: Arc<CacheData>,
     notify: EnumMap<ResourceType, BTreeMap<String, Vec<notify::Send>>>,
 }
@@ -415,14 +415,15 @@ pub(super) struct Cache {
 /// xDS server or garbage collection removed it. Deleted resources will still
 /// be used when generating subscriptions.
 #[derive(Debug)]
-struct GCData {
+struct RefData {
     name: String,
     resource_type: ResourceType,
     pinned: bool,
     deleted: bool,
+    notify: Vec<notify::Send>,
 }
 
-impl GCData {
+impl RefData {
     fn is_gc_root(&self) -> bool {
         self.pinned && !self.deleted
     }
@@ -452,6 +453,7 @@ impl Cache {
         weights.map(|n| n.name.clone()).collect()
     }
 
+    /// Insert a batch of xDS into the cache.
     pub fn insert(
         &mut self,
         version: crate::xds::ResourceVersion,
@@ -471,7 +473,7 @@ impl Cache {
         (changed, errs)
     }
 
-    /// Unsubscribe from an XDS resource and explicitly delete it from cache.
+    /// Unsubscribe from an XDS resource and delete it from cache.
     pub fn delete(&mut self, resource_type: ResourceType, name: &str) -> bool {
         if !self.delete_ref(resource_type, name, true) {
             return false;
@@ -497,7 +499,8 @@ impl Cache {
         true
     }
 
-    /// Explicitly subscribe to an XDS resource.
+    /// Subscribe to an XDS resource. Returns `true` if this subscription did
+    /// not exist before this call.
     pub fn subscribe(
         &mut self,
         resource_type: ResourceType,
@@ -510,17 +513,14 @@ impl Cache {
         if self.exists(resource_type, &name) {
             notify.notify();
         } else {
-            self.notify[resource_type]
-                .entry(name.to_string())
-                .or_default()
-                .push(notify);
+            self.refs[node].notify.push(notify);
         }
 
         created
     }
 
-    fn notify_all(&mut self, resource_type: ResourceType, name: &str) {
-        let to_notify = self.notify[resource_type].remove(name).unwrap_or_default();
+    fn notify_all(&mut self, node_ref: NodeIndex) {
+        let to_notify = std::mem::take(&mut self.refs[node_ref].notify);
         for notify in to_notify {
             notify.notify();
         }
@@ -672,12 +672,10 @@ impl Cache {
                 // insert data into cache
                 self.data
                     .listeners
-                    .insert_ok(listener_name.clone(), version.clone(), api_listener);
+                    .insert_ok(listener_name, version.clone(), api_listener);
 
-                // send notifications
-                self.notify_all(ResourceType::Listener, &listener_name);
-
-                // udpate changed set
+                // send notifications and udpate changed set
+                self.notify_all(node);
                 changed.insert(ResourceType::Listener);
             }
         }
@@ -790,14 +788,12 @@ impl Cache {
                 }
 
                 // actually insert the route config
-                self.data.route_configs.insert_ok(
-                    route_config_name.clone(),
-                    version.clone(),
-                    route_config,
-                );
+                self.data
+                    .route_configs
+                    .insert_ok(route_config_name, version.clone(), route_config);
 
                 // send notifications
-                self.notify_all(ResourceType::RouteConfiguration, &route_config_name);
+                self.notify_all(node);
             }
         }
 
@@ -858,8 +854,8 @@ impl Cache {
                     version.clone(),
                     load_assignment,
                 );
-                self.notify_all(ResourceType::ClusterLoadAssignment, &load_assignment_name);
 
+                self.notify_all(cla_node);
                 changed.insert(ResourceType::ClusterLoadAssignment);
             }
         }
@@ -947,10 +943,10 @@ impl Cache {
         self.data
             .clusters
             .insert_ok(cluster_name.clone(), version.clone(), cluster);
-        changed.insert(ResourceType::Cluster);
 
-        // send notifications
-        self.notify_all(ResourceType::Cluster, &cluster_name);
+        // send notifications and mark changes
+        self.notify_all(node);
+        changed.insert(ResourceType::Cluster);
 
         Ok(())
     }
@@ -1019,11 +1015,12 @@ impl Cache {
             return (node, false);
         }
 
-        let node = self.refs.add_node(GCData {
+        let node = self.refs.add_node(RefData {
             name: name.to_string(),
             resource_type,
             pinned: false,
             deleted: false,
+            notify: Vec::new(),
         });
         (node, true)
     }
