@@ -42,11 +42,7 @@ pub fn check_route(
     url: &crate::Url,
     headers: &http::HeaderMap,
 ) -> Result<ResolvedRoute> {
-    let request = client::HttpRequest {
-        method,
-        url,
-        headers,
-    };
+    let request = client::HttpRequest::from_parts(method, url, headers)?;
 
     // resolve with an empty cache and the passed config used as defaults and a
     // no-op subscribe fn.
@@ -54,7 +50,7 @@ pub fn check_route(
     // TODO: do we actually want that or do we want to treat the passed routes
     // as the primary config?
     let config = StaticConfig::new(routes, Vec::new());
-    client::resolve_routes(&StaticConfig::default(), &config, request, |_| {})
+    client::resolve_routes(&StaticConfig::default(), &config, request)
 }
 
 pub(crate) trait ConfigCache {

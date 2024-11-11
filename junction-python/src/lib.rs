@@ -380,9 +380,8 @@ fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
     let backends = default_backends(kwargs)?;
     match DEFAULT_CLIENT.as_ref() {
         Ok(default_client) => {
-            let core = default_client
-                .clone()
-                .with_defaults(routes, backends)
+            let core = RUNTIME
+                .block_on(async { default_client.clone().with_defaults(routes, backends).await })
                 .map_err(|e| PyValueError::new_err(e.to_string()))?;
             Ok(Junction { core })
         }
@@ -404,8 +403,8 @@ impl Junction {
 
         match new_client(ads, node, cluster) {
             Ok(client) => {
-                let core = client
-                    .with_defaults(routes, backends)
+                let core = RUNTIME
+                    .block_on(async { client.with_defaults(routes, backends).await })
                     .map_err(|e| PyValueError::new_err(e.to_string()))?;
                 Ok(Junction { core })
             }
@@ -431,22 +430,18 @@ impl Junction {
     ) -> PyResult<(Py<PyAny>, Option<usize>, Py<PyAny>)> {
         let method = method_from_py(method)?;
         let url =
-            junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
+            junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(e.to_string()))?;
         let headers = headers_from_py(headers)?;
+        let request = junction_core::HttpRequest::from_parts(&method, &url, &headers)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
-        let request = junction_core::HttpRequest {
-            method: &method,
-            url: &url,
-            headers: &headers,
-        };
         let config_mode = match dynamic {
             true => ConfigMode::Dynamic,
             false => ConfigMode::Static,
         };
 
-        let resolved = self
-            .core
-            .resolve_routes(config_mode, request)
+        let resolved = RUNTIME
+            .block_on(self.core.resolve_routes(config_mode, request))
             .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
         let route = pythonize::pythonize(py, &resolved.route)?;
@@ -471,9 +466,8 @@ impl Junction {
         let method = method_from_py(method)?;
         let headers = headers_from_py(headers)?;
 
-        let endpoints = self
-            .core
-            .resolve_http(&method, &url, &headers)
+        let endpoints = RUNTIME
+            .block_on(self.core.resolve_http(&method, &url, &headers))
             .map(|endpoints| endpoints.into_iter().map(|e| e.into()).collect())
             .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 

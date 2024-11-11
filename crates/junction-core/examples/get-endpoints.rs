@@ -68,6 +68,7 @@ async fn main() {
     ];
     let mut client = client
         .with_defaults(default_routes, default_backends)
+        .await
         .unwrap();
 
     let url: junction_core::Url = "https://nginx.default.svc.cluster.local".parse().unwrap();
@@ -79,8 +80,12 @@ async fn main() {
     };
 
     loop {
-        let prod_endpoints = client.resolve_http(&http::Method::GET, &url, &prod_headers);
-        let staging_endpoints = client.resolve_http(&http::Method::GET, &url, &staging_headers);
+        let prod_endpoints = client
+            .resolve_http(&http::Method::GET, &url, &prod_headers)
+            .await;
+        let staging_endpoints = client
+            .resolve_http(&http::Method::GET, &url, &staging_headers)
+            .await;
 
         let mut error = false;
         if let Err(e) = &prod_endpoints {

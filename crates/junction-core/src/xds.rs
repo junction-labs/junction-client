@@ -110,12 +110,17 @@ impl AdsClient {
         Ok((client, task))
     }
 
-    pub fn subscribe(&self, resource_type: ResourceType, name: String) -> Result<(), ()> {
-        self.subscriptions
-            .blocking_send(SubscriptionUpdate::Add(resource_type, name))
-            .map_err(|_| ())?;
+    // FIXME: add a timeout or let the caller do it?
+    pub async fn subscribe(
+        &self,
+        resource_type: ResourceType,
+        name: String,
+    ) -> Result<notify::Recv, ()> {
+        let (update, recv) = SubscriptionUpdate::add(resource_type, name);
 
-        Ok(())
+        self.subscriptions.send(update).await.map_err(|_| ())?;
+
+        Ok(recv)
     }
 }
 
@@ -328,8 +333,66 @@ fn unwrap_io_error(status: &tonic::Status) -> Option<&std::io::Error> {
     }
 }
 
+/// Single-use notifications, fire and forget.
+pub(crate) mod notify {
+    use futures::TryFutureExt;
+
+    /// Create a single-use sender and receiver pair.
+    pub(crate) fn new() -> (Send, Recv) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        (Send(tx), Recv(rx))
+    }
+
+    /// The send half.
+    #[derive(Debug)]
+    pub(crate) struct Send(tokio::sync::oneshot::Sender<()>);
+
+    impl Send {
+        /// Send a notification. Always succeeds, even if the receiver is
+        /// already gone.
+        pub(crate) fn notify(self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    /// The recv half.
+    #[derive(Debug)]
+    pub(crate) struct Recv(tokio::sync::oneshot::Receiver<()>);
+
+    impl Recv {
+        /// Wait for a notification. Returns an Error if the sender dropped
+        /// before sending.
+        pub(crate) fn wait(self) -> impl std::future::Future<Output = Result<(), ()>> + Unpin {
+            self.0.map_err(|_| ())
+        }
+
+        #[cfg(test)]
+        pub(crate) fn try_wait(&mut self) -> Result<(), tokio::sync::oneshot::error::TryRecvError> {
+            self.0.try_recv()
+        }
+    }
+}
+
 #[derive(Debug)]
-enum SubscriptionUpdate {
+struct SubscriptionUpdate {
+    notify: notify::Send,
+    update: SubscriptionUpdateType,
+}
+
+impl SubscriptionUpdate {
+    fn add(resource_type: ResourceType, name: String) -> (Self, notify::Recv) {
+        let (send, recv) = notify::new();
+        let update = Self {
+            notify: send,
+            update: SubscriptionUpdateType::Add(resource_type, name),
+        };
+
+        (update, recv)
+    }
+}
+
+#[derive(Debug)]
+enum SubscriptionUpdateType {
     Add(ResourceType, String),
 
     #[allow(unused)]
@@ -367,11 +430,13 @@ impl<'a> AdsConnection<'a> {
 impl<'a> AdsConnection<'a> {
     fn handle_subscription_update(
         &mut self,
-        sub_update: SubscriptionUpdate,
+        update: SubscriptionUpdate,
     ) -> Option<DiscoveryRequest> {
-        let (rtype, changed) = match sub_update {
-            SubscriptionUpdate::Add(rtype, name) => (rtype, self.cache.subscribe(rtype, &name)),
-            SubscriptionUpdate::Remove(rtype, name) => (rtype, self.cache.delete(rtype, &name)),
+        let (rtype, changed) = match update.update {
+            SubscriptionUpdateType::Add(rtype, name) => {
+                (rtype, self.cache.subscribe(rtype, name, update.notify))
+            }
+            SubscriptionUpdateType::Remove(rtype, name) => (rtype, self.cache.delete(rtype, &name)),
         };
 
         changed.then(|| self.xds_subscription(rtype))
@@ -527,7 +592,12 @@ mod test_ads_conn {
         let (_, outgoing) = AdsConnection::new(&mut cache);
         assert!(outgoing.is_empty());
 
-        cache.subscribe(ResourceType::Listener, "nginx.default.svc.cluster.local");
+        let (tx, mut rx) = notify::new();
+        cache.subscribe(
+            ResourceType::Listener,
+            "nginx.default.svc.cluster.local".to_string(),
+            tx,
+        );
         let (_, outgoing) = AdsConnection::new(&mut cache);
         assert_eq!(
             outgoing,
@@ -536,6 +606,7 @@ mod test_ads_conn {
                 rs = vec!["nginx.default.svc.cluster.local"]
             )]
         );
+        assert!(rx.try_wait().is_err());
 
         cache.insert(
             "123".into(),
@@ -547,6 +618,7 @@ mod test_ads_conn {
                 )],
             )]),
         );
+        assert!(rx.try_wait().is_ok());
 
         let (_, outgoing) = AdsConnection::new(&mut cache);
         assert_eq!(
@@ -598,10 +670,12 @@ mod test_ads_conn {
         let mut cache = Cache::default();
         let (mut conn, _) = AdsConnection::new(&mut cache);
 
-        let request = conn.handle_subscription_update(SubscriptionUpdate::Add(
+        let (add, mut rx) = SubscriptionUpdate::add(
             ResourceType::Listener,
             "nginx.default.svc.cluster.local".to_string(),
-        ));
+        );
+
+        let request = conn.handle_subscription_update(add);
         assert_eq!(
             request,
             Some(xds_test::req!(
@@ -609,11 +683,11 @@ mod test_ads_conn {
                 rs = vec!["nginx.default.svc.cluster.local"]
             )),
         );
+        assert!(rx.try_wait().is_err());
 
-        let request = conn.handle_subscription_update(SubscriptionUpdate::Add(
-            ResourceType::Cluster,
-            "default/nginx/cluster".to_string(),
-        ));
+        let (add, mut rx) =
+            SubscriptionUpdate::add(ResourceType::Cluster, "default/nginx/cluster".to_string());
+        let request = conn.handle_subscription_update(add);
         assert_eq!(
             request,
             Some(xds_test::req!(
@@ -621,6 +695,7 @@ mod test_ads_conn {
                 rs = vec!["default/nginx/cluster"]
             )),
         );
+        assert!(rx.try_wait().is_err());
     }
 
     #[test]
@@ -628,10 +703,11 @@ mod test_ads_conn {
         let mut cache = Cache::default();
         let (mut conn, _) = AdsConnection::new(&mut cache);
 
-        let request = conn.handle_subscription_update(SubscriptionUpdate::Add(
+        let (add, mut rx) = SubscriptionUpdate::add(
             ResourceType::Listener,
             "nginx.default.svc.cluster.local".to_string(),
-        ));
+        );
+        let request = conn.handle_subscription_update(add);
         assert_eq!(
             request,
             Some(xds_test::req!(
@@ -639,6 +715,7 @@ mod test_ads_conn {
                 rs = vec!["nginx.default.svc.cluster.local"]
             ))
         );
+        assert!(rx.try_wait().is_err());
 
         let requests = conn.handle_ads_message(xds_test::discovery_response(
             "v1",
@@ -652,6 +729,7 @@ mod test_ads_conn {
             )],
         ));
 
+        assert!(rx.try_wait().is_ok());
         assert_eq!(
             requests,
             vec![
@@ -684,16 +762,19 @@ mod test_ads_conn {
         let (mut conn, _) = AdsConnection::new(&mut cache);
 
         // subscribe to a listener, generate an XDS subscription for it
+        let (add, mut rx) = SubscriptionUpdate::add(
+            ResourceType::Listener,
+            "nginx.default.svc.cluster.local".to_string(),
+        );
+
         assert_eq!(
-            conn.handle_subscription_update(SubscriptionUpdate::Add(
-                ResourceType::Listener,
-                "nginx.default.svc.cluster.local".to_string(),
-            )),
+            conn.handle_subscription_update(add),
             Some(xds_test::req!(
                 t = ResourceType::Listener,
                 rs = vec!["nginx.default.svc.cluster.local"]
             ))
         );
+        assert!(rx.try_wait().is_err());
 
         // the LDS response includes two clusters
         let requests = conn.handle_ads_message(xds_test::discovery_response(
@@ -711,6 +792,7 @@ mod test_ads_conn {
             )],
         ));
 
+        assert!(rx.try_wait().is_ok());
         assert_eq!(
             requests,
             vec![
