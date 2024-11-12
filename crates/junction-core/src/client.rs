@@ -302,6 +302,29 @@ impl Client {
     ) -> crate::Result<Vec<crate::Endpoint>> {
         let request = HttpRequest::from_parts(method, url, headers)?;
 
+        // FIXME: this is still here and still janky. need to have
+        // resolve_endpoint wait for endpoints to be in cache before we can
+        // remove it.
+        const RESOLVE_BACKOFF: &[Duration] = &[
+            Duration::from_millis(1),
+            Duration::from_millis(4),
+            Duration::from_millis(16),
+            Duration::from_millis(64),
+            Duration::from_millis(256),
+        ];
+        for backoff in RESOLVE_BACKOFF {
+            match self.resolve(request.clone()).await {
+                Err(e) if e.is_temporary() => {
+                    tokio::time::sleep(*backoff).await;
+                }
+                res => return res,
+            }
+        }
+
+        self.resolve(request).await
+    }
+
+    async fn resolve(&mut self, request: HttpRequest<'_>) -> crate::Result<Vec<crate::Endpoint>> {
         let resolved_route = self
             .resolve_routes(ConfigMode::Dynamic, request.clone())
             .await?;
