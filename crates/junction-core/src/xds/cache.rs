@@ -1,31 +1,31 @@
 // This module is a cache that handles SotW XDS behavior. It's the guts of an
-// ADS connection and tracks the current state of XDS resoureces, the references
-// between resources, and builds internal client config on the fly. If you need
-// to add or modify any XDS behavior at all, it's like you'll end up here.
+// ADS connection and tracks the current state of XDS resoureces and the
+// references between resources. If you need to add or modify any XDS behavior
+// at all, it's like you'll end up here.
 //
-// This cache is built entirely around being single-writer, even thought it's
+// This cache is built entirely around being single-writer, even though it's
 // multi-reader and safe for concurrent reads. If you'd like to change that,
 // it's likely you're going to rebuild the internals of the cache entirely.
 //
-// # Reference Tracking is XDS Subscription Tracking
+// # Resource Tracking is XDS Subscription Tracking
 //
 // XDS SotW only ever issues deletes for LDS and CDS resources, so one of the
-// most important jobs a cache has is tracking references to delete RDS/EDS
-// objects when they're no longer referenced. Tracking the list of referenced
-// names is also exactly what we need to be doing for subscription tracking -
-// any client using this cache should be subscribing to all RDS resources
-// referenced by existing LDS resources, all CDS resources referenced by LDS and
-// RDS resources, and so on.
+// most important jobs a cache has is tracking references between objects so
+// that it's possible to delete RDS/EDS objects once they're no longer
+// referenced. Tracking the list of referenced names is also exactly what we
+// need to be doing for subscription tracking - any client using this cache
+// should be subscribing to all RDS resources referenced by existing LDS
+// resources, all CDS resources referenced by LDS and RDS resources, and so on.
 //
-// The current implementation manages these references as a `petgraph` graph
-// owned by the cache's single writer, and not shared with any of the readers.
-// This means that reference data can be stored relatively cheaply (without
-// duplicating XDS protobufs) and modified without any coordination between
-// reader and writer threads/tasks. It does however mean that there are two
-// places to track state, and the writer is now responsible for keeping them
-// in sync.
+// The current implementation manages these references between resources as a
+// `petgraph` graph. That graph is owned by the cache's single writer, and not
+// shared with any of the readers. This means that reference data can be stored
+// relatively cheaply (without duplicating XDS protobufs) and modified without
+// any coordination between reader and writer threads/tasks. It does however
+// mean that there are two places to track state, and the writer is now
+// responsible for keeping them in sync.
 //
-// # Reference Tracking is Garbage Collection
+// # Resource Reference Tracking is Garbage Collection
 //
 // Tracking a graph of objects that reference each other and removing the
 // unused ones should sound a lot like garbage collection to you - it is
@@ -33,26 +33,23 @@
 //
 // Using a graph internally to track object references means that it's
 // relatively easy to run a simple mark-and-sweep over the current state of the
-// graph, and having a single writer own the reference graph means that writes
-// pay the cost of collecting XDS garbage while readers can keep reading
-// uninterrupted. In practice, we expect the number of XDS objects to be
-// relatively small, and this cost to be low, but this is the right tradeoff
-// even if collection does become more expensive.
+// graph. Here all writes pay the cost of collecting XDS garbage so that readers
+// can keep reading uninterrupted. In practice, we expect the number of XDS
+// objects to be relatively small, and this cost to be low, but this is the
+// right tradeoff even if collection does become more expensive - slow
+// collections on writes puts backpressure on updates from the network, rather
+// than forcing readers to slow down.
 //
 // # User Input is GC Roots
 //
-// This cache models our entire interaction with ADS, so we need a notion of
-// what to request on behalf of all the clients reading config from it. As of
-// now, that generally takes the form of LDS resources - a client makes a
-// request to a URL, and the hostname of that URL is now a Listener we'd like to
-// subscribe to.
+// xDS resources fall into two categories - resources that were requested
+// directly by an upstream cache subscriber, and resources that were referenced
+// by another resource already in cache.
 //
-// That naturally makes LDS/CDS resources our GC roots - when someone explicitly
-// subscribes to a Lister (and maybe sets up default routes with targets)
-// Listener names become roots in our GC graph. We follow all references
-// downstream to other XDS objects to decide what to drop and keep, and even if
-// the ADS server tells us those names are temporarily gone, the cache should
-// keep trying to subscribe to them - after all, a user has expressed interest.
+// That first category is naturally our GC roots. It tends to be LDS/CDS
+// resources that are GC roots, but nothing in the cache should dictate that. If
+// an upstream caller wants to subscribe to a ClusterLoadAssignment, that may be
+// pinned as well.
 //
 // All of this assumes that there are no wildcard subscriptions - the huge
 // assumption here is that subscriptions are going to come in as explicit DNS
@@ -416,14 +413,14 @@ impl ConfigCache for CacheReader {
 /// to other resource types.
 #[derive(Default, Debug)]
 pub(super) struct Cache {
-    refs: DiGraph<RefData, ()>,
+    meta: DiGraph<Meta, ()>,
     data: Arc<CacheData>,
     notify: EnumMap<ResourceType, BTreeMap<String, Vec<notify::Send>>>,
 }
 
-/// GC data tracked for every xDS resource.
+/// Metadata tracked for every xDS resource.
 #[derive(Debug)]
-struct RefData {
+struct Meta {
     /// The name of the tracked resource.
     name: String,
 
@@ -450,7 +447,8 @@ struct RefData {
     deleted: bool,
 }
 
-impl RefData {
+impl Meta {
+    #[inline]
     fn is_gc_root(&self) -> bool {
         self.pinned && !self.deleted
     }
@@ -474,7 +472,7 @@ impl Cache {
 
     pub fn subscriptions(&self, resource_type: ResourceType) -> Vec<String> {
         let weights = self
-            .refs
+            .meta
             .node_weights()
             .filter(|n| n.resource_type == resource_type);
         weights.map(|n| n.name.clone()).collect()
@@ -502,7 +500,7 @@ impl Cache {
 
     /// Unsubscribe from an XDS resource and delete it from cache.
     pub fn delete(&mut self, resource_type: ResourceType, name: &str) -> bool {
-        if !self.delete_ref(resource_type, name, true) {
+        if !self.delete_meta(resource_type, name, true) {
             return false;
         }
 
@@ -535,14 +533,14 @@ impl Cache {
         now: Instant,
         notify: notify::Send,
     ) -> bool {
-        let (node, created) = self.find_or_create_ref(resource_type, &name);
-        self.pin_ref(node);
-        self.refs[node].requested_at = Some(now);
+        let (node, created) = self.find_or_create_idx(resource_type, &name);
+        self.set_pinned(node);
+        self.meta[node].requested_at = Some(now);
 
         if self.exists(resource_type, &name) {
             notify.notify();
         } else {
-            self.refs[node].notify.push(notify);
+            self.meta[node].notify.push(notify);
         }
 
         created
@@ -572,11 +570,11 @@ impl Cache {
 
         // walk the GC graph, keeping the set of the reachable nodes.
         //
-        // lean on petgraph's Control to only visit each node once - because
-        // the ref graph must be a DAG, we can skip marking nodes twice and
+        // lean on petgraph's Control to only visit each node once - because the
+        // metadata graph must be a DAG, we can skip marking nodes twice and
         // emit Control::Prune every time we see a node we've already seen.
-        let mut reachable = self.refs.visit_map();
-        visit::depth_first_search(&self.refs, self.gc_roots(), |event| -> Control<()> {
+        let mut reachable = self.meta.visit_map();
+        visit::depth_first_search(&self.meta, self.gc_roots(), |event| -> Control<()> {
             if let DfsEvent::Discover(n, _) = event {
                 if reachable.contains(n.index()) {
                     return Control::Prune;
@@ -588,13 +586,13 @@ impl Cache {
         });
 
         let unreachable_nodes = self
-            .refs
+            .meta
             .node_indices()
             .filter(|n| !reachable.contains(n.index()));
 
         let mut unreachable_names: EnumMap<ResourceType, Vec<String>> = EnumMap::default();
         for n in unreachable_nodes {
-            let n = &self.refs[n];
+            let n = &self.meta[n];
             unreachable_names[n.resource_type].push(n.name.to_string());
         }
 
@@ -611,7 +609,7 @@ impl Cache {
 
         // safety: no longer holding any NodeIndexes, it's safe to invalidate
         // any outstanding ref by calling retain_nodes
-        self.refs
+        self.meta
             .retain_nodes(|g, n| g[n].pinned || reachable.contains(n.index()));
     }
 
@@ -623,10 +621,10 @@ impl Cache {
     pub(crate) fn handle_timeouts(&mut self, now: Instant, timeout: Duration) {
         let mut by_type: EnumMap<ResourceType, Vec<String>> = Default::default();
 
-        for node_idx in self.refs.node_indices() {
-            let node_data = &mut self.refs[node_idx];
+        for node_idx in self.meta.node_indices() {
+            let meta = &mut self.meta[node_idx];
 
-            let timed_out = &node_data
+            let timed_out = &meta
                 .requested_at
                 .map_or(false, |t| now.duration_since(t) >= timeout);
 
@@ -635,12 +633,12 @@ impl Cache {
             }
 
             // copy the name to insert a tombstone
-            by_type[node_data.resource_type].push(node_data.name.clone());
+            by_type[meta.resource_type].push(meta.name.clone());
 
             // drop all notifications for this ref. it doesn't matter if the
             // tombstone is written yet, the caller is going to see "no data"
             // either way.
-            let _ = std::mem::take(&mut node_data.notify);
+            let _ = std::mem::take(&mut meta.notify);
         }
 
         for (rtype, names) in by_type {
@@ -695,15 +693,15 @@ impl Cache {
                 };
 
                 // remove the downstream route config ref and replace it with a new one
-                let (listener_node, _) =
-                    self.find_or_create_ref(ResourceType::Listener, &listener_name);
-                self.reset_edges(listener_node);
+                let (listener_idx, _) =
+                    self.find_or_create_idx(ResourceType::Listener, &listener_name);
+                self.reset_edges(listener_idx);
 
                 match &api_listener.route_config {
                     ApiListenerRouteConfig::RouteConfig { name } => {
-                        let (rc_node, created) = self
-                            .find_or_create_ref(ResourceType::RouteConfiguration, name.as_str());
-                        self.refs.update_edge(listener_node, rc_node, ());
+                        let (rc_idx, created) = self
+                            .find_or_create_idx(ResourceType::RouteConfiguration, name.as_str());
+                        self.meta.update_edge(listener_idx, rc_idx, ());
 
                         if created {
                             changed.insert(ResourceType::RouteConfiguration);
@@ -718,9 +716,9 @@ impl Cache {
 
                         // update cluster refs for everything downstream
                         for cluster in clusters {
-                            let (cluster_node, created) =
-                                self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
-                            self.refs.update_edge(listener_node, cluster_node, ());
+                            let (cluster_idx, created) =
+                                self.find_or_create_idx(ResourceType::Cluster, cluster.as_str());
+                            self.meta.update_edge(listener_idx, cluster_idx, ());
                             clusters_changed |= created;
                         }
                         if clusters_changed {
@@ -752,7 +750,7 @@ impl Cache {
                     .insert_ok(listener_name, version.clone(), api_listener);
 
                 // send notifications and udpate changed set
-                self.track_insert(listener_node);
+                self.set_inserted(listener_idx);
                 changed.insert(ResourceType::Listener);
             }
         }
@@ -764,7 +762,7 @@ impl Cache {
         // this guarantee comes from there only being a single cache writer.
         for name in to_remove {
             changed.insert(ResourceType::Listener);
-            self.delete_ref(ResourceType::Listener, &name, false);
+            self.delete_meta(ResourceType::Listener, &name, false);
             self.data.listeners.remove(&name);
         }
 
@@ -800,7 +798,7 @@ impl Cache {
         // this guarantee comes from there only being a single cache writer.
         for name in to_remove {
             changed.insert(ResourceType::Cluster);
-            self.delete_ref(ResourceType::Cluster, &name, false);
+            self.delete_meta(ResourceType::Cluster, &name, false);
             self.data.clusters.remove(&name);
         }
 
@@ -827,9 +825,9 @@ impl Cache {
                 // we don't have a subscription for (either because of a silly
                 // ADS server or a race).
                 //
-                // if we did, just ignore the node.
-                let Some(node) =
-                    self.find_ref(ResourceType::RouteConfiguration, &route_config.name)
+                // if we did, just ignore this.
+                let Some(rc_idx) =
+                    self.find_idx(ResourceType::RouteConfiguration, &route_config.name)
                 else {
                     continue;
                 };
@@ -857,11 +855,11 @@ impl Cache {
                 }
 
                 // add an edge for every cluster reference in this RouteConfig
-                self.reset_edges(node);
+                self.reset_edges(rc_idx);
                 for cluster in &route_config.clusters {
-                    let (cluster, _) =
-                        self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
-                    self.refs.update_edge(node, cluster, ());
+                    let (cluster_idx, _) =
+                        self.find_or_create_idx(ResourceType::Cluster, cluster.as_str());
+                    self.meta.update_edge(rc_idx, cluster_idx, ());
                 }
 
                 // actually insert the route config
@@ -870,7 +868,7 @@ impl Cache {
                     .insert_ok(route_config_name, version.clone(), route_config);
 
                 // send notifications
-                self.track_insert(node);
+                self.set_inserted(rc_idx);
             }
         }
 
@@ -890,7 +888,7 @@ impl Cache {
                 .load_assignments
                 .is_changed(&load_assignment.cluster_name, &load_assignment)
             {
-                let Some(cla_node) = self.find_ref(
+                let Some(cla_idx) = self.find_idx(
                     ResourceType::ClusterLoadAssignment,
                     &load_assignment.cluster_name,
                 ) else {
@@ -905,14 +903,14 @@ impl Cache {
                 // this assumes that a CLA will only ever have a single parent
                 // Cluster.
                 let target = {
-                    let cluster_node = self
-                        .parent_refs(cla_node)
+                    let cluster_idx = self
+                        .parent_resources(cla_idx)
                         .next()
                         .expect("GC leak: ClusterLoadAssignment must have a parent cluster");
                     let cluster = self
                         .data
                         .clusters
-                        .get(&self.refs[cluster_node].name)
+                        .get(&self.meta[cluster_idx].name)
                         .expect("GC leak: parent Cluster was removed from cache");
                     cluster
                         .data()
@@ -932,7 +930,7 @@ impl Cache {
                     load_assignment,
                 );
 
-                self.track_insert(cla_node);
+                self.set_inserted(cla_idx);
                 changed.insert(ResourceType::ClusterLoadAssignment);
             }
         }
@@ -980,7 +978,7 @@ impl Cache {
     ) -> Result<(), ResourceError> {
         // try to find this cluster in the ref graph. it's possible it's
         // now from a stale subscription.
-        let Some(node) = self.find_ref(ResourceType::Cluster, &cluster.name) else {
+        let Some(cluster_idx) = self.find_idx(ResourceType::Cluster, &cluster.name) else {
             return Ok(());
         };
 
@@ -996,25 +994,25 @@ impl Cache {
         };
 
         // clear the outgoing edges form this node.
-        self.reset_edges(node);
+        self.reset_edges(cluster_idx);
 
         // remove the old CLA edge and replace it with a new one.
         if let ClusterEndpointData::LoadAssignment { name } = &cluster.endpoints {
             changed.insert(ResourceType::ClusterLoadAssignment);
-            let (cla_node, _) =
-                self.find_or_create_ref(ResourceType::ClusterLoadAssignment, name.as_str());
-            self.refs.update_edge(node, cla_node, ());
+            let (cla_idx, _) =
+                self.find_or_create_idx(ResourceType::ClusterLoadAssignment, name.as_str());
+            self.meta.update_edge(cluster_idx, cla_idx, ());
         }
 
         // try to subscribe to the passthrough Listener for this Cluster if it
         // doesn't already exist in the GC graph.
         let passthrough_listener_name = cluster.backend_lb.config.id.passthrough_route_name();
-        let (default_listener_node, created) =
-            self.find_or_create_ref(ResourceType::Listener, &passthrough_listener_name);
+        let (default_listener_idx, created) =
+            self.find_or_create_idx(ResourceType::Listener, &passthrough_listener_name);
         if created {
             changed.insert(ResourceType::Listener);
         }
-        self.refs.update_edge(node, default_listener_node, ());
+        self.meta.update_edge(cluster_idx, default_listener_idx, ());
 
         // insert the cluster
         self.data
@@ -1022,33 +1020,33 @@ impl Cache {
             .insert_ok(cluster_name.clone(), version.clone(), cluster);
 
         // send notifications and mark changes
-        self.track_insert(node);
+        self.set_inserted(cluster_idx);
         changed.insert(ResourceType::Cluster);
 
         Ok(())
     }
 
-    /// Return the node indices of all GC roots. GC roots are either Listeners
-    /// or are explicitly pinned.
+    /// Return the indices of all GC roots. GC roots are either Listeners or are
+    /// explicitly pinned.
     ///
     /// Safety: NodeIndexes are not stable across deletions. This vec is not
     /// safe to store long term or between collections.
     fn gc_roots(&self) -> Vec<NodeIndex> {
-        self.refs
+        self.meta
             .node_indices()
-            .filter(|idx| self.refs[*idx].is_gc_root())
+            .filter(|idx| self.meta[*idx].is_gc_root())
             .collect()
     }
 
-    /// Delete a ref from the GC map.
-    fn delete_ref(&mut self, resource_type: ResourceType, name: &str, force: bool) -> bool {
-        match self.find_ref(resource_type, name) {
-            Some(node) => {
-                if force || !self.refs[node].pinned {
-                    self.refs.remove_node(node);
+    /// Delete a resource's metadata.
+    fn delete_meta(&mut self, resource_type: ResourceType, name: &str, force: bool) -> bool {
+        match self.find_idx(resource_type, name) {
+            Some(idx) => {
+                if force || !self.meta[idx].pinned {
+                    self.meta.remove_node(idx);
                     true
                 } else {
-                    self.refs[node].deleted = true;
+                    self.meta[idx].deleted = true;
                     false
                 }
             }
@@ -1056,8 +1054,9 @@ impl Cache {
         }
     }
 
-    fn parent_refs(&self, node: NodeIndex) -> impl Iterator<Item = NodeIndex> + '_ {
-        self.refs.neighbors_directed(node, Direction::Incoming)
+    /// Find the parents of this resource.
+    fn parent_resources(&self, idx: NodeIndex) -> impl Iterator<Item = NodeIndex> + '_ {
+        self.meta.neighbors_directed(idx, Direction::Incoming)
     }
 
     // TODO: it's annoying that this clones the XDS for a route action, but also
@@ -1083,16 +1082,16 @@ impl Cache {
         }
     }
 
-    /// Find or create a GC ref for the given name or resource type.
+    /// Find or create a metadtata index for the given name or resource type.
     ///
     /// New GC refs are not marked `reachable` by default.
-    fn find_or_create_ref(&mut self, resource_type: ResourceType, name: &str) -> (NodeIndex, bool) {
-        if let Some(node) = self.find_ref(resource_type, name) {
-            self.refs[node].deleted = false;
-            return (node, false);
+    fn find_or_create_idx(&mut self, resource_type: ResourceType, name: &str) -> (NodeIndex, bool) {
+        if let Some(idx) = self.find_idx(resource_type, name) {
+            self.meta[idx].deleted = false;
+            return (idx, false);
         }
 
-        let node = self.refs.add_node(RefData {
+        let idx = self.meta.add_node(Meta {
             name: name.to_string(),
             resource_type,
             notify: Vec::new(),
@@ -1100,46 +1099,47 @@ impl Cache {
             pinned: false,
             deleted: false,
         });
-        (node, true)
+        (idx, true)
     }
 
     /// Find a GC ref with the given resource type or name.
-    fn find_ref(&self, resource_type: ResourceType, name: &str) -> Option<NodeIndex> {
-        self.refs.node_indices().find(|n| {
-            let n = &self.refs[*n];
-            n.resource_type == resource_type && n.name == name
+    fn find_idx(&self, resource_type: ResourceType, name: &str) -> Option<NodeIndex> {
+        self.meta.node_indices().find(|idx| {
+            let meta = &self.meta[*idx];
+            meta.resource_type == resource_type && meta.name == name
         })
     }
 
+    /// Track that a resource should be pinned into cache.
     #[inline]
-    fn pin_ref(&mut self, node: NodeIndex) {
-        self.refs[node].pinned = true;
+    fn set_pinned(&mut self, idx: NodeIndex) {
+        self.meta[idx].pinned = true;
     }
 
-    /// Track that a data for a node has been inserted into the cache.
-    fn track_insert(&mut self, node_ref: NodeIndex) {
-        let node_data = &mut self.refs[node_ref];
+    /// Track that a data for a resource has been inserted into cache.
+    fn set_inserted(&mut self, idx: NodeIndex) {
+        let meta = &mut self.meta[idx];
 
         // reset the request timer
-        node_data.requested_at = None;
+        meta.requested_at = None;
 
         // notify all waiters
-        let to_notify = std::mem::take(&mut node_data.notify);
+        let to_notify = std::mem::take(&mut meta.notify);
         for notify in to_notify {
             notify.notify();
         }
     }
 
-    /// Remove all of a GC ref's outgoing edges.
-    fn reset_edges(&mut self, node: NodeIndex) {
+    /// Remove all of a resource's outgoing edges.
+    fn reset_edges(&mut self, idx: NodeIndex) {
         let neighbors: Vec<_> = self
-            .refs
-            .neighbors_directed(node, Direction::Outgoing)
+            .meta
+            .neighbors_directed(idx, Direction::Outgoing)
             .collect();
 
         for n in neighbors {
-            if let Some((edge, _)) = self.refs.find_edge_undirected(node, n) {
-                self.refs.remove_edge(edge);
+            if let Some((edge, _)) = self.meta.find_edge_undirected(idx, n) {
+                self.meta.remove_edge(edge);
             };
         }
     }
@@ -1395,7 +1395,7 @@ mod test {
     }
 
     #[test]
-    fn test_insert_load_assignment_missing_ref() {
+    fn test_insert_load_assignment_not_subscribed() {
         let mut cache = Cache::default();
 
         assert_subscribe_insert(
@@ -1442,13 +1442,13 @@ mod test {
         );
 
         assert!(cache.data.listeners.get("nginx.default.local").is_some());
-        assert_eq!(cache.refs.node_count(), 2);
+        assert_eq!(cache.meta.node_count(), 2);
 
         assert_insert(cache.insert("123".into(), ResourceVec::Listener(Vec::new())));
 
         assert!(cache.data.listeners.is_empty());
         assert_eq!(
-            cache.refs.node_count(),
+            cache.meta.node_count(),
             1,
             "should still be subscribed to the removed Listener",
         );
@@ -1980,7 +1980,7 @@ mod test {
         // should have gc refs for everything
         //
         // listener, rc,  2 * cluster + 2 * default listener, 2 * cla
-        assert_eq!(cache.refs.node_count(), 8);
+        assert_eq!(cache.meta.node_count(), 8);
 
         // delete the listener
         assert_insert(cache.insert("123".into(), ResourceVec::Listener(vec![])));
@@ -1991,7 +1991,7 @@ mod test {
         assert!(cache.data.load_assignments.is_empty());
 
         // should have a single ref left for the Listener we subscribed to
-        assert_eq!(cache.refs.node_count(), 1);
+        assert_eq!(cache.meta.node_count(), 1);
     }
 
     #[test]
