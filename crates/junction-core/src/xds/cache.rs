@@ -65,13 +65,6 @@
 // - Track incoming resource versions and last update. When dumping resources
 //   for CSDS, there's the opportunity to show both of those pieces of info to
 //   a caller, which should be extremely useful for debugging.
-//
-// - Use the resource graph to track when resources were requested and whether
-//   or not they should be considered missing. The XDS protocol documentation
-//   recommends a 15 second timeout. This probably involves also inserting
-//   markers/tombstones in the data cache.
-//   https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol#knowing-when-a-requested-resource-does-not-exist.
-//
 
 use crossbeam_skiplist::SkipMap;
 use enum_map::EnumMap;
@@ -86,6 +79,7 @@ use prost::Name;
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use xds_api::pb::envoy::config::{
     cluster::v3::{self as xds_cluster},
     endpoint::v3::{self as xds_endpoint},
@@ -219,6 +213,27 @@ where
                     CacheEntry {
                         version: ResourceVersion::default(),
                         last_error: Some((version, error.into())),
+                        data: None,
+                    },
+                );
+            }
+        }
+    }
+
+    fn insert_timeout(&self, name: String) {
+        match self.0.get(&name) {
+            Some(entry) => {
+                let mut updated_entry = entry.value().clone();
+                updated_entry.last_error =
+                    Some((ResourceVersion::default(), ResourceError::TimedOut));
+                self.0.insert(name, updated_entry);
+            }
+            None => {
+                self.0.insert(
+                    name,
+                    CacheEntry {
+                        version: ResourceVersion::default(),
+                        last_error: Some((ResourceVersion::default(), ResourceError::TimedOut)),
                         data: None,
                     },
                 );
@@ -407,20 +422,32 @@ pub(super) struct Cache {
 }
 
 /// GC data tracked for every xDS resource.
-///
-/// A resource is `pinnned` if explicitly requested by a caller, and will never
-/// be removed from cache.
-///
-/// A resource is `deleted` if it was already pinned and was deleted because an
-/// xDS server or garbage collection removed it. Deleted resources will still
-/// be used when generating subscriptions.
 #[derive(Debug)]
 struct RefData {
+    /// The name of the tracked resource.
     name: String,
+
+    /// The type of the tracked resource.
     resource_type: ResourceType,
-    pinned: bool,
-    deleted: bool,
+
+    /// Callers waiting to be notified when a resource is first created. This
+    /// vec may be dropped during GC without notifying all callers. Callers must
+    /// distinguish between a successful notification and a drop.
     notify: Vec<notify::Send>,
+
+    /// A timestamp that tracks when data for a resource was first requested. This
+    /// is set only the first time data is requested - because of the xDS protocol
+    /// there's no way to figure out if subsequent pushes or requests "time out"
+    /// or are NACKed.
+    requested_at: Option<Instant>,
+
+    /// A resource is `pinnned` if explicitly requested by a caller, and can't be
+    /// removed from cache unless it's explicilty deleted.
+    pinned: bool,
+
+    /// A resource is `deleted` if it was pinned and an external caller asked
+    /// to remove it.
+    deleted: bool,
 }
 
 impl RefData {
@@ -505,10 +532,12 @@ impl Cache {
         &mut self,
         resource_type: ResourceType,
         name: String,
+        now: Instant,
         notify: notify::Send,
     ) -> bool {
         let (node, created) = self.find_or_create_ref(resource_type, &name);
         self.pin_ref(node);
+        self.refs[node].requested_at = Some(now);
 
         if self.exists(resource_type, &name) {
             notify.notify();
@@ -517,13 +546,6 @@ impl Cache {
         }
 
         created
-    }
-
-    fn notify_all(&mut self, node_ref: NodeIndex) {
-        let to_notify = std::mem::take(&mut self.refs[node_ref].notify);
-        for notify in to_notify {
-            notify.notify();
-        }
     }
 
     fn exists(&self, resource_type: ResourceType, name: &str) -> bool {
@@ -593,9 +615,63 @@ impl Cache {
             .retain_nodes(|g, n| g[n].pinned || reachable.contains(n.index()));
     }
 
+    /// Handle timed out nodes. Timed out notes get a tombstone inserted into
+    /// cache and treated like their request has completed with a NACK. This
+    /// doesn't affect the graph of refs - but should drop the "pending" status
+    /// from those nodes so they don't notify again and should clear any pending
+    /// notifications.
+    pub(crate) fn handle_timeouts(&mut self, now: Instant, timeout: Duration) {
+        let mut by_type: EnumMap<ResourceType, Vec<String>> = Default::default();
+
+        for node_idx in self.refs.node_indices() {
+            let node_data = &mut self.refs[node_idx];
+
+            let timed_out = &node_data
+                .requested_at
+                .map_or(false, |t| now.duration_since(t) >= timeout);
+
+            if !timed_out {
+                continue;
+            }
+
+            // copy the name to insert a tombstone
+            by_type[node_data.resource_type].push(node_data.name.clone());
+
+            // drop all notifications for this ref. it doesn't matter if the
+            // tombstone is written yet, the caller is going to see "no data"
+            // either way.
+            let _ = std::mem::take(&mut node_data.notify);
+        }
+
+        for (rtype, names) in by_type {
+            match rtype {
+                ResourceType::Listener => {
+                    for name in names {
+                        self.data.listeners.insert_timeout(name);
+                    }
+                }
+                ResourceType::RouteConfiguration => {
+                    for name in names {
+                        self.data.route_configs.insert_timeout(name);
+                    }
+                }
+                ResourceType::Cluster => {
+                    for name in names {
+                        self.data.clusters.insert_timeout(name);
+                    }
+                }
+                ResourceType::ClusterLoadAssignment => {
+                    for name in names {
+                        self.data.load_assignments.insert_timeout(name);
+                    }
+                }
+            }
+        }
+    }
+
     fn insert_listeners(
         &mut self,
-        version: crate::xds::ResourceVersion,
+        version: ResourceVersion,
         listeners: Vec<xds_listener::Listener>,
     ) -> (ResourceTypeSet, Vec<ResourceError>) {
         let mut changed = ResourceTypeSet::default();
@@ -619,14 +695,15 @@ impl Cache {
                 };
 
                 // remove the downstream route config ref and replace it with a new one
-                let (node, _) = self.find_or_create_ref(ResourceType::Listener, &listener_name);
-                self.reset_ref(node);
+                let (listener_node, _) =
+                    self.find_or_create_ref(ResourceType::Listener, &listener_name);
+                self.reset_edges(listener_node);
 
                 match &api_listener.route_config {
                     ApiListenerRouteConfig::RouteConfig { name } => {
                         let (rc_node, created) = self
                             .find_or_create_ref(ResourceType::RouteConfiguration, name.as_str());
-                        self.refs.update_edge(node, rc_node, ());
+                        self.refs.update_edge(listener_node, rc_node, ());
 
                         if created {
                             changed.insert(ResourceType::RouteConfiguration);
@@ -643,7 +720,7 @@ impl Cache {
                         for cluster in clusters {
                             let (cluster_node, created) =
                                 self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
-                            self.refs.update_edge(node, cluster_node, ());
+                            self.refs.update_edge(listener_node, cluster_node, ());
                             clusters_changed |= created;
                         }
                         if clusters_changed {
@@ -675,7 +752,7 @@ impl Cache {
                     .insert_ok(listener_name, version.clone(), api_listener);
 
                 // send notifications and udpate changed set
-                self.notify_all(node);
+                self.track_insert(listener_node);
                 changed.insert(ResourceType::Listener);
             }
         }
@@ -780,7 +857,7 @@ impl Cache {
                 }
 
                 // add an edge for every cluster reference in this RouteConfig
-                self.reset_ref(node);
+                self.reset_edges(node);
                 for cluster in &route_config.clusters {
                     let (cluster, _) =
                         self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
@@ -793,7 +870,7 @@ impl Cache {
                     .insert_ok(route_config_name, version.clone(), route_config);
 
                 // send notifications
-                self.notify_all(node);
+                self.track_insert(node);
             }
         }
 
@@ -855,7 +932,7 @@ impl Cache {
                     load_assignment,
                 );
 
-                self.notify_all(cla_node);
+                self.track_insert(cla_node);
                 changed.insert(ResourceType::ClusterLoadAssignment);
             }
         }
@@ -919,7 +996,7 @@ impl Cache {
         };
 
         // clear the outgoing edges form this node.
-        self.reset_ref(node);
+        self.reset_edges(node);
 
         // remove the old CLA edge and replace it with a new one.
         if let ClusterEndpointData::LoadAssignment { name } = &cluster.endpoints {
@@ -945,7 +1022,7 @@ impl Cache {
             .insert_ok(cluster_name.clone(), version.clone(), cluster);
 
         // send notifications and mark changes
-        self.notify_all(node);
+        self.track_insert(node);
         changed.insert(ResourceType::Cluster);
 
         Ok(())
@@ -1018,9 +1095,10 @@ impl Cache {
         let node = self.refs.add_node(RefData {
             name: name.to_string(),
             resource_type,
+            notify: Vec::new(),
+            requested_at: None,
             pinned: false,
             deleted: false,
-            notify: Vec::new(),
         });
         (node, true)
     }
@@ -1033,12 +1111,27 @@ impl Cache {
         })
     }
 
+    #[inline]
     fn pin_ref(&mut self, node: NodeIndex) {
         self.refs[node].pinned = true;
     }
 
+    /// Track that a data for a node has been inserted into the cache.
+    fn track_insert(&mut self, node_ref: NodeIndex) {
+        let node_data = &mut self.refs[node_ref];
+
+        // reset the request timer
+        node_data.requested_at = None;
+
+        // notify all waiters
+        let to_notify = std::mem::take(&mut node_data.notify);
+        for notify in to_notify {
+            notify.notify();
+        }
+    }
+
     /// Remove all of a GC ref's outgoing edges.
-    fn reset_ref(&mut self, node: NodeIndex) {
+    fn reset_edges(&mut self, node: NodeIndex) {
         let neighbors: Vec<_> = self
             .refs
             .neighbors_directed(node, Direction::Outgoing)
@@ -1085,14 +1178,16 @@ mod test {
             let (tx, rx) = notify::new();
             notifications.push(rx);
 
-            cache.subscribe(resources.resource_type(), name, tx);
+            cache.subscribe(resources.resource_type(), name, Instant::now(), tx);
         }
 
         assert_insert(cache.insert(version, resources));
 
         for n in &mut notifications {
-            n.try_wait()
-                .expect("notifications should have all been sent for inserts")
+            assert!(
+                n.notified(),
+                "notifications should have all been sent for inserts",
+            )
         }
     }
 
@@ -1126,7 +1221,12 @@ mod test {
 
         // insert a listener with no api_listener
         let (tx, mut rx) = notify::new();
-        cache.subscribe(ResourceType::Listener, "potato".to_string(), tx);
+        cache.subscribe(
+            ResourceType::Listener,
+            "potato".to_string(),
+            Instant::now(),
+            tx,
+        );
         let (changed, errors) = cache.insert(
             "123".into(),
             ResourceVec::Listener(vec![xds_listener::Listener {
@@ -1137,7 +1237,7 @@ mod test {
 
         assert!(changed.is_empty());
         assert_eq!(errors.len(), 1);
-        assert!(rx.try_wait().is_err());
+        assert!(rx.pending());
 
         let listener_data = cache.data.listeners.get("potato").unwrap();
         assert!(listener_data.data().is_none());
@@ -1386,57 +1486,79 @@ mod test {
         assert!(cache.data.clusters.is_empty());
     }
 
-    // #[test]
-    // fn test_deletes_keep_subscriptions() {
-    //     let mut cache = Cache::default();
+    #[test]
+    fn test_deletes_keep_subscriptions() {
+        let mut cache = Cache::default();
 
-    //     cache.subscribe(ResourceType::Listener, "listener.example.svc.cluster.local");
-    //     cache.subscribe(ResourceType::Cluster, "cluster1.example:8913");
-    //     cache.subscribe(ResourceType::Cluster, "cluster2.example:8913");
+        let (tx, mut listener_rx) = notify::new();
+        cache.subscribe(
+            ResourceType::Listener,
+            "listener.example.svc.cluster.local".to_string(),
+            Instant::now(),
+            tx,
+        );
 
-    //     assert_insert(cache.insert(
-    //         "123".into(),
-    //         ResourceVec::Listener(vec![xds_test::listener!(
-    //             "listener.example.svc.cluster.local" => [xds_test::vhost!(
-    //                 "default",
-    //                 ["*"],
-    //                 [
-    //                     xds_test::route!(header "x-staging" => "cluster2.example:8913"),
-    //                     xds_test::route!(default "cluster1.example:8913"),
-    //                 ],
-    //             )],
-    //         )]),
-    //     ));
+        let (tx, mut cluster1_rx) = notify::new();
+        cache.subscribe(
+            ResourceType::Cluster,
+            "cluster1.example:8913".to_string(),
+            Instant::now(),
+            tx,
+        );
+        let (tx, mut cluster2_rx) = notify::new();
+        cache.subscribe(
+            ResourceType::Cluster,
+            "cluster2.example:8913".to_string(),
+            Instant::now(),
+            tx,
+        );
 
-    //     assert_insert(cache.insert(
-    //         "123".into(),
-    //         ResourceVec::Cluster(vec![
-    //             xds_test::cluster!(eds "cluster1.example:8913"),
-    //             xds_test::cluster!(eds "cluster2.example:8913"),
-    //         ]),
-    //     ));
+        assert_insert(cache.insert(
+            "123".into(),
+            ResourceVec::Listener(vec![xds_test::listener!(
+                "listener.example.svc.cluster.local" => [xds_test::vhost!(
+                    "default",
+                    ["*"],
+                    [
+                        xds_test::route!(header "x-staging" => "cluster2.example:8913"),
+                        xds_test::route!(default "cluster1.example:8913"),
+                    ],
+                )],
+            )]),
+        ));
+        assert!(listener_rx.notified());
 
-    //     assert_eq!(
-    //         cache.data.clusters.names().collect::<Vec<_>>(),
-    //         vec!["cluster1.example:8913", "cluster2.example:8913"],
-    //     );
+        assert_insert(cache.insert(
+            "123".into(),
+            ResourceVec::Cluster(vec![
+                xds_test::cluster!(eds "cluster1.example:8913"),
+                xds_test::cluster!(eds "cluster2.example:8913"),
+            ]),
+        ));
+        assert!(cluster1_rx.notified());
+        assert!(cluster2_rx.notified());
 
-    //     // delete everything
-    //     assert_insert(cache.insert("123".into(), ResourceVec::Listener(vec![])));
-    //     assert_insert(cache.insert("123".into(), ResourceVec::Cluster(vec![])));
+        assert_eq!(
+            cache.data.clusters.names().collect::<Vec<_>>(),
+            vec!["cluster1.example:8913", "cluster2.example:8913"],
+        );
 
-    //     // subscriptions should still exist, but data should be gone
-    //     assert!(cache.data.listeners.is_empty());
-    //     assert!(cache.data.clusters.is_empty());
-    //     assert_eq!(
-    //         cache.subscriptions(ResourceType::Listener),
-    //         vec!["listener.example.svc.cluster.local"],
-    //     );
-    //     assert_eq!(
-    //         cache.subscriptions(ResourceType::Cluster),
-    //         vec!["cluster1.example:8913", "cluster2.example:8913"],
-    //     );
-    // }
+        // delete everything
+        assert_insert(cache.insert("123".into(), ResourceVec::Listener(vec![])));
+        assert_insert(cache.insert("123".into(), ResourceVec::Cluster(vec![])));
+
+        // subscriptions should still exist, but data should be gone
+        assert!(cache.data.listeners.is_empty());
+        assert!(cache.data.clusters.is_empty());
+        assert_eq!(
+            cache.subscriptions(ResourceType::Listener),
+            vec!["listener.example.svc.cluster.local"],
+        );
+        assert_eq!(
+            cache.subscriptions(ResourceType::Cluster),
+            vec!["cluster1.example:8913", "cluster2.example:8913"],
+        );
+    }
 
     #[test]
     fn test_insert_out_of_order() {
@@ -1731,6 +1853,81 @@ mod test {
     }
 
     #[test]
+    fn test_cache_handle_timeout() {
+        let mut cache = Cache::default();
+
+        let timeout = Duration::from_secs(5);
+        let subscribe_at = Instant::now();
+        let timeout_at = subscribe_at + (2 * timeout);
+
+        // subscribe to two listeners and assert that they both have pending notifications
+
+        let (tx, mut exists_rx) = notify::new();
+        cache.subscribe(
+            ResourceType::Listener,
+            "listener.example.svc.cluster.local".to_string(),
+            subscribe_at,
+            tx,
+        );
+        let (tx, mut dne_rx) = notify::new();
+        cache.subscribe(
+            ResourceType::Listener,
+            "does-not-exist.example.svc.cluster.local".to_string(),
+            subscribe_at,
+            tx,
+        );
+
+        assert!(exists_rx.pending());
+        assert!(dne_rx.pending());
+
+        // insert one of the two listeners. it should get notified and be in cache.
+        assert_insert(cache.insert(
+            "123".into(),
+            ResourceVec::Listener(vec![xds_test::listener!(
+                "listener.example.svc.cluster.local",
+                "example-route-config",
+            )]),
+        ));
+        assert!(exists_rx.notified());
+
+        // run a timeout that should catch the pending listener. the signal should
+        // no longer be pending, but it should not have had a message sent.
+        cache.handle_timeouts(timeout_at, timeout);
+        assert!(!dne_rx.notified() && !dne_rx.pending());
+
+        // verify the cache state. there should be one listener with data, and one
+        // tracked as having TimedOut.
+        assert_eq!(
+            cache.data.listeners.names().collect::<Vec<_>>(),
+            vec![
+                "does-not-exist.example.svc.cluster.local",
+                "listener.example.svc.cluster.local",
+            ],
+        );
+        assert!({
+            let entry = cache
+                .data
+                .listeners
+                .get("listener.example.svc.cluster.local")
+                .unwrap();
+
+            entry.last_error().is_none()
+        });
+        assert!(matches!(
+            {
+                let entry = cache
+                    .data
+                    .listeners
+                    .get("does-not-exist.example.svc.cluster.local")
+                    .unwrap();
+
+                entry.last_error().cloned()
+            },
+            Some((_, ResourceError::TimedOut))
+        ));
+    }
+
+    #[test]
     fn test_cache_gc_simple() {
         let mut cache = Cache::default();
 
@@ -1888,10 +2085,11 @@ mod test {
         cache.subscribe(
             ResourceType::Cluster,
             "cluster1.example:8888".to_string(),
+            Instant::now(),
             tx,
         );
+        assert!(rx.pending());
 
-        assert!(rx.try_wait().is_err());
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
@@ -1900,7 +2098,7 @@ mod test {
             ]),
         ));
 
-        assert!(rx.try_wait().is_ok());
+        assert!(rx.notified());
         assert!(cache.data.listeners.is_empty());
         assert_eq!(
             cache.data.clusters.names().collect::<Vec<_>>(),
@@ -1912,10 +2110,11 @@ mod test {
         cache.subscribe(
             ResourceType::Listener,
             "listener.example.svc.cluster.local".to_string(),
+            Instant::now(),
             tx,
         );
+        assert!(rx.pending());
 
-        assert!(rx.try_wait().is_err());
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Listener(vec![xds_test::listener!(
@@ -1929,8 +2128,8 @@ mod test {
                 )],
             )]),
         ));
-        assert!(rx.try_wait().is_ok());
 
+        assert!(rx.notified());
         assert_eq!(
             cache.data.listeners.names().collect::<Vec<_>>(),
             vec!["listener.example.svc.cluster.local"],

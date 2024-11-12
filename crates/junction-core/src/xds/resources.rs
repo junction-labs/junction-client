@@ -28,6 +28,9 @@ use crate::BackendLb;
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub(crate) enum ResourceError {
+    #[error("timed out")]
+    TimedOut,
+
     #[error("{0}")]
     InvalidResource(#[from] junction_api::Error),
 

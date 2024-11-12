@@ -30,7 +30,11 @@ use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::TryStreamExt;
-use std::{io::ErrorKind, time::Duration};
+use std::{
+    collections::BTreeSet,
+    io::ErrorKind,
+    time::{Duration, Instant},
+};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Endpoint;
@@ -221,6 +225,10 @@ impl AdsTask {
     /// Run a single ADS connection to completion. Returns `Ok(())` if the
     /// connection exited cleanly, or an error otherwise.
     async fn run_connection(&mut self) -> Result<(), ConnectionError> {
+        // TODO: this should be configurable in Client. leave it as a const here
+        // for now, but it needs to be exposed sooner or later.
+        const TIMEOUT: Duration = Duration::from_secs(5);
+
         let channel = self.new_connection().await?;
         let mut client = AggregatedDiscoveryServiceClient::new(channel);
 
@@ -230,10 +238,12 @@ impl AdsTask {
             .await?;
 
         let mut node = Some(self.node_info.clone());
-
         let mut incoming = stream_response.into_inner();
+        let mut timeouts = BTreeSet::new();
 
         let (mut conn, outgoing) = AdsConnection::new(&mut self.cache);
+
+        let should_set_timeout = !outgoing.is_empty();
         for mut msg in outgoing {
             if let Some(node) = node.take() {
                 msg.node = Some(node)
@@ -241,9 +251,22 @@ impl AdsTask {
             trace_xds_request!(&msg);
             xds_tx.send(msg).await.unwrap();
         }
+        if should_set_timeout {
+            timeouts.insert(Instant::now() + TIMEOUT);
+        }
 
         loop {
+            let timeout = timeouts.first();
             let outgoing = tokio::select! {
+                _ = sleep_until(timeout.cloned()) => {
+                    // when a timeout fires notify the connection and drop all
+                    // of the timeouts that are smaller than now. there's no
+                    // reason to fire timeouts mutliple times.
+                    let now = Instant::now();
+                    conn.handle_timeout(now, TIMEOUT);
+                    prune_timeouts(&mut timeouts, now);
+                    vec![]
+                }
                 xds_msg = incoming.try_next() => {
                     // on GRPC status errors, the connection has died and we're
                     // going to reconnect. pass the error up to reset things
@@ -262,7 +285,7 @@ impl AdsTask {
                 sub_update = self.subscriptions.recv() => {
                     match sub_update {
                         Some(update) => {
-                            let updates = conn.handle_subscription_update(update);
+                            let updates = conn.handle_subscription_update(Instant::now(), update);
                             updates.into_iter().collect()
                         },
                         None => return Ok(()),
@@ -270,12 +293,16 @@ impl AdsTask {
                 }
             };
 
+            let should_set_timeout = !outgoing.is_empty();
             for mut msg in outgoing {
                 if let Some(node) = node.take() {
                     msg.node = Some(node)
                 }
                 trace_xds_request!(msg);
                 xds_tx.send(msg).await.unwrap();
+            }
+            if should_set_timeout {
+                timeouts.insert(Instant::now() + TIMEOUT);
             }
         }
     }
@@ -296,6 +323,27 @@ impl AdsTask {
             Some(channel) => Ok(channel),
             None => self.endpoint.connect().await,
         }
+    }
+}
+
+/// drop early timeouts from the front of the set. this is potentially
+/// quicker than retain, since it relies on the fact that the set
+/// is ordered to avoid walking the whole thing.
+fn prune_timeouts(timeouts: &mut BTreeSet<Instant>, now: Instant) {
+    loop {
+        match timeouts.first() {
+            Some(t) if *t <= now => (),
+            _ => break,
+        }
+
+        timeouts.pop_first();
+    }
+}
+
+async fn sleep_until(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline.into()).await,
+        None => futures::future::pending().await,
     }
 }
 
@@ -335,7 +383,7 @@ fn unwrap_io_error(status: &tonic::Status) -> Option<&std::io::Error> {
 
 /// Single-use notifications, fire and forget.
 pub(crate) mod notify {
-    use futures::TryFutureExt;
+    use futures::FutureExt;
 
     /// Create a single-use sender and receiver pair.
     pub(crate) fn new() -> (Send, Recv) {
@@ -362,13 +410,21 @@ pub(crate) mod notify {
     impl Recv {
         /// Wait for a notification. Returns an Error if the sender dropped
         /// before sending.
-        pub(crate) fn wait(self) -> impl std::future::Future<Output = Result<(), ()>> + Unpin {
-            self.0.map_err(|_| ())
+        pub(crate) fn wait(self) -> impl std::future::Future<Output = ()> + Unpin {
+            self.0.map(|_| ())
         }
 
         #[cfg(test)]
-        pub(crate) fn try_wait(&mut self) -> Result<(), tokio::sync::oneshot::error::TryRecvError> {
-            self.0.try_recv()
+        pub(crate) fn notified(&mut self) -> bool {
+            matches!(self.0.try_recv(), Ok(()))
+        }
+
+        #[cfg(test)]
+        pub(crate) fn pending(&mut self) -> bool {
+            matches!(
+                self.0.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            )
         }
     }
 }
@@ -415,14 +471,12 @@ impl<'a> AdsConnection<'a> {
         };
 
         let mut outgoing = Vec::with_capacity(4);
-
         for resource_type in ResourceType::all() {
             let msg = conn.xds_subscription(*resource_type);
             if !msg.resource_names.is_empty() {
                 outgoing.push(msg);
             }
         }
-
         (conn, outgoing)
     }
 }
@@ -430,16 +484,21 @@ impl<'a> AdsConnection<'a> {
 impl<'a> AdsConnection<'a> {
     fn handle_subscription_update(
         &mut self,
+        now: Instant,
         update: SubscriptionUpdate,
     ) -> Option<DiscoveryRequest> {
         let (rtype, changed) = match update.update {
             SubscriptionUpdateType::Add(rtype, name) => {
-                (rtype, self.cache.subscribe(rtype, name, update.notify))
+                (rtype, self.cache.subscribe(rtype, name, now, update.notify))
             }
             SubscriptionUpdateType::Remove(rtype, name) => (rtype, self.cache.delete(rtype, &name)),
         };
 
         changed.then(|| self.xds_subscription(rtype))
+    }
+
+    fn handle_timeout(&mut self, now: Instant, timeout: Duration) {
+        self.cache.handle_timeouts(now, timeout);
     }
 
     fn handle_ads_message(
@@ -596,6 +655,7 @@ mod test_ads_conn {
         cache.subscribe(
             ResourceType::Listener,
             "nginx.default.svc.cluster.local".to_string(),
+            Instant::now(),
             tx,
         );
         let (_, outgoing) = AdsConnection::new(&mut cache);
@@ -606,7 +666,7 @@ mod test_ads_conn {
                 rs = vec!["nginx.default.svc.cluster.local"]
             )]
         );
-        assert!(rx.try_wait().is_err());
+        assert!(rx.pending());
 
         cache.insert(
             "123".into(),
@@ -618,7 +678,7 @@ mod test_ads_conn {
                 )],
             )]),
         );
-        assert!(rx.try_wait().is_ok());
+        assert!(rx.notified());
 
         let (_, outgoing) = AdsConnection::new(&mut cache);
         assert_eq!(
@@ -675,7 +735,7 @@ mod test_ads_conn {
             "nginx.default.svc.cluster.local".to_string(),
         );
 
-        let request = conn.handle_subscription_update(add);
+        let request = conn.handle_subscription_update(Instant::now(), add);
         assert_eq!(
             request,
             Some(xds_test::req!(
@@ -683,11 +743,11 @@ mod test_ads_conn {
                 rs = vec!["nginx.default.svc.cluster.local"]
             )),
         );
-        assert!(rx.try_wait().is_err());
+        assert!(rx.pending());
 
         let (add, mut rx) =
             SubscriptionUpdate::add(ResourceType::Cluster, "default/nginx/cluster".to_string());
-        let request = conn.handle_subscription_update(add);
+        let request = conn.handle_subscription_update(Instant::now(), add);
         assert_eq!(
             request,
             Some(xds_test::req!(
@@ -695,7 +755,7 @@ mod test_ads_conn {
                 rs = vec!["default/nginx/cluster"]
             )),
         );
-        assert!(rx.try_wait().is_err());
+        assert!(rx.pending());
     }
 
     #[test]
@@ -707,7 +767,7 @@ mod test_ads_conn {
             ResourceType::Listener,
             "nginx.default.svc.cluster.local".to_string(),
         );
-        let request = conn.handle_subscription_update(add);
+        let request = conn.handle_subscription_update(Instant::now(), add);
         assert_eq!(
             request,
             Some(xds_test::req!(
@@ -715,7 +775,7 @@ mod test_ads_conn {
                 rs = vec!["nginx.default.svc.cluster.local"]
             ))
         );
-        assert!(rx.try_wait().is_err());
+        assert!(rx.pending());
 
         let requests = conn.handle_ads_message(xds_test::discovery_response(
             "v1",
@@ -729,7 +789,7 @@ mod test_ads_conn {
             )],
         ));
 
-        assert!(rx.try_wait().is_ok());
+        assert!(rx.notified());
         assert_eq!(
             requests,
             vec![
@@ -768,13 +828,13 @@ mod test_ads_conn {
         );
 
         assert_eq!(
-            conn.handle_subscription_update(add),
+            conn.handle_subscription_update(Instant::now(), add),
             Some(xds_test::req!(
                 t = ResourceType::Listener,
                 rs = vec!["nginx.default.svc.cluster.local"]
             ))
         );
-        assert!(rx.try_wait().is_err());
+        assert!(rx.pending());
 
         // the LDS response includes two clusters
         let requests = conn.handle_ads_message(xds_test::discovery_response(
@@ -792,7 +852,7 @@ mod test_ads_conn {
             )],
         ));
 
-        assert!(rx.try_wait().is_ok());
+        assert!(rx.notified());
         assert_eq!(
             requests,
             vec![
