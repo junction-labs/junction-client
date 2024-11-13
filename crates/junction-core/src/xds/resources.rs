@@ -437,85 +437,21 @@ impl RouteConfig {
 pub(crate) struct Cluster {
     pub xds: xds_cluster::Cluster,
     pub backend_lb: Arc<BackendLb>,
-    pub endpoints: ClusterEndpointData,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum ClusterEndpointData {
-    #[allow(unused)]
-    Inlined {
-        name: String,
-        endpoint_group: Arc<EndpointGroup>,
-    },
-    LoadAssignment {
-        name: ResourceName<LoadAssignment>,
-    },
 }
 
 impl Cluster {
-    // TODO: support logical DNS clusters to keep parity with GRPC
-    // FIXME: convert from the
     pub(crate) fn from_xds(
         xds: xds_cluster::Cluster,
         default_action: Option<&xds_route::RouteAction>,
     ) -> Result<Self, ResourceError> {
         let backend = Backend::from_xds(&xds, default_action)?;
         let load_balancer = LoadBalancer::from_config(&backend.lb);
-
-        let Some(discovery_type) = cluster_discovery_type(&xds) else {
-            return Err(ResourceError::for_xds(
-                xds.name,
-                format!("invalid discovery_type: {:?}", xds.cluster_discovery_type),
-            ));
-        };
-        let load_assignment = match discovery_type {
-            xds_cluster::cluster::DiscoveryType::Eds => {
-                let Some(eds_config) = xds.eds_cluster_config.as_ref() else {
-                    return Err(ResourceError::for_xds_static(
-                        xds.name,
-                        "an EDS cluster must have an eds_cluster_config",
-                    ));
-                };
-
-                let cla_name = if !eds_config.service_name.is_empty() {
-                    eds_config.service_name.clone()
-                } else {
-                    xds.name.clone()
-                };
-                cla_name.into()
-            }
-            _ => {
-                return Err(ResourceError::for_xds_static(
-                    xds.name,
-                    "only EDS clusters are supported",
-                ))
-            }
-        };
-
         let backend_lb = Arc::new(BackendLb {
             config: backend,
             load_balancer,
         });
-        let endpoints = ClusterEndpointData::LoadAssignment {
-            name: load_assignment,
-        };
 
-        Ok(Self {
-            xds,
-            backend_lb,
-            endpoints,
-        })
-    }
-}
-
-fn cluster_discovery_type(
-    cluster: &xds_cluster::Cluster,
-) -> Option<xds_cluster::cluster::DiscoveryType> {
-    match cluster.cluster_discovery_type {
-        Some(xds_cluster::cluster::ClusterDiscoveryType::Type(cdt)) => {
-            xds_cluster::cluster::DiscoveryType::try_from(cdt).ok()
-        }
-        _ => None,
+        Ok(Self { xds, backend_lb })
     }
 }
 
