@@ -59,10 +59,8 @@ pub fn check_route(
 
 pub(crate) trait ConfigCache {
     fn get_route(&self, target: &VirtualHost) -> Option<Arc<Route>>;
-    fn get_backend(
-        &self,
-        target: &BackendId,
-    ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>);
+    fn get_backend(&self, target: &BackendId) -> Option<Arc<BackendLb>>;
+    fn get_endpoints(&self, backend: &BackendId) -> Option<Arc<EndpointGroup>>;
 
     fn get_route_with_fallbacks(&self, targets: &[VirtualHost]) -> Option<Arc<Route>> {
         for target in targets {
@@ -111,10 +109,11 @@ impl ConfigCache for StaticConfig {
         self.routes.get(target).cloned()
     }
 
-    fn get_backend(
-        &self,
-        target: &BackendId,
-    ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
-        (self.backends.get(target).cloned(), None)
+    fn get_backend(&self, target: &BackendId) -> Option<Arc<BackendLb>> {
+        self.backends.get(target).cloned()
+    }
+
+    fn get_endpoints(&self, _: &BackendId) -> Option<Arc<EndpointGroup>> {
+        None
     }
 }

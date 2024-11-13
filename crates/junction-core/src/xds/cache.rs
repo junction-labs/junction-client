@@ -355,29 +355,16 @@ impl ConfigCache for CacheReader {
         }
     }
 
-    fn get_backend(&self, id: &BackendId) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
-        macro_rules! tri {
-            ($e:expr) => {
-                match $e {
-                    Some(value) => value,
-                    None => return (None, None),
-                }
-            };
-        }
+    fn get_backend(&self, id: &BackendId) -> Option<Arc<BackendLb>> {
+        let cluster = self.data.clusters.get(&id.name())?;
+        let cluster_data = cluster.data()?;
+        Some(cluster_data.backend_lb.clone())
+    }
 
-        let backend_name = id.name();
-
-        let cluster = tri!(self.data.clusters.get(&backend_name));
-        let cluster_data = tri!(cluster.data());
-        let backend_and_lb = Some(cluster_data.backend_lb.clone());
-
-        let load_assignment = self.data.load_assignments.get(&backend_name);
-        let Some(load_assignment) = load_assignment else {
-            return (backend_and_lb, None);
-        };
-
-        let endpoint_group = load_assignment.data().map(|d| d.endpoint_group.clone());
-        (backend_and_lb, endpoint_group)
+    fn get_endpoints(&self, backend: &BackendId) -> Option<Arc<EndpointGroup>> {
+        let load_assignment = self.data.load_assignments.get(&backend.name())?;
+        let load_assignment_data = load_assignment.data()?;
+        Some(load_assignment_data.endpoint_group.clone())
     }
 }
 
