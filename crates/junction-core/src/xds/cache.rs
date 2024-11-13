@@ -111,8 +111,8 @@ use xds_api::pb::google::protobuf;
 use crate::{BackendLb, ConfigCache, EndpointGroup};
 
 use super::resources::{
-    ApiListener, ApiListenerRouteConfig, Cluster, ClusterEndpointData, LoadAssignment,
-    ResourceError, ResourceName, ResourceType, ResourceTypeSet, ResourceVec, RouteConfig,
+    ApiListener, ApiListenerRouteConfig, Cluster, LoadAssignment, ResourceError, ResourceName,
+    ResourceType, ResourceTypeSet, ResourceVec, RouteConfig,
 };
 use super::ResourceVersion;
 
@@ -355,10 +355,7 @@ impl ConfigCache for CacheReader {
         }
     }
 
-    fn get_backend(
-        &self,
-        target: &BackendId,
-    ) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
+    fn get_backend(&self, id: &BackendId) -> (Option<Arc<BackendLb>>, Option<Arc<EndpointGroup>>) {
         macro_rules! tri {
             ($e:expr) => {
                 match $e {
@@ -368,24 +365,19 @@ impl ConfigCache for CacheReader {
             };
         }
 
-        let cluster = tri!(self.data.clusters.get(&target.name()));
-        let cluster_data = tri!(cluster.data());
+        let backend_name = id.name();
 
+        let cluster = tri!(self.data.clusters.get(&backend_name));
+        let cluster_data = tri!(cluster.data());
         let backend_and_lb = Some(cluster_data.backend_lb.clone());
 
-        match &cluster_data.endpoints {
-            ClusterEndpointData::Inlined { endpoint_group, .. } => {
-                (backend_and_lb, Some(endpoint_group.clone()))
-            }
-            ClusterEndpointData::LoadAssignment { name } => {
-                let load_assignment = match self.data.load_assignments.get(name.as_str()) {
-                    Some(load_assignment) => load_assignment,
-                    None => return (backend_and_lb, None),
-                };
-                let endpoint_group = load_assignment.data().map(|d| d.endpoint_group.clone());
-                (backend_and_lb, endpoint_group)
-            }
-        }
+        let load_assignment = self.data.load_assignments.get(&backend_name);
+        let Some(load_assignment) = load_assignment else {
+            return (backend_and_lb, None);
+        };
+
+        let endpoint_group = load_assignment.data().map(|d| d.endpoint_group.clone());
+        (backend_and_lb, endpoint_group)
     }
 }
 
@@ -880,12 +872,10 @@ impl Cache {
         self.reset_ref(node);
 
         // remove the old CLA edge and replace it with a new one.
-        if let ClusterEndpointData::LoadAssignment { name } = &cluster.endpoints {
-            changed.insert(ResourceType::ClusterLoadAssignment);
-            let (cla_node, _) =
-                self.find_or_create_ref(ResourceType::ClusterLoadAssignment, name.as_str());
-            self.refs.update_edge(node, cla_node, ());
-        }
+        changed.insert(ResourceType::ClusterLoadAssignment);
+        let (cla_node, _) =
+            self.find_or_create_ref(ResourceType::ClusterLoadAssignment, &cluster_name);
+        self.refs.update_edge(node, cla_node, ());
 
         // try to subscribe to the passthrough Listener for this Cluster if it
         // doesn't already exist in the GC graph.
@@ -1024,7 +1014,7 @@ mod test {
 
     #[track_caller]
     fn assert_insert((changed, errors): (ResourceTypeSet, Vec<ResourceError>)) -> ResourceTypeSet {
-        assert!(errors.is_empty(), "first error = {}", errors[0]);
+        assert!(errors.is_empty(), "{errors:?}");
         changed
     }
 

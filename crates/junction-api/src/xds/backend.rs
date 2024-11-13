@@ -1,7 +1,8 @@
 use std::str::FromStr;
-
 use xds_api::pb::envoy::config::{
     cluster::v3::{self as xds_cluster, cluster::ring_hash_lb_config::HashFunction},
+    core::v3 as xds_core,
+    endpoint::v3 as xds_endpoint,
     route::v3 as xds_route,
 };
 
@@ -11,7 +12,9 @@ use crate::{
         SessionAffinityHashParamType,
     },
     error::{Error, ErrorContext},
-    value_or_default, BackendId, Target,
+    value_or_default,
+    xds::ads_config_source,
+    BackendId, Target,
 };
 
 impl Backend {
@@ -19,9 +22,60 @@ impl Backend {
         cluster: &xds_cluster::Cluster,
         route_action: Option<&xds_route::RouteAction>,
     ) -> Result<Self, Error> {
+        use xds_cluster::cluster::DiscoveryType;
+
         let lb = LbPolicy::from_xds(cluster, route_action)?;
-        let target = BackendId::from_str(&cluster.name)?;
-        Ok(Backend { id: target, lb })
+        let id = BackendId::from_str(&cluster.name)?;
+
+        let discovery_type = cluster_discovery_type(cluster);
+
+        match &id.target {
+            // if this is supposed to be a DNS cluster, validate that the xDS
+            // actually says it's a DNS cluster and that the discovery data
+            // matches the name.
+            Target::Dns(dns) => {
+                if discovery_type != Some(DiscoveryType::LogicalDns) {
+                    return Err(Error::new_static("mismatched discovery type"))
+                        .with_field("cluster_discovery_type");
+                }
+
+                let addr_matches = logical_dns_address(cluster).is_some_and(|sa| {
+                    sa.address == dns.hostname.as_ref()
+                        && xds_port(sa.port_specifier.as_ref()) == Some(id.port)
+                });
+                if !addr_matches {
+                    // NOTE: this error doesn't point at the actual proximate
+                    // field because nobody has time for that. if this starts
+                    // happening often, refine the error message here.
+                    return Err(Error::new_static("cluster is not a valid DNS cluster"))
+                        .with_fields("load_assignment", "endpoints");
+                }
+            }
+            // kube clusters should use EDS over ADS, with a cluster_name matching cluster.name
+            Target::KubeService(_) => {
+                if discovery_type != Some(DiscoveryType::Eds) {
+                    return Err(Error::new_static("mismatched discovery type"))
+                        .with_field("cluster_discovery_type");
+                }
+
+                let Some(eds_config) = &cluster.eds_cluster_config else {
+                    return Err(Error::new_static("missing EDS config"))
+                        .with_field("eds_cluster_conig");
+                };
+
+                if eds_config.service_name != id.name() {
+                    return Err(Error::new_static("cluster_name must match EDS name"))
+                        .with_fields("eds_cluster_config", "service_name");
+                }
+
+                if eds_config.eds_config != Some(ads_config_source()) {
+                    return Err(Error::new_static("EDS cluster is not configured for ADS"))
+                        .with_fields("eds_cluster_config", "eds_config");
+                }
+            }
+        }
+
+        Ok(Backend { id, lb })
     }
 
     pub fn to_xds_cluster(&self) -> xds_cluster::Cluster {
@@ -34,20 +88,46 @@ impl Backend {
             None => (xds_cluster::cluster::LbPolicy::default(), None),
         };
 
-        let cluster_discovery_type = match &self.id.target {
-            Target::Dns(_) => ClusterDiscoveryType::Type(DiscoveryType::LogicalDns.into()),
-            Target::KubeService(_) => ClusterDiscoveryType::Type(DiscoveryType::Eds.into()),
+        let (cluster_discovery_type, eds_cluster_config, load_assignment) = match &self.id.target {
+            Target::Dns(dns) => {
+                let dtype = ClusterDiscoveryType::Type(DiscoveryType::LogicalDns.into());
+                let host_identifier = Some(xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(
+                    xds_endpoint::Endpoint {
+                        address: Some(to_xds_address(&dns.hostname, self.id.port)),
+                        ..Default::default()
+                    },
+                ));
+                let endpoints = vec![xds_endpoint::LocalityLbEndpoints {
+                    lb_endpoints: vec![xds_endpoint::LbEndpoint {
+                        host_identifier,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }];
+                let load_assignment = Some(xds_endpoint::ClusterLoadAssignment {
+                    endpoints,
+                    ..Default::default()
+                });
+                (dtype, None, load_assignment)
+            }
+            Target::KubeService(_) => {
+                let cluster_discovery_type = ClusterDiscoveryType::Type(DiscoveryType::Eds.into());
+                let eds_cluster_config = Some(EdsClusterConfig {
+                    eds_config: Some(crate::xds::ads_config_source()),
+                    service_name: self.id.name(),
+                });
+                (cluster_discovery_type, eds_cluster_config, None)
+            }
         };
 
+        let cluster_discovery_type = Some(cluster_discovery_type);
         xds_cluster::Cluster {
             name: self.id.name(),
             lb_policy: lb_policy.into(),
             lb_config,
-            cluster_discovery_type: Some(cluster_discovery_type),
-            eds_cluster_config: Some(EdsClusterConfig {
-                eds_config: Some(crate::xds::ads_config_source()),
-                service_name: self.id.name(),
-            }),
+            cluster_discovery_type,
+            load_assignment,
+            eds_cluster_config,
             ..Default::default()
         }
     }
@@ -97,6 +177,57 @@ impl Backend {
             }
             _ => Vec::new(),
         }
+    }
+}
+
+fn to_xds_address(hostname: &crate::Hostname, port: u16) -> xds_core::Address {
+    let socket_address = xds_core::SocketAddress {
+        address: hostname.to_string(),
+        port_specifier: Some(xds_core::socket_address::PortSpecifier::PortValue(
+            port as u32,
+        )),
+        ..Default::default()
+    };
+
+    xds_core::Address {
+        address: Some(xds_core::address::Address::SocketAddress(socket_address)),
+    }
+}
+
+fn cluster_discovery_type(
+    cluster: &xds_cluster::Cluster,
+) -> Option<xds_cluster::cluster::DiscoveryType> {
+    match cluster.cluster_discovery_type {
+        Some(xds_cluster::cluster::ClusterDiscoveryType::Type(cdt)) => {
+            xds_cluster::cluster::DiscoveryType::try_from(cdt).ok()
+        }
+        _ => None,
+    }
+}
+
+fn logical_dns_address(cluster: &xds_cluster::Cluster) -> Option<&xds_core::SocketAddress> {
+    let cla = cluster.load_assignment.as_ref()?;
+    let endpoint = cla.endpoints.first()?;
+    let lb_endpoint = endpoint.lb_endpoints.first()?;
+
+    let endpoint_addr = match lb_endpoint.host_identifier.as_ref()? {
+        xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(endpoint) => {
+            endpoint.address.as_ref()?
+        }
+        _ => return None,
+    };
+
+    match endpoint_addr.address.as_ref()? {
+        xds_core::address::Address::SocketAddress(socket_address) => Some(socket_address),
+        _ => None,
+    }
+}
+
+#[inline]
+fn xds_port(port_specifier: Option<&xds_core::socket_address::PortSpecifier>) -> Option<u16> {
+    match port_specifier {
+        Some(xds_core::socket_address::PortSpecifier::PortValue(v)) => (*v).try_into().ok(),
+        _ => None,
     }
 }
 

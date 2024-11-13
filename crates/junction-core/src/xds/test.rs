@@ -2,11 +2,17 @@
 //!
 //! Use these macros as a shorthand for writing out full XDS resource structs.
 
+use std::str::FromStr;
+
 use crate::xds::ResourceType;
+use junction_api::{
+    backend::{Backend, LbPolicy},
+    BackendId,
+};
 use xds_api::pb::{
     envoy::{
         config::{
-            cluster::v3::{self as xds_cluster, cluster::RingHashLbConfig},
+            cluster::v3 as xds_cluster,
             core::v3 as xds_core,
             endpoint::v3 as xds_endpoint,
             listener::v3 as xds_listener,
@@ -294,29 +300,16 @@ pub fn cluster_eds(
     name: &'static str,
     lb_policy: Option<xds_cluster::cluster::LbPolicy>,
 ) -> xds_cluster::Cluster {
-    let (lb_policy, lb_config) = match lb_policy {
-        Some(xds_cluster::cluster::LbPolicy::RingHash) => (
-            xds_cluster::cluster::LbPolicy::RingHash,
-            Some(xds_cluster::cluster::LbConfig::RingHashLbConfig(
-                RingHashLbConfig::default(),
-            )),
-        ),
-        _ => (xds_cluster::cluster::LbPolicy::RoundRobin, None),
+    let backend = Backend {
+        id: BackendId::from_str(name).unwrap(),
+        lb: LbPolicy::Unspecified,
     };
 
-    xds_cluster::Cluster {
-        name: name.to_string(),
-        lb_policy: lb_policy.into(),
-        lb_config,
-        cluster_discovery_type: Some(xds_cluster::cluster::ClusterDiscoveryType::Type(
-            xds_cluster::cluster::DiscoveryType::Eds as i32,
-        )),
-        eds_cluster_config: Some(xds_cluster::cluster::EdsClusterConfig {
-            eds_config: Some(ads_config_source()),
-            service_name: String::new(),
-        }),
-        ..Default::default()
+    let mut cluster = backend.to_xds_cluster();
+    if let Some(lb_policy) = lb_policy {
+        cluster.lb_policy = lb_policy.into();
     }
+    cluster
 }
 
 pub fn cluster_inline(
