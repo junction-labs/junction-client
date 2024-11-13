@@ -449,40 +449,35 @@ fn resolve_endpoint(
     resolved: ResolvedRoute,
     request: HttpRequest<'_>,
 ) -> crate::Result<Vec<Endpoint>> {
-    let (backend, endpoints) = match cache.get_backend(&resolved.backend) {
-        (Some(backend), Some(endpoints)) => {
-            let lb = if backend.config.lb.is_unspecified() {
-                let (default_backend, _) = defaults.get_backend(&resolved.backend);
-                default_backend.unwrap_or(backend)
-            } else {
-                backend
-            };
-            (lb, endpoints)
-        }
-        (Some(backend), None) => {
-            return Err(Error::no_reachable_endpoints(
-                resolved.route.vhost.clone(),
-                backend.config.id.clone(),
-            ))
-        }
-        // FIXME: does this case even make sense?
-        (None, Some(_)) => {
-            // this is never supposed to happen - by contract you can get None,
-            // just an Lb, or both an Lb and endpoints.
-            panic!("you've hit a bug in Junction")
-        }
-        _ => {
-            // FIXME(DNS): this might be something we want to handle
-            // depending on exactly where DNS lookups get implemented. we
-            // still need to check client defaults as its entirly possible
-            // its a DNS address that xDS knows nothing about but we can
-            // still route to.
+    // pull the backend out of cache.
+    let backend = match (
+        cache.get_backend(&resolved.backend),
+        defaults.get_backend(&resolved.backend),
+    ) {
+        // if there's a backend in both the cache and defaults, pick the cached
+        // backend unless it's unspecified
+        (Some(cache), Some(default)) if cache.config.lb.is_unspecified() => default,
+        // otherwise pick the cached backend if it's available and the default
+        // if it's not.
+        (Some(backend), _) | (None, Some(backend)) => backend,
+        // if there's nothign available, that's a paddlin
+        (None, None) => {
             return Err(Error::no_backend(
                 resolved.route.vhost.clone(),
                 resolved.rule,
                 resolved.backend,
-            ));
+            ))
         }
+    };
+
+    // there's no notion of defaults for endpoints (yet?).
+    //
+    // TODO: depending on DNS vs KubeService etc we need to do something different here.
+    let Some(endpoints) = cache.get_endpoints(&resolved.backend) else {
+        return Err(Error::no_reachable_endpoints(
+            resolved.route.vhost.clone(),
+            backend.config.id.clone(),
+        ));
     };
 
     let endpoint = backend
