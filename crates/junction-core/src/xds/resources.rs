@@ -1,28 +1,28 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::ops::Deref;
 use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 
 use enum_map::EnumMap;
 use junction_api::backend::Backend;
 use junction_api::http::Route;
-use junction_api::BackendId;
+use junction_api::{BackendId, Target};
 use smol_str::SmolStr;
 use xds_api::pb::google::protobuf;
 use xds_api::{
     pb::envoy::{
         config::{
-            cluster::v3::{self as xds_cluster},
-            endpoint::v3::{self as xds_endpoint},
-            listener::v3::{self as xds_listener},
-            route::v3::{self as xds_route},
+            cluster::v3 as xds_cluster, core::v3 as xds_core, endpoint::v3 as xds_endpoint,
+            listener::v3 as xds_listener, route::v3 as xds_route,
         },
         extensions::filters::network::http_connection_manager::v3 as xds_http,
     },
     WellKnownTypes,
 };
 
-use crate::load_balancer::{EndpointGroup, LoadBalancer};
-use crate::BackendLb;
+use crate::load_balancer::{EndpointGroup, LoadBalancer, Locality, LocalityInfo};
+use crate::{BackendLb, EndpointAddress};
 
 // FIXME: validate that the all the EDS config sources use ADS instead of just assuming it everywhere.
 
@@ -468,6 +468,86 @@ impl LoadAssignment {
         Self {
             xds,
             endpoint_group,
+        }
+    }
+}
+
+impl Locality {
+    pub(crate) fn from_xds(locality: &Option<xds_core::Locality>) -> Self {
+        let Some(locality) = locality.as_ref() else {
+            return Self::Unknown;
+        };
+
+        if locality.region.is_empty() && locality.zone.is_empty() {
+            return Self::Unknown;
+        }
+
+        Self::Known(LocalityInfo {
+            region: locality.region.clone(),
+            zone: locality.zone.clone(),
+        })
+    }
+}
+
+impl EndpointGroup {
+    pub(crate) fn from_xds(target: &BackendId, cla: &xds_endpoint::ClusterLoadAssignment) -> Self {
+        let make_address = match target.target {
+            Target::Dns(_) => EndpointAddress::from_xds_dns_name,
+            Target::KubeService(_) => EndpointAddress::from_xds_socket_addr,
+        };
+
+        let mut endpoints = BTreeMap::new();
+        for locality_endpoints in &cla.endpoints {
+            let locality = Locality::from_xds(&locality_endpoints.locality);
+            let locality_endpoints: Vec<_> = locality_endpoints
+                .lb_endpoints
+                .iter()
+                .filter_map(|endpoint| {
+                    crate::EndpointAddress::from_xds_lb_endpoint(endpoint, make_address)
+                })
+                .collect();
+
+            endpoints.insert(locality, locality_endpoints);
+        }
+
+        EndpointGroup::new(endpoints)
+    }
+}
+
+impl EndpointAddress {
+    pub(crate) fn from_xds_socket_addr(xds_address: &xds_core::SocketAddress) -> Option<Self> {
+        let ip = xds_address.address.parse().ok()?;
+        let port: u16 = match xds_address.port_specifier.as_ref()? {
+            xds_core::socket_address::PortSpecifier::PortValue(port) => (*port).try_into().ok()?,
+            _ => return None,
+        };
+
+        Some(Self::SocketAddr(SocketAddr::new(ip, port)))
+    }
+
+    pub(crate) fn from_xds_dns_name(xds_address: &xds_core::SocketAddress) -> Option<Self> {
+        let address = xds_address.address.clone();
+        let port = match xds_address.port_specifier.as_ref()? {
+            xds_core::socket_address::PortSpecifier::PortValue(port) => port,
+            _ => return None,
+        };
+
+        Some(Self::DnsName(address, *port))
+    }
+
+    pub(crate) fn from_xds_lb_endpoint<F>(endpoint: &xds_endpoint::LbEndpoint, f: F) -> Option<Self>
+    where
+        F: Fn(&xds_core::SocketAddress) -> Option<EndpointAddress>,
+    {
+        let endpoint = match endpoint.host_identifier.as_ref()? {
+            xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(ep) => ep,
+            xds_endpoint::lb_endpoint::HostIdentifier::EndpointName(_) => return None,
+        };
+
+        let address = endpoint.address.as_ref().and_then(|a| a.address.as_ref())?;
+        match address {
+            xds_core::address::Address::SocketAddress(socket_address) => f(socket_address),
+            _ => None,
         }
     }
 }

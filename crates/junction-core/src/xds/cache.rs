@@ -362,9 +362,16 @@ impl ConfigCache for CacheReader {
     }
 
     fn get_endpoints(&self, backend: &BackendId) -> Option<Arc<EndpointGroup>> {
-        let load_assignment = self.data.load_assignments.get(&backend.name())?;
-        let load_assignment_data = load_assignment.data()?;
-        Some(load_assignment_data.endpoint_group.clone())
+        match &backend.target {
+            // use the DNS cache
+            junction_api::Target::Dns(_dns) => todo!(),
+            // use the EDS cache
+            _ => {
+                let load_assignment = self.data.load_assignments.get(&backend.name())?;
+                let load_assignment_data = load_assignment.data()?;
+                Some(load_assignment_data.endpoint_group.clone())
+            }
+        }
     }
 }
 
@@ -414,14 +421,18 @@ struct CacheData {
     load_assignments: ResourceMap<LoadAssignment>,
 }
 
-// public API
 impl Cache {
+    /// Create a new read-only handle to this cache.
+    ///
+    /// Read handles are cheap, and intended to be created and shared across
+    /// multiple threads and tasks.
     pub fn reader(&self) -> CacheReader {
         CacheReader {
             data: self.data.clone(),
         }
     }
 
+    /// Return the resource names that should be subscribed to.
     pub fn subscriptions(&self, resource_type: ResourceType) -> Vec<String> {
         let weights = self
             .refs
@@ -430,6 +441,12 @@ impl Cache {
         weights.map(|n| n.name.clone()).collect()
     }
 
+    /// Insert a batch of xDS resources into the cache.
+    ///
+    /// Returns the set of resource types that indicates the types of resources
+    /// that were changed or were newly subscribed to. Callers should use this
+    /// set to determine whether to ACK or to re-subscribe to resources of that
+    /// type.
     pub fn insert(
         &mut self,
         version: crate::xds::ResourceVersion,

@@ -1,9 +1,6 @@
 use crate::EndpointAddress;
-use junction_api::{
-    backend::{
-        Backend, LbPolicy, RingHashParams, SessionAffinityHashParam, SessionAffinityHashParamType,
-    },
-    BackendId, Target,
+use junction_api::backend::{
+    Backend, LbPolicy, RingHashParams, SessionAffinityHashParam, SessionAffinityHashParamType,
 };
 use std::{
     collections::BTreeMap,
@@ -13,7 +10,6 @@ use std::{
         RwLock,
     },
 };
-use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
 
 // FIXME: we ignore weights in EndpointGroup. that probably shouldn't be the case
 
@@ -24,26 +20,7 @@ pub(crate) struct EndpointGroup {
 }
 
 impl EndpointGroup {
-    pub(crate) fn from_xds(target: &BackendId, cla: &xds_endpoint::ClusterLoadAssignment) -> Self {
-        let make_address = match target.target {
-            Target::Dns(_) => EndpointAddress::from_socket_addr,
-            Target::KubeService(_) => EndpointAddress::from_dns_name,
-        };
-
-        let mut endpoints = BTreeMap::new();
-        for locality_endpoints in &cla.endpoints {
-            let locality = Locality::from_xds(&locality_endpoints.locality);
-            let locality_endpoints: Vec<_> = locality_endpoints
-                .lb_endpoints
-                .iter()
-                .filter_map(|endpoint| {
-                    crate::EndpointAddress::from_xds_lb_endpoint(endpoint, make_address)
-                })
-                .collect();
-
-            endpoints.insert(locality, locality_endpoints);
-        }
-
+    pub(crate) fn new(endpoints: BTreeMap<Locality, Vec<crate::EndpointAddress>>) -> Self {
         let hash = thread_local_xxhash::hash(&endpoints);
         Self { hash, endpoints }
     }
@@ -86,23 +63,6 @@ pub(crate) enum Locality {
 pub(crate) struct LocalityInfo {
     pub(crate) region: String,
     pub(crate) zone: String,
-}
-
-impl Locality {
-    fn from_xds(locality: &Option<xds_core::Locality>) -> Self {
-        let Some(locality) = locality.as_ref() else {
-            return Self::Unknown;
-        };
-
-        if locality.region.is_empty() && locality.zone.is_empty() {
-            return Self::Unknown;
-        }
-
-        Self::Known(LocalityInfo {
-            region: locality.region.clone(),
-            zone: locality.zone.clone(),
-        })
-    }
 }
 
 /// A [Backend] and the [LoadBalancer] it's configured with.

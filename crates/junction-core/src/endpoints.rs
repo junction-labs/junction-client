@@ -1,6 +1,5 @@
 use junction_api::http::{RouteRetry, RouteTimeouts};
 use std::net::SocketAddr;
-use xds_api::pb::envoy::config::{core::v3 as xds_core, endpoint::v3 as xds_endpoint};
 
 /// An HTTP endpoint to make a request to.
 ///
@@ -38,44 +37,6 @@ impl std::fmt::Display for EndpointAddress {
         match self {
             EndpointAddress::SocketAddr(addr) => addr.fmt(f),
             EndpointAddress::DnsName(name, port) => write!(f, "{name}:{port}"),
-        }
-    }
-}
-
-impl EndpointAddress {
-    pub(crate) fn from_socket_addr(xds_address: &xds_core::SocketAddress) -> Option<Self> {
-        let ip = xds_address.address.parse().ok()?;
-        let port: u16 = match xds_address.port_specifier.as_ref()? {
-            xds_core::socket_address::PortSpecifier::PortValue(port) => (*port).try_into().ok()?,
-            _ => return None,
-        };
-
-        Some(Self::SocketAddr(SocketAddr::new(ip, port)))
-    }
-
-    pub(crate) fn from_dns_name(xds_address: &xds_core::SocketAddress) -> Option<Self> {
-        let address = xds_address.address.clone();
-        let port = match xds_address.port_specifier.as_ref()? {
-            xds_core::socket_address::PortSpecifier::PortValue(port) => port,
-            _ => return None,
-        };
-
-        Some(Self::DnsName(address, *port))
-    }
-
-    pub(crate) fn from_xds_lb_endpoint<F>(endpoint: &xds_endpoint::LbEndpoint, f: F) -> Option<Self>
-    where
-        F: Fn(&xds_core::SocketAddress) -> Option<EndpointAddress>,
-    {
-        let endpoint = match endpoint.host_identifier.as_ref()? {
-            xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(ep) => ep,
-            xds_endpoint::lb_endpoint::HostIdentifier::EndpointName(_) => return None,
-        };
-
-        let address = endpoint.address.as_ref().and_then(|a| a.address.as_ref())?;
-        match address {
-            xds_core::address::Address::SocketAddress(socket_address) => f(socket_address),
-            _ => None,
         }
     }
 }
