@@ -19,7 +19,7 @@ pub struct Endpoint {
 ///
 /// Depending on the type of endpoint, addresses may need to be further resolved by
 /// a client implementation.
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum EndpointAddress {
     /// A resolved IP address and port. This address can be used for a request
     /// without any further resolution.
@@ -30,6 +30,15 @@ pub enum EndpointAddress {
     ///
     /// This name may be different than the hostname part of an [Endpoint]'s `url`.
     DnsName(String, u32),
+}
+
+impl<T> From<T> for EndpointAddress
+where
+    T: Into<SocketAddr>,
+{
+    fn from(t: T) -> Self {
+        Self::SocketAddr(t.into())
+    }
 }
 
 impl std::fmt::Display for EndpointAddress {

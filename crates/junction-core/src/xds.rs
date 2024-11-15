@@ -1,36 +1,40 @@
-// A sans-io implementation of an SotW ADS client.
-//
-// This module supports a subset of XDS that should mirror GRPCs as closely
-// as possible, diverging where it makes sense for HTTP protocol support.
-//
-// The the client is built around a cache of both XDS and internal config. The
-// single connection handling thread owns the cache, but any number of readers
-// can read from it concurrently. See the cache module for more.
-//
-// As XDS is read from the wire, it's validated and transformed into internal
-// configuration structs. See the `resources` module for all of the gory details
-// about what's considered valid and what isn't.
-//
-//
-// # TODO
-//
-// - Support XDS client features like
-//   `envoy.lb.does_not_support_overprovisioning` and friends. See
-//   https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md.
-//
-// - Support for HTTP filters and per-route filter overrides.
-//   https://github.com/grpc/proposal/blob/master/A39-xds-http-filters.md
-//
-// - XDS config dumps, potentially through CSRS.
-//
-//- Support the Envoy LRS protocol for sending load back to the control plane.
-//  https://www.envoyproxy.io/docs/envoy/latest/start/sandboxes/load-reporting-service.html
+//! Junction XDS.
+//!
+//! This module contains [AdsClient], the interface between Junction and XDS. A
+//! client is a long-lived pile of state that gets wrapped by one or more Junction
+//! Clients to present Route and Backend data to the world.
+//!
+//! The stateful internals of a client are written in a sans-io way as much as
+//! possible to make it easier to test and verify the complexity of ADS. Most of
+//! the nasty bits are wrapped up in the [cache] module - a Cache is responsible
+//! for parsing and storing raw xDS and its Junction equivalent, and for tracking
+//! the relationship between resources.
+//!
+//! An [AdsConnection] wraps a cache and a DNS resolver and multiplexes the
+//! input from remote connections, subscriptions from clients and uses the
+//! state of the cache to register interest in DNS names and to subscribe to
+//! xDS resources.
+//!
+//! The [AdsTask] returned from a client is the actual io in this module - an
+//! [AdsTask] actually does gRPC and listens on sockets and drives a new
+//! [AdsConnection] every time it reconnects.
+//!
+//!  # TODO
+//!
+//! - Figure out how to run a Client without an upstream ADS server. Right now
+//!   we don't process subscription updates until a gRPC connection gets
+//!   established which seems bad.
+//!
+//!  - XDS client features:
+//!    `envoy.lb.does_not_support_overprovisioning` and friends. See
+//!    <https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md>.
 
 use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::TryStreamExt;
-use std::{io::ErrorKind, time::Duration};
+use junction_api::{http::Route, BackendId, Hostname, Target, VirtualHost};
+use std::{collections::BTreeSet, future::Future, io::ErrorKind, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Endpoint;
@@ -43,25 +47,57 @@ use xds_api::pb::{
             DiscoveryRequest, DiscoveryResponse,
         },
     },
+    google::protobuf,
     google::rpc::Status as GrpcStatus,
 };
 
 mod cache;
-pub use cache::XdsConfig;
 
 mod resources;
 pub use resources::ResourceVersion;
 pub(crate) use resources::{ResourceType, ResourceVec};
 
-pub(crate) mod csds;
+use crate::{dns::StdlibResolver, BackendLb, ConfigCache};
+
+mod csds;
 
 #[cfg(test)]
 mod test;
 
+/// A single xDS configuration object, with additional metadata about when it
+/// was fetched and processed.
+#[derive(Debug, Default, Clone)]
+pub struct XdsConfig {
+    pub name: String,
+    pub type_url: String,
+    pub version: ResourceVersion,
+    pub xds: Option<protobuf::Any>,
+    pub last_error: Option<(ResourceVersion, String)>,
+}
+
+#[derive(Debug)]
+enum SubscriptionUpdate {
+    AddVirtualHosts(Vec<VirtualHost>),
+    RemoveVirtualHosts(Vec<VirtualHost>),
+    AddBackends(Vec<BackendId>),
+    RemoveBackends(Vec<BackendId>),
+}
+
+/// A Junction ADS client that manages long-lived xDS state by connecting to a
+/// remote server.
+///
+/// The client presents downstream as a [ConfigCache] so that a client can query
+/// `Route` and `Backend` data. It also exposes a subscription interface for
+/// both so that clients can register interest without having to know about the
+/// details of xDS.
+///
+/// See the module docs for the general design of this whole module and how the
+/// client pulls it all together.
 #[derive(Clone)]
-pub struct AdsClient {
-    subscriptions: mpsc::Sender<SubscriptionUpdate>,
-    pub(crate) cache: CacheReader,
+pub(super) struct AdsClient {
+    subs: mpsc::Sender<SubscriptionUpdate>,
+    cache: CacheReader,
+    dns: StdlibResolver,
 }
 
 impl AdsClient {
@@ -74,7 +110,7 @@ impl AdsClient {
     /// This method doesn't start the background work necessary to communicate with
     /// an ADS server. To do that, call the [run][AdsTask::run] method on the returned
     /// `AdsTask`.
-    pub fn build(
+    pub(super) fn build(
         address: impl Into<Bytes>,
         node_id: String,
         cluster: String,
@@ -95,27 +131,121 @@ impl AdsClient {
         let (sub_tx, sub_rx) = mpsc::channel(10);
         let cache = Cache::default();
 
+        // FIXME: make this configurable
+        let dns = StdlibResolver::new_with(Duration::from_secs(5), Duration::from_millis(500), 2);
+
         let client = AdsClient {
-            subscriptions: sub_tx,
+            subs: sub_tx,
             cache: cache.reader(),
+            dns: dns.clone(),
         };
         let task = AdsTask {
             endpoint,
             initial_channel: None,
             node_info,
             cache,
-            subscriptions: sub_rx,
+            dns,
+            subs: sub_rx,
         };
 
         Ok((client, task))
     }
 
-    pub fn subscribe(&self, resource_type: ResourceType, name: String) -> Result<(), ()> {
-        self.subscriptions
-            .try_send(SubscriptionUpdate::Add(resource_type, name))
+    pub(super) fn subscribe_to_vhosts(
+        &self,
+        vhosts: impl IntoIterator<Item = VirtualHost>,
+    ) -> Result<(), ()> {
+        let vhosts = vhosts.into_iter().collect();
+        self.subs
+            .try_send(SubscriptionUpdate::AddVirtualHosts(vhosts))
             .map_err(|_| ())?;
 
         Ok(())
+    }
+
+    // TODO: call this on client dropping defaults
+    #[allow(unused)]
+    pub(super) fn unsubscribe_from_vhosts(
+        &self,
+        vhosts: impl IntoIterator<Item = VirtualHost>,
+    ) -> Result<(), ()> {
+        let vhosts = vhosts.into_iter().collect();
+        self.subs
+            .try_send(SubscriptionUpdate::RemoveVirtualHosts(vhosts))
+            .map_err(|_| ())?;
+
+        Ok(())
+    }
+
+    pub(super) fn subscribe_to_backends(
+        &self,
+        backends: impl IntoIterator<Item = BackendId>,
+    ) -> Result<(), ()> {
+        let backends = backends.into_iter().collect();
+        self.subs
+            .try_send(SubscriptionUpdate::AddBackends(backends))
+            .map_err(|_| ())?;
+
+        Ok(())
+    }
+
+    // TODO: call this on client dropping defaults
+    #[allow(unused)]
+    pub(super) fn unsubscribe_from_backends(
+        &self,
+        backends: impl IntoIterator<Item = BackendId>,
+    ) -> Result<(), ()> {
+        let backends = backends.into_iter().collect();
+        self.subs
+            .try_send(SubscriptionUpdate::RemoveBackends(backends))
+            .map_err(|_| ())?;
+
+        Ok(())
+    }
+
+    pub(super) fn csds_server(
+        &self,
+        port: u16,
+    ) -> impl Future<Output = Result<(), tonic::transport::Error>> {
+        csds::local_server(self.cache.clone(), port)
+    }
+
+    pub(super) fn iter_routes(&self) -> impl Iterator<Item = Arc<Route>> + '_ {
+        self.cache.iter_routes()
+    }
+
+    pub(super) fn iter_backends(&self) -> impl Iterator<Item = Arc<BackendLb>> + '_ {
+        self.cache.iter_backends()
+    }
+
+    pub(super) fn iter_xds(&self) -> impl Iterator<Item = XdsConfig> + '_ {
+        self.cache.iter_xds()
+    }
+}
+
+impl ConfigCache for AdsClient {
+    fn get_route(
+        &self,
+        target: &junction_api::VirtualHost,
+    ) -> Option<std::sync::Arc<junction_api::http::Route>> {
+        self.cache.get_route(target)
+    }
+
+    fn get_backend(
+        &self,
+        target: &junction_api::BackendId,
+    ) -> Option<std::sync::Arc<crate::BackendLb>> {
+        self.cache.get_backend(target)
+    }
+
+    fn get_endpoints(
+        &self,
+        backend: &junction_api::BackendId,
+    ) -> Option<std::sync::Arc<crate::load_balancer::EndpointGroup>> {
+        match &backend.target {
+            junction_api::Target::Dns(dns) => self.dns.get_endpoints(&dns.hostname, backend.port),
+            _ => self.cache.get_endpoints(backend),
+        }
     }
 }
 
@@ -124,7 +254,8 @@ pub(crate) struct AdsTask {
     initial_channel: Option<tonic::transport::Channel>,
     node_info: xds_core::Node,
     cache: Cache,
-    subscriptions: mpsc::Receiver<SubscriptionUpdate>,
+    dns: StdlibResolver,
+    subs: mpsc::Receiver<SubscriptionUpdate>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -162,11 +293,11 @@ macro_rules! trace_xds_response {
 }
 
 impl AdsTask {
-    pub fn is_shutdown(&self) -> bool {
-        self.subscriptions.is_closed()
+    pub(super) fn is_shutdown(&self) -> bool {
+        self.subs.is_closed()
     }
 
-    pub async fn run(&mut self) -> Result<(), &(dyn std::error::Error + 'static)> {
+    pub(super) async fn run(&mut self) -> Result<(), &(dyn std::error::Error + 'static)> {
         if self.is_shutdown() {
             return Err(&ShutdownError);
         }
@@ -224,19 +355,24 @@ impl AdsTask {
             .stream_aggregated_resources(ReceiverStream::new(xds_rx))
             .await?;
 
-        let mut node = Some(self.node_info.clone());
-
         let mut incoming = stream_response.into_inner();
+        let (mut conn, outgoing) = AdsConnection::new(self.node_info.clone(), &mut self.cache);
 
-        let (mut conn, outgoing) = AdsConnection::new(&mut self.cache);
-        for mut msg in outgoing {
-            if let Some(node) = node.take() {
-                msg.node = Some(node)
-            }
-            trace_xds_request!(&msg);
-            xds_tx.send(msg).await.unwrap();
-        }
+        // always sync dns from cache at the start. there will be no names to
+        // add/remove individually since there were no incoming subscription
+        // changes.
+        update_dns(
+            &self.dns,
+            BTreeSet::new(),
+            BTreeSet::new(),
+            Some(conn.cache.dns_names()),
+        );
 
+        // send messages
+        send_outgoing(&mut conn, &xds_tx, outgoing).await;
+
+        // TODO: figure out how to do some batching here. we think it will
+        // reduce xDS chatter
         loop {
             let outgoing = tokio::select! {
                 xds_msg = incoming.try_next() => {
@@ -252,30 +388,38 @@ impl AdsTask {
                     // on XDS errors, just say fuck it and return so that the
                     // connection resets. there's something fucked up that will
                     // be fixed best by resetting connection state.
+                    tracing::trace!("handling ads message");
                     conn.handle_ads_message(response)
                 }
-                sub_update = self.subscriptions.recv() => {
-                    match sub_update {
-                        Some(update) => {
-                            let updates = conn.handle_subscription_update(update);
-                            updates.into_iter().collect()
-                        },
-                        None => return Ok(()),
-                    }
+                sub_update = self.subs.recv() => {
+                    let Some(sub_update) = sub_update else {
+                        return Ok(())
+                    };
+                    tracing::trace!(
+                        ?sub_update,
+                        "handling subscrition update",
+                    );
+                    conn.handle_subscription_update(sub_update)
                 }
             };
 
-            for mut msg in outgoing {
-                if let Some(node) = node.take() {
-                    msg.node = Some(node)
-                }
-                trace_xds_request!(msg);
-                xds_tx.send(msg).await.unwrap();
-            }
+            // update dns
+            let updates = conn.dns_updates();
+            // sync.then(...) takes a closure and won't build the iterator
+            // unless there are changes.
+            update_dns(
+                &self.dns,
+                updates.add,
+                updates.remove,
+                updates.sync.then(|| conn.cache.dns_names()),
+            );
+
+            // send messages
+            send_outgoing(&mut conn, &xds_tx, outgoing).await;
         }
     }
 
-    pub async fn connect(&mut self) -> Result<(), tonic::transport::Error> {
+    pub(super) async fn connect(&mut self) -> Result<(), tonic::transport::Error> {
         if self.initial_channel.is_none() {
             let channel = self.endpoint.connect().await?;
             self.initial_channel = Some(channel)
@@ -291,6 +435,40 @@ impl AdsTask {
             Some(channel) => Ok(channel),
             None => self.endpoint.connect().await,
         }
+    }
+}
+
+#[inline]
+async fn send_outgoing(
+    conn: &mut AdsConnection<'_>,
+    tx: &tokio::sync::mpsc::Sender<DiscoveryRequest>,
+    outgoing: Vec<DiscoveryRequest>,
+) {
+    for mut msg in outgoing {
+        if let Some(node) = conn.node.take() {
+            msg.node = Some(node)
+        }
+        trace_xds_request!(msg);
+        tx.send(msg).await.unwrap();
+    }
+}
+
+#[inline]
+fn update_dns(
+    dns: &StdlibResolver,
+    add: BTreeSet<(Hostname, u16)>,
+    remove: BTreeSet<(Hostname, u16)>,
+    sync: Option<impl IntoIterator<Item = (Hostname, u16)>>,
+) {
+    for (name, port) in add {
+        dns.subscribe(name, port);
+    }
+    for (name, port) in remove {
+        dns.unsubscribe(&name, port);
+    }
+
+    if let Some(names) = sync {
+        dns.set_names(names);
     }
 }
 
@@ -328,27 +506,57 @@ fn unwrap_io_error(status: &tonic::Status) -> Option<&std::io::Error> {
     }
 }
 
-#[derive(Debug)]
-enum SubscriptionUpdate {
-    Add(ResourceType, String),
-
-    #[allow(unused)]
-    Remove(ResourceType, String),
-}
-
+/// The state of an individual ADS connection. This is mostly the cache, but has
+/// to do some bookkeeping around nonces and resource versions for every
+/// resource type.
+///
+/// This struct also uses itself as a state accumulator for the side effects of
+/// handling messages and subscriptions.
+///
+/// Sending xDS messages isn't done by accumulating an outbox since we haven't
+/// sat down and thought through what it means to coalesce xDS responses. It
+/// should be though, since batching will be huge for reducing chattiness over
+/// the wire.
+///
+// TODO: start accumulating xds outbox here once we figure out how to
+// coalesce multiple updates into a single batch of requests.
 #[derive(Debug)]
 struct AdsConnection<'a> {
     cache: &'a mut Cache,
     last_nonce: EnumMap<ResourceType, Option<String>>,
     resource_versions: EnumMap<ResourceType, Option<String>>,
+
+    // the xDS node info associated with this connection. should be removed and
+    // sent with the first message on this connection.
+    node: Option<xds_core::Node>,
+
+    // the list of DNS names to subscribe to
+    dns_subscribes: BTreeSet<(Hostname, u16)>,
+
+    // the list of DNS names to unsubscribe from.
+    dns_unsubscribes: BTreeSet<(Hostname, u16)>,
+
+    // if true, synchronzie the set of DNS names from the cache to the DNS resolver.
+    dns_sync_from_cache: bool,
+}
+
+#[derive(Debug)]
+struct DnsUpdates {
+    add: BTreeSet<(Hostname, u16)>,
+    remove: BTreeSet<(Hostname, u16)>,
+    sync: bool,
 }
 
 impl<'a> AdsConnection<'a> {
-    fn new(cache: &'a mut Cache) -> (Self, Vec<DiscoveryRequest>) {
+    fn new(node: xds_core::Node, cache: &'a mut Cache) -> (Self, Vec<DiscoveryRequest>) {
         let conn = Self {
             last_nonce: EnumMap::default(),
             resource_versions: EnumMap::default(),
             cache,
+            node: Some(node),
+            dns_subscribes: BTreeSet::new(),
+            dns_unsubscribes: BTreeSet::new(),
+            dns_sync_from_cache: false,
         };
 
         let mut outgoing = Vec::with_capacity(4);
@@ -365,16 +573,56 @@ impl<'a> AdsConnection<'a> {
 }
 
 impl<'a> AdsConnection<'a> {
-    fn handle_subscription_update(
-        &mut self,
-        sub_update: SubscriptionUpdate,
-    ) -> Option<DiscoveryRequest> {
-        let (rtype, changed) = match sub_update {
-            SubscriptionUpdate::Add(rtype, name) => (rtype, self.cache.subscribe(rtype, &name)),
-            SubscriptionUpdate::Remove(rtype, name) => (rtype, self.cache.delete(rtype, &name)),
-        };
+    // inputs
 
-        changed.then(|| self.xds_subscription(rtype))
+    fn handle_subscription_update(&mut self, reg: SubscriptionUpdate) -> Vec<DiscoveryRequest> {
+        fn target_dns_name(target: &Target) -> Option<Hostname> {
+            match target {
+                Target::Dns(dns) => Some(dns.hostname.clone()),
+                _ => None,
+            }
+        }
+
+        let rtype;
+        let mut changed = false;
+        match reg {
+            SubscriptionUpdate::AddVirtualHosts(vhosts) => {
+                rtype = ResourceType::Listener;
+                for vhost in vhosts {
+                    changed |= self.cache.subscribe(rtype, &vhost.name());
+                }
+            }
+            SubscriptionUpdate::RemoveVirtualHosts(vhosts) => {
+                rtype = ResourceType::Listener;
+                for vhost in vhosts {
+                    changed |= self.cache.delete(rtype, &vhost.name());
+                }
+            }
+            SubscriptionUpdate::AddBackends(backends) => {
+                rtype = ResourceType::Cluster;
+                for backend in backends {
+                    if let Some(dns_name) = target_dns_name(&backend.target) {
+                        self.dns_subscribes.insert((dns_name, backend.port));
+                    }
+                    changed |= self.cache.subscribe(rtype, &backend.name())
+                }
+            }
+            SubscriptionUpdate::RemoveBackends(backends) => {
+                rtype = ResourceType::Listener;
+                for backend in backends {
+                    if let Some(dns_name) = target_dns_name(&backend.target) {
+                        self.dns_unsubscribes.insert((dns_name, backend.port));
+                    }
+                    changed |= self.cache.delete(rtype, &backend.name())
+                }
+            }
+        }
+
+        if changed {
+            vec![self.xds_subscription(rtype)]
+        } else {
+            Vec::new()
+        }
     }
 
     fn handle_ads_message(
@@ -390,9 +638,11 @@ impl<'a> AdsConnection<'a> {
             return vec![xds_unknown_type(discovery_response)];
         };
 
-        // parse protos from Any, for the first time, and move the version/nonce
-        // of the request out of the incoming message.
+        // now that we have a type, immediately set the last recognized nonce so
+        // that any future messages dont' get dropped even if this is a NACK
         let (version, nonce) = (discovery_response.version_info, discovery_response.nonce);
+        self.set_nonce(resource_type, nonce.clone());
+
         let resources = match ResourceVec::from_any(resource_type, discovery_response.resources) {
             Ok(r) => r,
             Err(e) => {
@@ -401,18 +651,22 @@ impl<'a> AdsConnection<'a> {
                     err = %error_detail,
                     "invalid proto"
                 );
+
                 return vec![self.xds_ack(version, nonce, resource_type, Some(error_detail))];
             }
         };
 
-        // handle the insert, on any error issue a NACK.
+        // handle the insert
         let (changed_types, errors) = self
             .cache
             .insert(ResourceVersion::from(&version), resources);
+
         if tracing::enabled!(tracing::Level::TRACE) {
             let changed_types: Vec<_> = changed_types.values().collect();
             tracing::trace!(?changed_types, ?errors, "cache updated");
         }
+
+        // start building responses
         let mut responses = Vec::with_capacity(changed_types.len() + 1);
 
         // if everything is fine, update connection state to the newest version
@@ -420,8 +674,8 @@ impl<'a> AdsConnection<'a> {
         //
         // if there are errors, don't update anything and generate a NACK.
         if errors.is_empty() {
-            self.set_version_and_nonce(resource_type, version.clone(), nonce.clone());
-            responses.push(self.xds_ack(version.clone(), nonce.clone(), resource_type, None));
+            self.set_version(resource_type, version.clone());
+            responses.push(self.xds_ack(version.clone(), nonce, resource_type, None));
         } else {
             // safety: we just checked on errors.is_empty()
             //
@@ -440,7 +694,21 @@ impl<'a> AdsConnection<'a> {
             responses.push(self.xds_subscription(changed_type))
         }
 
+        // if there was a cluster change, it's possible that it's time to sync DNS
+        if changed_types.contains(ResourceType::Cluster) {
+            self.dns_sync_from_cache = true;
+        }
+
         responses
+    }
+
+    // outputs
+
+    fn dns_updates(&mut self) -> DnsUpdates {
+        let add = std::mem::take(&mut self.dns_subscribes);
+        let remove = std::mem::take(&mut self.dns_unsubscribes);
+        let sync = std::mem::take(&mut self.dns_sync_from_cache);
+        DnsUpdates { add, remove, sync }
     }
 }
 
@@ -510,25 +778,55 @@ impl<'a> AdsConnection<'a> {
     }
 
     #[inline]
-    fn set_version_and_nonce(&mut self, type_id: ResourceType, version: String, nonce: String) {
+    fn set_version(&mut self, type_id: ResourceType, version: String) {
         self.resource_versions[type_id] = Some(version);
+    }
+
+    #[inline]
+    fn set_nonce(&mut self, type_id: ResourceType, nonce: String) {
         self.last_nonce[type_id] = Some(nonce);
     }
 }
 
 #[cfg(test)]
 mod test_ads_conn {
+    use once_cell::sync::Lazy;
+
     use super::test as xds_test;
     use super::*;
+
+    static TEST_NODE: Lazy<xds_core::Node> = Lazy::new(|| xds_core::Node {
+        id: "unit-test".to_string(),
+        ..Default::default()
+    });
+
+    #[inline]
+    fn new_conn(cache: &mut Cache) -> (AdsConnection, Vec<DiscoveryRequest>) {
+        AdsConnection::new(TEST_NODE.clone(), cache)
+    }
+
+    #[track_caller]
+    fn assert_dns_sync(conn: &mut AdsConnection<'_>) {
+        let updates = conn.dns_updates();
+        assert!(
+            updates.add.is_empty(),
+            "added subscriptions should be empty"
+        );
+        assert!(
+            updates.remove.is_empty(),
+            "removed subscriptions should be empty"
+        );
+        assert!(updates.sync, "should be syncing dns");
+    }
 
     #[test]
     fn test_initial_requests() {
         let mut cache = Cache::default();
-        let (_, outgoing) = AdsConnection::new(&mut cache);
+        let (_, outgoing) = new_conn(&mut cache);
         assert!(outgoing.is_empty());
 
         cache.subscribe(ResourceType::Listener, "nginx.default.svc.cluster.local");
-        let (_, outgoing) = AdsConnection::new(&mut cache);
+        let (_, outgoing) = new_conn(&mut cache);
         assert_eq!(
             outgoing,
             vec![xds_test::req!(
@@ -548,7 +846,7 @@ mod test_ads_conn {
             )]),
         );
 
-        let (_, outgoing) = AdsConnection::new(&mut cache);
+        let (_, outgoing) = new_conn(&mut cache);
         assert_eq!(
             outgoing,
             vec![
@@ -565,12 +863,12 @@ mod test_ads_conn {
 
         cache.insert(
             "123".into(),
-            ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "nginx.default.svc.cluster.local:80"),
-            ]),
+            ResourceVec::Cluster(vec![xds_test::cluster!(
+                "nginx.default.svc.cluster.local:80"
+            )]),
         );
 
-        let (_, outgoing) = AdsConnection::new(&mut cache);
+        let (_, outgoing) = new_conn(&mut cache);
         assert_eq!(
             outgoing,
             vec![
@@ -594,50 +892,81 @@ mod test_ads_conn {
     }
 
     #[test]
-    fn test_single_sub() {
+    fn test_subscribe() {
         let mut cache = Cache::default();
-        let (mut conn, _) = AdsConnection::new(&mut cache);
+        let (mut conn, _) = new_conn(&mut cache);
 
-        let request = conn.handle_subscription_update(SubscriptionUpdate::Add(
-            ResourceType::Listener,
-            "nginx.default.svc.cluster.local".to_string(),
-        ));
+        let request = conn.handle_subscription_update(SubscriptionUpdate::AddVirtualHosts(vec![
+            Target::dns("website.internal").unwrap().into_vhost(None),
+            Target::kube_service("default", "nginx")
+                .unwrap()
+                .into_vhost(None),
+        ]));
+
+        // dns shouldn't update for routes
+        let updates = conn.dns_updates();
+        assert!(
+            updates.add.is_empty() && updates.remove.is_empty() && !updates.sync,
+            "dns should not update"
+        );
         assert_eq!(
             request,
-            Some(xds_test::req!(
+            vec![xds_test::req!(
                 t = ResourceType::Listener,
-                rs = vec!["nginx.default.svc.cluster.local"]
-            )),
+                rs = vec!["website.internal", "nginx.default.svc.cluster.local",]
+            ),],
         );
 
-        let request = conn.handle_subscription_update(SubscriptionUpdate::Add(
-            ResourceType::Cluster,
-            "default/nginx/cluster".to_string(),
-        ));
+        let request = conn.handle_subscription_update(SubscriptionUpdate::AddBackends(vec![
+            Target::dns("website.internal").unwrap().into_backend(4567),
+            Target::kube_service("default", "nginx")
+                .unwrap()
+                .into_backend(8080),
+        ]));
         assert_eq!(
             request,
-            Some(xds_test::req!(
+            vec![xds_test::req!(
                 t = ResourceType::Cluster,
-                rs = vec!["default/nginx/cluster"]
-            )),
+                rs = vec![
+                    "website.internal:4567",
+                    "nginx.default.svc.cluster.local:8080",
+                ]
+            )],
+        );
+
+        // dns should update only for the dns vhost
+        let updates = conn.dns_updates();
+        assert_eq!(
+            updates.add,
+            BTreeSet::from_iter([(Hostname::from_static("website.internal"), 4567)]),
+        );
+        assert!(
+            updates.remove.is_empty() && !updates.sync,
+            "should be no DNS removes or sync"
         );
     }
 
     #[test]
     fn test_update_subs_on_incoming() {
         let mut cache = Cache::default();
-        let (mut conn, _) = AdsConnection::new(&mut cache);
+        let (mut conn, _) = new_conn(&mut cache);
 
-        let request = conn.handle_subscription_update(SubscriptionUpdate::Add(
-            ResourceType::Listener,
-            "nginx.default.svc.cluster.local".to_string(),
-        ));
+        let requests = conn.handle_subscription_update(SubscriptionUpdate::AddVirtualHosts(vec![
+            Target::kube_service("default", "nginx")
+                .unwrap()
+                .into_vhost(None),
+        ]));
+        let updates = conn.dns_updates();
+        assert!(
+            updates.add.is_empty() && updates.remove.is_empty() && !updates.sync,
+            "should be no DNS changes",
+        );
         assert_eq!(
-            request,
-            Some(xds_test::req!(
+            requests,
+            vec![xds_test::req!(
                 t = ResourceType::Listener,
                 rs = vec!["nginx.default.svc.cluster.local"]
-            ))
+            )],
         );
 
         let requests = conn.handle_ads_message(xds_test::discovery_response(
@@ -647,11 +976,13 @@ mod test_ads_conn {
                 "nginx.default.svc.cluster.local" => [xds_test::vhost!(
                     "default",
                     ["nginx.default.svc.cluster.local"],
-                    [xds_test::route!(default "nginx.default:80"),],
+                    [xds_test::route!(default "nginx.internal:80"),],
                 )],
             )],
         ));
 
+        // dns changes every time a cluster changes
+        assert_dns_sync(&mut conn);
         assert_eq!(
             requests,
             vec![
@@ -667,32 +998,34 @@ mod test_ads_conn {
                     ResourceType::Cluster,
                     "",
                     "",
-                    vec!["nginx.default:80"]
+                    vec!["nginx.internal:80"]
                 ),
             ]
         );
 
         assert_eq!(
             conn.cache.subscriptions(ResourceType::Cluster),
-            vec!["nginx.default:80"],
+            vec!["nginx.internal:80"],
         );
     }
 
     #[test]
     fn test_ads_race() {
         let mut cache = Cache::default();
-        let (mut conn, _) = AdsConnection::new(&mut cache);
+        let (mut conn, _) = new_conn(&mut cache);
 
         // subscribe to a listener, generate an XDS subscription for it
+        let requests = conn.handle_subscription_update(SubscriptionUpdate::AddVirtualHosts(vec![
+            Target::kube_service("default", "nginx")
+                .unwrap()
+                .into_vhost(None),
+        ]));
         assert_eq!(
-            conn.handle_subscription_update(SubscriptionUpdate::Add(
-                ResourceType::Listener,
-                "nginx.default.svc.cluster.local".to_string(),
-            )),
-            Some(xds_test::req!(
+            requests,
+            vec![xds_test::req!(
                 t = ResourceType::Listener,
                 rs = vec!["nginx.default.svc.cluster.local"]
-            ))
+            )],
         );
 
         // the LDS response includes two clusters
@@ -704,13 +1037,16 @@ mod test_ads_conn {
                     "default",
                     ["nginx.default.svc.cluster.local"],
                     [
-                        xds_test::route!(header "x-staging" => "nginx-staging.default:80"),
-                        xds_test::route!(default "nginx.default:80"),
+                        xds_test::route!(header "x-staging" => "nginx-staging.internal:80"),
+                        xds_test::route!(default "nginx.internal:80"),
                     ],
                 )],
             )],
         ));
 
+        // dns could change every time cluster names change, which changes
+        // because of LDS route pointers.
+        assert_dns_sync(&mut conn);
         assert_eq!(
             requests,
             vec![
@@ -722,7 +1058,7 @@ mod test_ads_conn {
                 ),
                 xds_test::req!(
                     t = ResourceType::Cluster,
-                    rs = vec!["nginx-staging.default:80", "nginx.default:80"]
+                    rs = vec!["nginx-staging.internal:80", "nginx.internal:80"]
                 ),
             ]
         );
@@ -736,8 +1072,10 @@ mod test_ads_conn {
         let requests = conn.handle_ads_message(xds_test::discovery_response(
             "v1",
             "n2",
-            vec![xds_test::cluster!(eds "nginx.default:80")],
+            vec![xds_test::cluster!("nginx.internal:80")],
         ));
+
+        assert_dns_sync(&mut conn);
         assert_eq!(
             requests,
             vec![
@@ -745,40 +1083,7 @@ mod test_ads_conn {
                     t = ResourceType::Cluster,
                     v = "v1",
                     n = "n2",
-                    rs = vec!["nginx-staging.default:80", "nginx.default:80"]
-                ),
-                xds_test::req!(
-                    t = ResourceType::Listener,
-                    v = "v1",
-                    n = "n1",
-                    rs = vec!["nginx.default.svc.cluster.local", "nginx.default.lb.jct:80"],
-                ),
-                xds_test::req!(
-                    t = ResourceType::ClusterLoadAssignment,
-                    rs = vec!["nginx.default:80"],
-                ),
-            ],
-            "cluster request should include all resources. actual: {:#?}",
-            requests,
-        );
-
-        // the second cluster appears!
-        let requests = conn.handle_ads_message(xds_test::discovery_response(
-            "v1",
-            "n3",
-            vec![
-                xds_test::cluster!(eds "nginx.default:80"),
-                xds_test::cluster!(eds "nginx-staging.default:80"),
-            ],
-        ));
-        assert_eq!(
-            requests,
-            vec![
-                xds_test::req!(
-                    t = ResourceType::Cluster,
-                    v = "v1",
-                    n = "n3",
-                    rs = vec!["nginx-staging.default:80", "nginx.default:80"]
+                    rs = vec!["nginx-staging.internal:80", "nginx.internal:80"]
                 ),
                 xds_test::req!(
                     t = ResourceType::Listener,
@@ -786,13 +1091,51 @@ mod test_ads_conn {
                     n = "n1",
                     rs = vec![
                         "nginx.default.svc.cluster.local",
-                        "nginx.default.lb.jct:80",
-                        "nginx-staging.default.lb.jct:80",
+                        "nginx.internal.lb.jct:80"
                     ],
                 ),
                 xds_test::req!(
                     t = ResourceType::ClusterLoadAssignment,
-                    rs = vec!["nginx.default:80", "nginx-staging.default:80"]
+                    rs = vec!["nginx.internal:80"],
+                ),
+            ],
+            "cluster request should include all resources. actual: {:#?}",
+            requests,
+        );
+
+        // the second cluster appears! also a DNS name, so we have a DNS update again
+        let requests = conn.handle_ads_message(xds_test::discovery_response(
+            "v1",
+            "n3",
+            vec![
+                xds_test::cluster!("nginx.internal:80"),
+                xds_test::cluster!("nginx-staging.internal:80"),
+            ],
+        ));
+
+        assert_dns_sync(&mut conn);
+        assert_eq!(
+            requests,
+            vec![
+                xds_test::req!(
+                    t = ResourceType::Cluster,
+                    v = "v1",
+                    n = "n3",
+                    rs = vec!["nginx-staging.internal:80", "nginx.internal:80"]
+                ),
+                xds_test::req!(
+                    t = ResourceType::Listener,
+                    v = "v1",
+                    n = "n1",
+                    rs = vec![
+                        "nginx.default.svc.cluster.local",
+                        "nginx.internal.lb.jct:80",
+                        "nginx-staging.internal.lb.jct:80",
+                    ],
+                ),
+                xds_test::req!(
+                    t = ResourceType::ClusterLoadAssignment,
+                    rs = vec!["nginx.internal:80", "nginx-staging.internal:80"]
                 ),
             ],
             "clusters should get acked again",

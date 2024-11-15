@@ -1,8 +1,4 @@
-use crate::{
-    load_balancer::BackendLb,
-    xds::{self, AdsClient},
-    ConfigCache, Endpoint, Error, StaticConfig,
-};
+use crate::{load_balancer::BackendLb, xds::AdsClient, ConfigCache, Endpoint, Error, StaticConfig};
 use junction_api::{
     backend::Backend,
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
@@ -116,25 +112,24 @@ impl Client {
     }
 
     fn subscribe_to_defaults(&self, defaults: &StaticConfig) {
+        let mut vhosts = Vec::with_capacity(defaults.routes.len());
+        let mut backends = Vec::with_capacity(defaults.routes.len());
         for (target, route) in &defaults.routes {
-            self.ads
-                .subscribe(xds::ResourceType::Listener, target.name())
-                .unwrap();
+            vhosts.push(target.clone());
 
             for rule in &route.rules {
                 for backend in &rule.backends {
-                    self.ads
-                        .subscribe(xds::ResourceType::Cluster, backend.backend.name())
-                        .expect("subscribe failed: ads task is gone. this is a bug in Junction");
+                    backends.push(backend.backend.clone());
                 }
             }
         }
 
-        for target in defaults.backends.keys() {
-            self.ads
-                .subscribe(xds::ResourceType::Cluster, target.name())
-                .unwrap();
-        }
+        self.ads.subscribe_to_vhosts(vhosts).unwrap();
+
+        let default_backends = defaults.backends.keys().cloned();
+        self.ads
+            .subscribe_to_backends(backends.into_iter().chain(default_backends))
+            .unwrap();
     }
 
     /// Start a gRPC CSDS server on the given port.
@@ -144,7 +139,7 @@ impl Client {
         &self,
         port: u16,
     ) -> impl Future<Output = Result<(), tonic::transport::Error>> {
-        crate::xds::csds::local_server(self.ads.cache.clone(), port)
+        self.ads.csds_server(port)
     }
 
     /// Dump the client's current cache of xDS resources, as fetched from the
@@ -153,7 +148,7 @@ impl Client {
     /// This is a programmatic view of the same data that you can fetch over
     /// gRPC by starting a [Client::csds_server].
     pub fn dump_xds(&self) -> impl Iterator<Item = crate::XdsConfig> + '_ {
-        self.ads.cache.iter_xds()
+        self.ads.iter_xds()
     }
 
     /// Dump the Client's current table of [Route]s, merging together any
@@ -163,7 +158,7 @@ impl Client {
         let mut routes = vec![];
         let mut defaults: BTreeSet<_> = self.defaults.routes.keys().collect();
 
-        for route in self.ads.cache.iter_routes() {
+        for route in self.ads.iter_routes() {
             let route = if is_generated_route(&route) {
                 self.defaults
                     .routes
@@ -192,7 +187,7 @@ impl Client {
         let mut backends = vec![];
         let mut defaults: BTreeSet<_> = self.defaults.backends.keys().collect();
 
-        for backend in self.ads.cache.iter_backends() {
+        for backend in self.ads.iter_backends() {
             let backend = if backend.config.lb.is_unspecified() {
                 self.defaults
                     .backends
@@ -231,16 +226,21 @@ impl Client {
             ConfigMode::Dynamic => {
                 // in dynamic mode, use every target as an ads client
                 // subscription. this pins every target to the ads cache.
-                resolve_routes(&self.ads.cache, &self.defaults, request, |name: String| {
-                    self.ads
-                        .subscribe(xds::ResourceType::Listener, name)
-                        .unwrap();
-                })
+                resolve_routes(
+                    &self.ads,
+                    &self.defaults,
+                    request,
+                    |vhosts: &[VirtualHost]| {
+                        self.ads
+                            .subscribe_to_vhosts(vhosts.iter().cloned())
+                            .unwrap();
+                    },
+                )
             }
             _ => {
                 // otherwise just no-op the subscribe fn and use the existing
                 // ads cache/defaults
-                resolve_routes(&self.ads.cache, &self.defaults, request, |_| {})
+                resolve_routes(&self.ads, &self.defaults, request, |_| {})
             }
         }
     }
@@ -294,10 +294,10 @@ impl Client {
         let resolved_route = self.resolve_routes(ConfigMode::Dynamic, request)?;
 
         self.ads
-            .subscribe(xds::ResourceType::Cluster, resolved_route.backend.name())
+            .subscribe_to_backends(Some(resolved_route.backend.clone()))
             .unwrap();
 
-        resolve_endpoint(&self.ads.cache, &self.defaults, resolved_route, request)
+        resolve_endpoint(&self.ads, &self.defaults, resolved_route, request)
     }
 }
 
@@ -360,14 +360,12 @@ pub(crate) fn resolve_routes<F>(
     subscribe: F,
 ) -> crate::Result<ResolvedRoute>
 where
-    F: Fn(String),
+    F: Fn(&[VirtualHost]),
 {
     use rand::seq::SliceRandom;
 
     let vhosts = vhosts_for_url(request.url)?;
-    for target in &vhosts {
-        subscribe(target.name());
-    }
+    subscribe(&vhosts);
 
     let default_route = defaults.get_route_with_fallbacks(&vhosts);
     let configured_route = cache.get_route_with_fallbacks(&vhosts);
@@ -471,8 +469,6 @@ fn resolve_endpoint(
     };
 
     // there's no notion of defaults for endpoints (yet?).
-    //
-    // TODO: depending on DNS vs KubeService etc we need to do something different here.
     let Some(endpoints) = cache.get_endpoints(&resolved.backend) else {
         return Err(Error::no_reachable_endpoints(
             resolved.route.vhost.clone(),
