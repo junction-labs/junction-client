@@ -11,6 +11,7 @@ mod endpoints;
 pub use endpoints::{Endpoint, EndpointAddress};
 
 mod client;
+mod dns;
 mod load_balancer;
 mod xds;
 

@@ -75,8 +75,8 @@
 
 use crossbeam_skiplist::SkipMap;
 use enum_map::EnumMap;
-use junction_api::VirtualHost;
 use junction_api::{http::Route, BackendId};
+use junction_api::{Hostname, Target, VirtualHost};
 use petgraph::{
     graph::{DiGraph, NodeIndex},
     visit::{self, Visitable},
@@ -114,13 +114,13 @@ use super::resources::{
     ApiListener, ApiListenerRouteConfig, Cluster, LoadAssignment, ResourceError, ResourceName,
     ResourceType, ResourceTypeSet, ResourceVec, RouteConfig,
 };
-use super::ResourceVersion;
+use super::{ResourceVersion, XdsConfig};
 
 #[derive(Debug, Clone)]
 struct CacheEntry<T> {
-    pub version: ResourceVersion,
-    pub last_error: Option<(ResourceVersion, ResourceError)>,
-    pub data: Option<T>,
+    version: ResourceVersion,
+    last_error: Option<(ResourceVersion, ResourceError)>,
+    data: Option<T>,
 }
 
 impl<T: CacheEntryData> CacheEntry<T> {}
@@ -268,23 +268,12 @@ impl<'a, T> ResourceEntry<'a, T> {
 /// A read-only handle to a [Cache]. `CacheReader`s are meant to passed around
 /// and shared and are cheap to clone.
 #[derive(Default, Clone)]
-pub(crate) struct CacheReader {
+pub(super) struct CacheReader {
     data: Arc<CacheData>,
 }
 
-/// A single xDS configuration object, with additional metadata about when it
-/// was fetched and processed.
-#[derive(Debug, Default, Clone)]
-pub struct XdsConfig {
-    pub name: String,
-    pub type_url: String,
-    pub version: ResourceVersion,
-    pub xds: Option<protobuf::Any>,
-    pub last_error: Option<(ResourceVersion, String)>,
-}
-
 impl CacheReader {
-    pub(crate) fn iter_routes(&self) -> impl Iterator<Item = Arc<Route>> + '_ {
+    pub(super) fn iter_routes(&self) -> impl Iterator<Item = Arc<Route>> + '_ {
         let listener_routes = self.data.listeners.iter().filter_map(|entry| {
             entry
                 .data()
@@ -303,14 +292,14 @@ impl CacheReader {
         listener_routes.chain(route_config_routes)
     }
 
-    pub(crate) fn iter_backends(&self) -> impl Iterator<Item = Arc<BackendLb>> + '_ {
+    pub(super) fn iter_backends(&self) -> impl Iterator<Item = Arc<BackendLb>> + '_ {
         self.data
             .clusters
             .iter()
             .filter_map(|entry| entry.data().map(|cluster| cluster.backend_lb.clone()))
     }
 
-    pub(crate) fn iter_xds(&self) -> impl Iterator<Item = XdsConfig> + '_ {
+    pub(super) fn iter_xds(&self) -> impl Iterator<Item = XdsConfig> + '_ {
         macro_rules! any_iter {
             ($field:ident, $xds_type:ty) => {
                 self.data.$field.iter().map(|entry| {
@@ -362,16 +351,12 @@ impl ConfigCache for CacheReader {
     }
 
     fn get_endpoints(&self, backend: &BackendId) -> Option<Arc<EndpointGroup>> {
-        match &backend.target {
-            // use the DNS cache
-            junction_api::Target::Dns(_dns) => todo!(),
-            // use the EDS cache
-            _ => {
-                let load_assignment = self.data.load_assignments.get(&backend.name())?;
-                let load_assignment_data = load_assignment.data()?;
-                Some(load_assignment_data.endpoint_group.clone())
-            }
-        }
+        // we don't have DNS targets, but we're just trying everything anyway.
+        // it's the callers responsibility to stop us from getting here if this
+        // is not a DNS backend.
+        let load_assignment = self.data.load_assignments.get(&backend.name())?;
+        let load_assignment_data = load_assignment.data()?;
+        Some(load_assignment_data.endpoint_group.clone())
     }
 }
 
@@ -405,6 +390,7 @@ struct GCData {
     resource_type: ResourceType,
     pinned: bool,
     deleted: bool,
+    dns_name: Option<(Hostname, u16)>,
 }
 
 impl GCData {
@@ -426,19 +412,32 @@ impl Cache {
     ///
     /// Read handles are cheap, and intended to be created and shared across
     /// multiple threads and tasks.
-    pub fn reader(&self) -> CacheReader {
+    pub(super) fn reader(&self) -> CacheReader {
         CacheReader {
             data: self.data.clone(),
         }
     }
 
+    /// Explicitly subscribe to an XDS resource.
+    pub(super) fn subscribe(&mut self, resource_type: ResourceType, name: &str) -> bool {
+        let (node, created) = self.find_or_create_ref(resource_type, name);
+        self.pin_ref(node);
+        created
+    }
+
     /// Return the resource names that should be subscribed to.
-    pub fn subscriptions(&self, resource_type: ResourceType) -> Vec<String> {
+    pub(super) fn subscriptions(&self, resource_type: ResourceType) -> Vec<String> {
         let weights = self
             .refs
             .node_weights()
             .filter(|n| n.resource_type == resource_type);
         weights.map(|n| n.name.clone()).collect()
+    }
+
+    /// An iterator over all of the DNS names of external DNS clusters in the
+    /// cache.
+    pub(super) fn dns_names(&self) -> impl Iterator<Item = (Hostname, u16)> + '_ {
+        self.refs.node_weights().filter_map(|n| n.dns_name.clone())
     }
 
     /// Insert a batch of xDS resources into the cache.
@@ -447,7 +446,7 @@ impl Cache {
     /// that were changed or were newly subscribed to. Callers should use this
     /// set to determine whether to ACK or to re-subscribe to resources of that
     /// type.
-    pub fn insert(
+    pub(super) fn insert(
         &mut self,
         version: crate::xds::ResourceVersion,
         resources: ResourceVec,
@@ -467,7 +466,7 @@ impl Cache {
     }
 
     /// Unsubscribe from an XDS resource and explicitly delete it from cache.
-    pub fn delete(&mut self, resource_type: ResourceType, name: &str) -> bool {
+    pub(super) fn delete(&mut self, resource_type: ResourceType, name: &str) -> bool {
         if !self.delete_ref(resource_type, name, true) {
             return false;
         }
@@ -488,13 +487,6 @@ impl Cache {
         }
 
         true
-    }
-
-    /// Explicitly subscribe to an XDS resource.
-    pub fn subscribe(&mut self, resource_type: ResourceType, name: &str) -> bool {
-        let (node, created) = self.find_or_create_ref(resource_type, name);
-        self.pin_ref(node);
-        created
     }
 }
 
@@ -964,11 +956,21 @@ impl Cache {
             return (node, false);
         }
 
+        let mut dns_name = None;
+        if resource_type == ResourceType::Cluster {
+            if let Ok(backend) = BackendId::from_str(name) {
+                if let Target::Dns(dns) = backend.target {
+                    dns_name = Some((dns.hostname, backend.port))
+                }
+            }
+        }
+
         let node = self.refs.add_node(GCData {
             name: name.to_string(),
             resource_type,
             pinned: false,
             deleted: false,
+            dns_name,
         });
         (node, true)
     }
@@ -1169,7 +1171,7 @@ mod test {
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(eds "cluster1.example:8913")]),
+            ResourceVec::Cluster(vec![xds_test::cluster!("cluster1.example:8913")]),
         );
 
         assert!(cache.data.listeners.is_empty());
@@ -1186,8 +1188,8 @@ mod test {
             &mut cache,
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "cluster1.example:8913"),
-                xds_test::cluster!(eds "cluster2.example:8913"),
+                xds_test::cluster!("cluster1.example:8913"),
+                xds_test::cluster!("cluster2.example:8913"),
             ]),
         );
 
@@ -1238,8 +1240,8 @@ mod test {
             &mut cache,
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "cluster1.example:8913"),
-                xds_test::cluster!(eds "cluster2.example:8913"),
+                xds_test::cluster!("cluster1.example:8913"),
+                xds_test::cluster!("cluster2.example:8913"),
             ]),
         );
 
@@ -1298,8 +1300,8 @@ mod test {
             &mut cache,
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "cluster1.example:8913"),
-                xds_test::cluster!(eds "cluster2.example:8913"),
+                xds_test::cluster!("cluster1.example:8913"),
+                xds_test::cluster!("cluster2.example:8913"),
             ]),
         );
 
@@ -1310,7 +1312,7 @@ mod test {
 
         assert_insert(cache.insert(
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(eds "cluster2.example:8913")]),
+            ResourceVec::Cluster(vec![xds_test::cluster!("cluster2.example:8913")]),
         ));
 
         assert_eq!(
@@ -1347,8 +1349,8 @@ mod test {
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "cluster1.example:8913"),
-                xds_test::cluster!(eds "cluster2.example:8913"),
+                xds_test::cluster!("cluster1.example:8913"),
+                xds_test::cluster!("cluster2.example:8913"),
             ]),
         ));
 
@@ -1433,7 +1435,7 @@ mod test {
         );
         assert_insert(cache.insert(
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(ring_hash eds cluster_name)]),
+            ResourceVec::Cluster(vec![xds_test::cluster!(ring_hash cluster_name)]),
         ));
 
         assert!(
@@ -1485,7 +1487,7 @@ mod test {
         ));
         assert_insert(cache.insert(
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(ring_hash eds cluster_name)]),
+            ResourceVec::Cluster(vec![xds_test::cluster!(ring_hash cluster_name)]),
         ));
 
         assert!(
@@ -1528,7 +1530,7 @@ mod test {
         );
         assert_insert(cache.insert(
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(ring_hash eds cluster_name)]),
+            ResourceVec::Cluster(vec![xds_test::cluster!(ring_hash cluster_name)]),
         ));
 
         assert!(
@@ -1616,7 +1618,7 @@ mod test {
         ));
         assert_insert(cache.insert(
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(ring_hash eds cluster_name)]),
+            ResourceVec::Cluster(vec![xds_test::cluster!(ring_hash cluster_name)]),
         ));
 
         assert!(
@@ -1697,8 +1699,8 @@ mod test {
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "cluster1.example:8913"),
-                xds_test::cluster!(eds "cluster2.example:8913"),
+                xds_test::cluster!("cluster1.example:8913"),
+                xds_test::cluster!("cluster2.example:8913"),
             ]),
         ));
 
@@ -1765,8 +1767,8 @@ mod test {
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "cluster1.example:8913"),
-                xds_test::cluster!(eds "cluster2.example:8913"),
+                xds_test::cluster!("cluster1.example:8913"),
+                xds_test::cluster!("cluster2.example:8913"),
             ]),
         ));
 
@@ -1824,8 +1826,8 @@ mod test {
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "cluster1.example:8888"),
-                xds_test::cluster!(eds "cluster2.example:8888"),
+                xds_test::cluster!("cluster1.example:8888"),
+                xds_test::cluster!("cluster2.example:8888"),
             ]),
         ));
 
@@ -1864,8 +1866,8 @@ mod test {
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::Cluster(vec![
-                xds_test::cluster!(eds "cluster1.example:8888"),
-                xds_test::cluster!(eds "cluster2.example:8888"),
+                xds_test::cluster!("cluster1.example:8888"),
+                xds_test::cluster!("cluster2.example:8888"),
             ]),
         ));
 

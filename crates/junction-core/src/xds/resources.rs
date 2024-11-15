@@ -229,6 +229,10 @@ impl ResourceTypeSet {
     pub(crate) fn insert(&mut self, resource_type: ResourceType) {
         self.0[resource_type] = true
     }
+
+    pub(crate) fn contains(&self, resource_type: ResourceType) -> bool {
+        self.0[resource_type]
+    }
 }
 
 /// A typed reference to another resource.
@@ -432,11 +436,10 @@ impl RouteConfig {
     }
 }
 
-// TODO: Figure out wtf to do to support logical_dns clusters.
 #[derive(Clone, Debug)]
 pub(crate) struct Cluster {
-    pub xds: xds_cluster::Cluster,
-    pub backend_lb: Arc<BackendLb>,
+    pub(crate) xds: xds_cluster::Cluster,
+    pub(crate) backend_lb: Arc<BackendLb>,
 }
 
 impl Cluster {
@@ -446,6 +449,7 @@ impl Cluster {
     ) -> Result<Self, ResourceError> {
         let backend = Backend::from_xds(&xds, default_action)?;
         let load_balancer = LoadBalancer::from_config(&backend.lb);
+
         let backend_lb = Arc::new(BackendLb {
             config: backend,
             load_balancer,

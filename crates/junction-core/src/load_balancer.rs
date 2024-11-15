@@ -5,6 +5,7 @@ use junction_api::backend::{
 use std::{
     collections::BTreeMap,
     hash::Hash,
+    net::SocketAddr,
     sync::{
         atomic::{AtomicUsize, Ordering},
         RwLock,
@@ -13,7 +14,7 @@ use std::{
 
 // FIXME: we ignore weights in EndpointGroup. that probably shouldn't be the case
 
-#[derive(Debug, Default, Hash)]
+#[derive(Debug, Default, Hash, PartialEq, Eq)]
 pub(crate) struct EndpointGroup {
     hash: u64,
     endpoints: BTreeMap<Locality, Vec<crate::EndpointAddress>>,
@@ -23,6 +24,14 @@ impl EndpointGroup {
     pub(crate) fn new(endpoints: BTreeMap<Locality, Vec<crate::EndpointAddress>>) -> Self {
         let hash = thread_local_xxhash::hash(&endpoints);
         Self { hash, endpoints }
+    }
+
+    pub(crate) fn from_dns_addrs(addrs: impl IntoIterator<Item = SocketAddr>) -> Self {
+        let mut endpoints = BTreeMap::new();
+        let endpoint_addrs = addrs.into_iter().map(EndpointAddress::from).collect();
+        endpoints.insert(Locality::Unknown, endpoint_addrs);
+
+        Self::new(endpoints)
     }
 
     pub(crate) fn len(&self) -> usize {

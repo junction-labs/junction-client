@@ -51,11 +51,11 @@ macro_rules! vhost {
 pub(crate) use vhost;
 
 macro_rules! cluster {
-    (eds $cluster_name:expr) => {{
-        crate::xds::test::cluster_eds($cluster_name, None)
+    ($cluster_name:expr) => {{
+        crate::xds::test::cluster_from_name($cluster_name, None)
     }};
-    (ring_hash eds $cluster_name:expr) => {{
-        crate::xds::test::cluster_eds($cluster_name, Some(xds_cluster::cluster::LbPolicy::RingHash))
+    (ring_hash $cluster_name:expr) => {{
+        crate::xds::test::cluster_from_name($cluster_name, Some(xds_cluster::cluster::LbPolicy::RingHash))
     }};
     (inline $cluster_name:expr => { $($region:expr => [$($addr:expr),*]),* }) => {{
         let cla = crate::xds::test::cluster_load_assignment($cluster_name, vec![$(
@@ -296,7 +296,7 @@ pub fn virtual_host(
     }
 }
 
-pub fn cluster_eds(
+pub fn cluster_from_name(
     name: &'static str,
     lb_policy: Option<xds_cluster::cluster::LbPolicy>,
 ) -> xds_cluster::Cluster {
