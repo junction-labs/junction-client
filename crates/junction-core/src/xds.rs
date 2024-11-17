@@ -138,7 +138,7 @@ impl std::fmt::Display for ShutdownError {
 
 macro_rules! trace_xds_request {
     ($request:expr) => {
-        tracing::trace!(
+        tracing::debug!(
             nack = $request.error_detail.is_some(),
             "DiscoveryRequest(v={:?}, n={:?}, ty={:?}, r={:?})",
             $request.version_info,
@@ -151,7 +151,7 @@ macro_rules! trace_xds_request {
 
 macro_rules! trace_xds_response {
     ($response:expr) => {
-        tracing::trace!(
+        tracing::debug!(
             "DiscoveryResponse(v={:?}, n={:?}, ty={:?}, r_count={:?})",
             $response.version_info,
             $response.nonce,
