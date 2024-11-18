@@ -111,7 +111,7 @@ use xds_api::pb::google::protobuf;
 use crate::{BackendLb, ConfigCache, EndpointGroup};
 
 use super::resources::{
-    ApiListener, ApiListenerRouteConfig, Cluster, LoadAssignment, ResourceError, ResourceName,
+    ApiListener, ApiListenerData, Cluster, LoadAssignment, ResourceError, ResourceName,
     ResourceType, ResourceTypeSet, ResourceVec, RouteConfig,
 };
 use super::{ResourceVersion, XdsConfig};
@@ -278,7 +278,7 @@ impl CacheReader {
             entry
                 .data()
                 .and_then(|api_listener| match &api_listener.route_config {
-                    ApiListenerRouteConfig::Inlined { route, .. } => Some(route.clone()),
+                    ApiListenerData::Inlined { route, .. } => Some(route.clone()),
                     _ => None,
                 })
         });
@@ -336,11 +336,11 @@ impl ConfigCache for CacheReader {
         let listener = self.data.listeners.get(&target.name())?;
 
         match &listener.data()?.route_config {
-            ApiListenerRouteConfig::RouteConfig { name } => {
+            ApiListenerData::RouteConfig { name } => {
                 let route_config = self.data.route_configs.get(name.as_str())?;
                 route_config.data().map(|r| r.route.clone())
             }
-            ApiListenerRouteConfig::Inlined { route, .. } => Some(route.clone()),
+            ApiListenerData::Inlined { route, .. } => Some(route.clone()),
         }
     }
 
@@ -577,7 +577,7 @@ impl Cache {
                 self.reset_ref(node);
 
                 match &api_listener.route_config {
-                    ApiListenerRouteConfig::RouteConfig { name } => {
+                    ApiListenerData::RouteConfig { name } => {
                         let (rc_node, created) = self
                             .find_or_create_ref(ResourceType::RouteConfiguration, name.as_str());
                         self.refs.update_edge(node, rc_node, ());
@@ -586,9 +586,9 @@ impl Cache {
                             changed.insert(ResourceType::RouteConfiguration);
                         }
                     }
-                    ApiListenerRouteConfig::Inlined {
+                    ApiListenerData::Inlined {
                         clusters,
-                        default_action,
+                        lb_action,
                         ..
                     } => {
                         let mut clusters_changed = false;
@@ -607,10 +607,12 @@ impl Cache {
                         // if this Listener looks like it is the default route
                         // for a Cluster, recompute the LB config for that
                         // Cluster.
-                        if let Some((cluster, route_action)) = default_action {
-                            if let Err(e) =
-                                self.rebuild_cluster(&mut changed, cluster, route_action)
-                            {
+                        if let Some(lb_action) = lb_action {
+                            if let Err(e) = self.rebuild_cluster(
+                                &mut changed,
+                                &lb_action.cluster,
+                                &lb_action.route_action,
+                            ) {
                                 self.data.listeners.insert_error(
                                     listener_name,
                                     version.clone(),
@@ -658,9 +660,9 @@ impl Cache {
             to_remove.remove(&cluster.name);
 
             if self.data.clusters.is_changed(&cluster.name, &cluster) {
-                let action = self.find_passthrough_action(&cluster.name);
+                let lb_action = self.find_lb_action(&cluster.name);
                 if let Err(e) =
-                    self.insert_cluster(&mut changed, &version, cluster, action.as_ref())
+                    self.insert_cluster(&mut changed, &version, cluster, lb_action.as_deref())
                 {
                     errors.push(e);
                 }
@@ -724,8 +726,9 @@ impl Cache {
 
                 // if this looks like the default RouteConfiguration for a
                 // Cluster, rebuild it.
-                if let Some((cluster, route_action)) = &route_config.passthrough_action {
-                    if let Err(e) = self.rebuild_cluster(&mut changed, cluster, route_action) {
+                if let Some(a) = &route_config.lb_action {
+                    if let Err(e) = self.rebuild_cluster(&mut changed, &a.cluster, &a.route_action)
+                    {
                         errors.push(e);
                     }
                 }
@@ -924,25 +927,20 @@ impl Cache {
         self.refs.neighbors_directed(node, Direction::Incoming)
     }
 
-    // TODO: it's annoying that this clones the XDS for a route action, but also
-    // its impossible to follow doing it inline and keeping the right refs in scope
-    // so that the borrow never drops.
-    //
-    // if we hit clone as a bottleneck, come back and fuck with this.
-    fn find_passthrough_action(&self, cluster_name: &str) -> Option<xds_route::RouteAction> {
+    fn find_lb_action(&self, cluster_name: &str) -> Option<Arc<xds_route::RouteAction>> {
         // don't even parse the cluster name as a target, assume that the
         // passthrough listener has the same name as the cluster.
         let target = BackendId::from_str(cluster_name).ok()?;
         let listener = self.data.listeners.get(&target.passthrough_route_name())?;
 
         match &listener.data()?.route_config {
-            ApiListenerRouteConfig::RouteConfig { name } => {
+            ApiListenerData::RouteConfig { name } => {
                 let route = self.data.route_configs.get(name.as_str())?;
-                let default_action = &route.data()?.passthrough_action;
-                default_action.as_ref().map(|(_, a)| a.clone())
+                let lb_action = &route.data()?.lb_action;
+                lb_action.as_ref().map(|a| a.route_action.clone())
             }
-            ApiListenerRouteConfig::Inlined { default_action, .. } => {
-                default_action.as_ref().map(|(_, a)| a.clone())
+            ApiListenerData::Inlined { lb_action, .. } => {
+                lb_action.as_ref().map(|a| a.route_action.clone())
             }
         }
     }
