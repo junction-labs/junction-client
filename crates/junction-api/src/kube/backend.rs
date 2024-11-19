@@ -50,6 +50,7 @@ impl Backend {
                 meta.namespace = Some(service.namespace.to_string());
 
                 svc.spec = Some(ServiceSpec {
+                    type_: Some("ClusterIP".to_string()),
                     ports: Some(vec![ServicePort {
                         port: self.id.port as i32,
                         protocol: Some("TCP".to_string()),
@@ -66,9 +67,18 @@ impl Backend {
     /// Read one or more [Backend]s from a Kubernetes [Service]. A backend will
     /// be generated for every distinct port the [Service] is configured with.
     ///
-    /// > NOTE: This method currently only supports generating backends with >
-    /// > [Service targets][Target::KubeService]. Support for DNS backends is
-    /// > coming soon!.
+    /// The type of [Backend] generated depends on the Service.
+    ///
+    /// - `ClusterIP` Services are translated to backends with a KubeService
+    ///   target and that use the `port` of the Service and the address of each
+    ///   endpoint. `ClusterIP` services must *not* be configured as headless
+    ///   services, so that endpoint information is available.
+    ///
+    /// - `ExternalName` Services are translated to backends with a Dns target,
+    ///    and uses the service port as the target port. If no port is specified,
+    ///    backends are generated for ports 80 and 443.
+    ///
+    /// All other Service types are currently unsupported.
     pub fn from_service(svc: &Service) -> Result<Vec<Self>, Error> {
         let (namespace, name) = (
             as_ref_or_else(&svc.meta().namespace, "missing namespace")
@@ -77,30 +87,68 @@ impl Backend {
         );
 
         let spec = as_ref_or_else(&svc.spec, "missing spec").with_field("spec")?;
-        if matches!(spec.type_.as_deref(), Some("ExternalName")) {
-            return Err(Error::new_static(
-                "ExternalName services are currently unsupported",
-            ));
-        }
+        let svc_type = spec
+            .type_
+            .as_deref()
+            .ok_or_else(|| Error::new_static("missing type"))
+            .with_fields("spec", "type")?;
 
         let mut backends = vec![];
 
-        let svc_ports =
-            as_ref_or_else(&spec.ports, "missing ports").with_fields("spec", "ports")?;
-        for (i, svc_port) in svc_ports.iter().enumerate() {
-            let port: u16 = convert_port(svc_port.port)
-                .with_field("port")
-                .with_field_index("ports", i)?;
+        // generate the target from the kube Service type.
+        let (target, svc_ports) = match svc_type {
+            "ClusterIP" => {
+                let name = Name::from_str(name).with_fields("meta", "name")?;
+                let namespace = Name::from_str(namespace).with_fields("meta", "namespace")?;
+                let target = Target::kube_service(&namespace, &name)?;
 
+                let svc_ports =
+                    as_ref_or_else(&spec.ports, "missing ports").with_fields("spec", "ports")?;
+
+                let mut ports = Vec::with_capacity(svc_ports.len());
+                for (i, svc_port) in svc_ports.iter().enumerate() {
+                    let port: u16 = convert_port(svc_port.port)
+                        .with_field("port")
+                        .with_field_index("ports", i)?;
+                    ports.push(port);
+                }
+
+                (target, ports)
+            }
+            "ExternalName" => {
+                let external_name = as_ref_or_else(&spec.external_name, "missing externalName")
+                    .with_fields("spec", "externalName")?;
+
+                let target = Target::dns(external_name).with_fields("spec", "externalName")?;
+                let svc_ports = spec.ports.as_deref().unwrap_or_default();
+
+                let mut ports = Vec::with_capacity(svc_ports.len());
+                for (i, svc_port) in svc_ports.iter().enumerate() {
+                    let port: u16 = convert_port(svc_port.port)
+                        .with_field("port")
+                        .with_field_index("ports", i)?;
+                    ports.push(port);
+                }
+
+                if ports.is_empty() {
+                    ports.extend([80, 443]);
+                }
+
+                (target, ports)
+            }
+            svc_type => return Err(Error::new(format!("{svc_type} Services are unsupported"))),
+        };
+
+        // generate a new Backend for every service port
+        for port in svc_ports {
             let lb =
                 get_lb_policy(svc.annotations(), &lb_policy_annotation(port))?.unwrap_or_default();
-
-            let name = Name::from_str(name).with_fields("meta", "name")?;
-            let namespace = Name::from_str(namespace).with_fields("meta", "namespace")?;
-            let target = Target::kube_service(&namespace, &name)?;
             backends.push(Backend {
-                id: crate::BackendId { target, port },
-                lb: lb.clone(),
+                id: crate::BackendId {
+                    target: target.clone(),
+                    port,
+                },
+                lb,
             })
         }
 
@@ -152,6 +200,9 @@ mod test {
         }}
     }
 
+    const CLUSTER_IP: Option<&str> = Some("ClusterIP");
+    const EXTERNAL_NAME: Option<&str> = Some("ExternalName");
+
     #[test]
     fn test_to_service_patch() {
         let backend = Backend {
@@ -172,6 +223,7 @@ mod test {
                     ..Default::default()
                 },
                 spec: Some(ServiceSpec {
+                    type_: CLUSTER_IP.map(str::to_string),
                     ports: Some(vec![ServicePort {
                         port: 1212,
                         protocol: Some("TCP".to_string()),
@@ -207,7 +259,8 @@ mod test {
     }
 
     #[test]
-    fn test_from_basic_svc() {
+    fn test_from_clusterip() {
+        // should generate a backend for each port
         let svc = Service {
             metadata: ObjectMeta {
                 namespace: Some("bar".to_string()),
@@ -215,8 +268,9 @@ mod test {
                 ..Default::default()
             },
             spec: Some(ServiceSpec {
+                type_: CLUSTER_IP.map(str::to_string),
                 ports: Some(vec![ServicePort {
-                    port: 80,
+                    port: 8910,
                     protocol: Some("TCP".to_string()),
                     ..Default::default()
                 }]),
@@ -228,14 +282,30 @@ mod test {
         assert_eq!(
             Backend::from_service(&svc).unwrap(),
             vec![Backend {
-                id: Target::kube_service("bar", "foo").unwrap().into_backend(80),
+                id: Target::kube_service("bar", "foo")
+                    .unwrap()
+                    .into_backend(8910),
                 lb: LbPolicy::Unspecified,
             },]
-        )
-    }
+        );
 
-    #[test]
-    fn test_from_svc_multiple_policies() {
+        // should error with no ports
+        let no_ports = Service {
+            metadata: ObjectMeta {
+                namespace: Some("bar".to_string()),
+                name: Some("foo".to_string()),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                type_: CLUSTER_IP.map(str::to_string),
+                ..Default::default()
+            }),
+            status: None,
+        };
+        assert!(Backend::from_service(&no_ports).is_err());
+
+        // multiple ports and some LB config, should generate different backends
+        // with different LB policies.
         let svc = Service {
             metadata: ObjectMeta {
                 namespace: Some("bar".to_string()),
@@ -247,6 +317,7 @@ mod test {
                 ..Default::default()
             },
             spec: Some(ServiceSpec {
+                type_: CLUSTER_IP.map(str::to_string),
                 ports: Some(vec![
                     ServicePort {
                         name: Some("http".to_string()),
@@ -300,6 +371,77 @@ mod test {
                     lb: LbPolicy::RoundRobin,
                 },
             ]
+        )
+    }
+
+    #[test]
+    fn test_from_external_name() {
+        // without explicit ports, should generate backends for both 443 and 80.
+        // annotations should still get picked up.
+        let svc = Service {
+            metadata: ObjectMeta {
+                namespace: Some("bar".to_string()),
+                name: Some("foo".to_string()),
+                annotations: Some(annotations! {
+                    "junctionlabs.io/backend.lb.443" => r#"{"type":"RoundRobin"}"#,
+                }),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                type_: EXTERNAL_NAME.map(str::to_string),
+                external_name: Some("www.junctionlabs.io".to_string()),
+                ..Default::default()
+            }),
+            status: None,
+        };
+
+        assert_eq!(
+            Backend::from_service(&svc).unwrap(),
+            vec![
+                Backend {
+                    id: Target::dns("www.junctionlabs.io").unwrap().into_backend(80),
+                    lb: LbPolicy::Unspecified,
+                },
+                Backend {
+                    id: Target::dns("www.junctionlabs.io")
+                        .unwrap()
+                        .into_backend(443),
+                    lb: LbPolicy::RoundRobin,
+                },
+            ]
+        );
+
+        // with explicit ports, we should use the given port and pick up an lb policy
+        let svc = Service {
+            metadata: ObjectMeta {
+                namespace: Some("bar".to_string()),
+                name: Some("foo".to_string()),
+                annotations: Some(annotations! {
+                    "junctionlabs.io/backend.lb.7777" => r#"{"type":"RoundRobin"}"#,
+                }),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                type_: EXTERNAL_NAME.map(str::to_string),
+                external_name: Some("www.junctionlabs.io".to_string()),
+                ports: Some(vec![ServicePort {
+                    port: 7777,
+                    protocol: Some("TCP".to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            status: None,
+        };
+
+        assert_eq!(
+            Backend::from_service(&svc).unwrap(),
+            vec![Backend {
+                id: Target::dns("www.junctionlabs.io")
+                    .unwrap()
+                    .into_backend(7777),
+                lb: LbPolicy::RoundRobin,
+            },]
         )
     }
 
