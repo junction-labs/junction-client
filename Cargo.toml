@@ -13,7 +13,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 arc-swap = "1.7"
-bytes = "1.7"
+bytes = "1.8"
 crossbeam-skiplist = "0.1"
 enum-map = "2.7"
 form_urlencoded = "1.1.1"
