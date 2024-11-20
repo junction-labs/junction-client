@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "junction-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arbitrary",
  "arbtest",
@@ -1081,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "junction-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "junction-python"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "http 1.1.0",
  "junction-api",

@@ -1,6 +1,6 @@
 [package]
 name = "junction-python"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = """
 Dynamically configurable HTTP service discovery bindings for Python
