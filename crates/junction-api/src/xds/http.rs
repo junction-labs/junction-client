@@ -7,8 +7,8 @@ use std::{
 use crate::{
     error::{Error, ErrorContext},
     http::{
-        HeaderMatch, Method, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRetry, RouteRule,
-        RouteTimeouts, WeightedBackend,
+        HeaderMatch, Method, PathMatch, QueryParamMatch, RateLimit, RateLimitBucket, Route,
+        RouteMatch, RouteRetry, RouteRule, RouteTimeouts, WeightedBackend,
     },
     shared::{Duration, Regex},
     BackendId, VirtualHost,
@@ -17,9 +17,25 @@ use xds_api::pb::{
     envoy::{
         config::{
             core::v3 as xds_core,
-            route::v3::{self as xds_route, query_parameter_matcher::QueryParameterMatchSpecifier},
+            route::v3::{
+                self as xds_route,
+                header_matcher::HeaderMatchSpecifier,
+                query_parameter_matcher::QueryParameterMatchSpecifier,
+                rate_limit::{
+                    self as xds_ratelimit,
+                    action::{HeaderValueMatch, QueryParameterValueMatch},
+                },
+                HeaderMatcher, QueryParameterMatcher,
+            },
         },
-        r#type::matcher::v3::{string_matcher::MatchPattern, StringMatcher},
+        extensions::{
+            common::ratelimit::v3::{rate_limit_descriptor::Entry, LocalRateLimitDescriptor},
+            filters::http::local_ratelimit::v3 as xds_local_ratelimit,
+        },
+        r#type::{
+            matcher::v3::{string_matcher::MatchPattern, StringMatcher},
+            v3::TokenBucket,
+        },
     },
     google::{self, protobuf},
 };
@@ -52,6 +68,7 @@ impl Route {
         let tags = tags_from_xds(&xds.metadata)?;
 
         let mut rules = vec![];
+        let mut rate_limits = vec![];
         for (idx, vhost) in xds.virtual_hosts.iter().enumerate() {
             let actions_and_matches = vhost.routes.iter().enumerate().map(|(route_idx, route)| {
                 (route.action.as_ref(), (route_idx, route.r#match.as_ref()))
@@ -70,9 +87,45 @@ impl Route {
                         .with_field_index("virtual_hosts", idx);
                 };
 
+                let vhost_ratelimit: xds_local_ratelimit::LocalRateLimit = vhost
+                    .typed_per_filter_config
+                    .get("envoy.filters.http.local_ratelimit")
+                    .map(|any| {
+                        protobuf::Any::to_msg(any).or(Err(Error::new_static(
+                            "Failed to parse local rate limit config",
+                        )
+                        .with_field("envoy.filters.http.local.ratelimit")))
+                    })
+                    .transpose()
+                    .and_then(|r| r.ok_or(Error::new_static("missing local rate limit config")))
+                    .with_field("typed_per_filter_config")
+                    .with_field_index("virtual_hosts", idx)?;
+
+                let route = vhost
+                    .routes
+                    .get(action_idx)
+                    .ok_or(Error::new_static("route index incorrect"))?;
+
+                let route_ratelimit: Option<xds_local_ratelimit::LocalRateLimit> = route
+                    .typed_per_filter_config
+                    .get("envoy.filters.http.local_ratelimit")
+                    .map(|any| {
+                        protobuf::Any::to_msg(any).expect("local rate limit xds config invalid")
+                    });
+
+                rate_limits.extend(
+                    // TODO: can we avoid cloning?
+                    RateLimit::from_xds(vhost.rate_limits.clone(), &vhost_ratelimit)?.into_iter(),
+                );
+
                 rules.push(
-                    RouteRule::from_xds_action_matches(&route_vhost, action, &matches)
-                        .with_field_index("virtual_hosts", idx)?,
+                    RouteRule::from_xds_action_matches(
+                        &route_vhost,
+                        action,
+                        &matches,
+                        &route_ratelimit,
+                    )
+                    .with_field_index("virtual_hosts", idx)?,
                 );
             }
         }
@@ -81,6 +134,7 @@ impl Route {
             vhost: route_vhost,
             tags,
             rules,
+            rate_limits,
         })
     }
 
@@ -162,6 +216,7 @@ impl RouteRule {
         route_vhost: &VirtualHost,
         action: &xds_route::route::Action,
         route_matches: &[(usize, Option<&xds_route::RouteMatch>)],
+        rate_limits: &Option<xds_local_ratelimit::LocalRateLimit>,
     ) -> Result<Self, Error> {
         let mut matches = vec![];
         for (route_idx, route_match) in route_matches {
@@ -184,10 +239,17 @@ impl RouteRule {
         // field names in errors.
         let backends = WeightedBackend::from_xds(route_vhost, action.cluster_specifier.as_ref())?;
 
+        let rate_limits = rate_limits
+            .as_ref()
+            .map(|rl| RateLimit::from_xds(action.rate_limits.clone(), rl))
+            .transpose()?
+            .unwrap_or(vec![]);
+
         Ok(RouteRule {
             matches,
             retry,
             filters: vec![],
+            rate_limits,
             timeouts,
             backends,
         })
@@ -284,6 +346,283 @@ impl RouteTimeouts {
         let request_timeout = self.request.map(|d| d.try_into().unwrap());
         let per_try_timeout = self.backend_request.map(|d| d.try_into().unwrap());
         (request_timeout, per_try_timeout)
+    }
+}
+
+impl RateLimit {
+    pub fn from_xds(
+        rate_limits: Vec<xds_route::RateLimit>,
+        rl: &xds_local_ratelimit::LocalRateLimit,
+    ) -> Result<Vec<Self>, Error> {
+        let action_specifiers = rate_limits
+            .iter()
+            .flat_map(|rl| {
+                rl.actions.iter().enumerate().map(|(i, a)| {
+                    a.action_specifier
+                        .clone()
+                        .ok_or(Error::new_static("missing action specifier"))
+                        .with_field_index("actions", i)
+                        .with_field("rate_limits")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Collect the actions to be referenced by client descriptors
+        let rate_limit_buckets =
+            RateLimitBucket::from_xds(&action_specifiers).with_field("actions")?;
+
+        let rate_limits = rl
+            .descriptors
+            .iter()
+            .enumerate()
+            .map(|(i, descriptor)| {
+                // Scoped to always attach descriptors field to the error
+                {
+                    let limit_buckets = descriptor
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .map(|(j, e)| {
+                            rate_limit_buckets
+                                .get(&e.key)
+                                .map(|b| b.clone())
+                                .ok_or(Error::new_static("descriptor_key should not be empty"))
+                                .with_field_index("entries", j)
+                                .with_field_index("action_descriptors", i)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let token_bucket = descriptor
+                        .token_bucket
+                        .clone()
+                        .ok_or(Error::new_static("missing token bucket"))
+                        .with_field("token_bucket")?;
+                    Ok(RateLimit {
+                        interval: token_bucket
+                            .fill_interval
+                            .ok_or(Error::new_static("missing fill interval"))
+                            .and_then(|r| r.try_into())
+                            .with_field("fill_interval")
+                            .with_field("token_bucket")?,
+                        refill_rate: token_bucket
+                            .tokens_per_fill
+                            .ok_or(Error::new_static("missing refill rate"))
+                            .with_field("tokens_per_field")
+                            .with_field("token_bucket")?
+                            .into(),
+                        capacity: token_bucket.max_tokens,
+                        bucket_by: limit_buckets,
+                    })
+                }
+                .with_field_index("descriptors", i)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rate_limits)
+    }
+
+    pub fn to_xds(
+        &self,
+    ) -> (
+        Vec<xds_route::RateLimit>,
+        xds_local_ratelimit::LocalRateLimit,
+    ) {
+        (
+            vec![],
+            xds_local_ratelimit::LocalRateLimit {
+                descriptors: vec![LocalRateLimitDescriptor {
+                    entries: self
+                        .bucket_by
+                        .iter()
+                        .map(|b| Entry {
+                            key: match b.to_xds() {
+                                xds_ratelimit::action::ActionSpecifier::HeaderValueMatch(h) => {
+                                    h.descriptor_key
+                                }
+                                xds_ratelimit::action::ActionSpecifier::QueryParameterValueMatch(q) => {
+                                    q.descriptor_key
+                                }
+                                // TODO: Add error handling for this case
+                                _ => "".to_string(),
+                            },
+                            ..Default::default()
+                        })
+                        .collect(),
+                    token_bucket: Some(TokenBucket {
+                        fill_interval: Some(self.interval.try_into().unwrap()),
+                        tokens_per_fill: Some(self.refill_rate.into()),
+                        max_tokens: self.capacity,
+                    }),
+                }],
+
+                ..Default::default()
+            },
+        )
+    }
+}
+
+impl RateLimitBucket {
+    fn from_xds(
+        action_specifiers: &Vec<xds_ratelimit::action::ActionSpecifier>,
+    ) -> Result<HashMap<String, Self>, Error> {
+        action_specifiers
+            .iter()
+            .enumerate()
+            .map(|(i, a)| match a {
+                xds_ratelimit::action::ActionSpecifier::RequestHeaders(h) => {
+                    if h.descriptor_key.is_empty() {
+                        return Err(Error::new_static("descriptor_key should not be empty"))
+                            .with_field("action_specifier")
+                            .with_field_index("actions", i);
+                    }
+                    Ok((
+                        h.descriptor_key.clone(),
+                        RateLimitBucket::Header(HeaderMatch::Present {
+                            name: h.header_name.clone(),
+                            value: true,
+                        }),
+                    ))
+                }
+                xds_ratelimit::action::ActionSpecifier::HeaderValueMatch(h) => {
+                    if h.descriptor_key.is_empty() {
+                        return Err(Error::new_static("descriptor_key should not be empty"))
+                            .with_field("action_specifier")
+                            .with_field_index("actions", i);
+                    }
+                    // NOTE: we only support the first header value match
+                    if let Some(header) = h.headers.first() {
+                        let header_match = HeaderMatch::from_xds(header)?;
+                        Ok((
+                            h.descriptor_key.clone(),
+                            RateLimitBucket::Header(header_match),
+                        ))
+                    } else {
+                        Err(Error::new_static("no header specified"))
+                            .with_field("action_specifier")
+                            .with_field_index("actions", i)
+                    }
+                }
+                xds_ratelimit::action::ActionSpecifier::QueryParameterValueMatch(q) => {
+                    if q.descriptor_key.is_empty() {
+                        return Err(Error::new_static("descriptor_key should not be empty"))
+                            .with_field("action_specifier")
+                            .with_field_index("actions", i);
+                    }
+                    // NOTE: we only support the first header value match
+                    if let Some(query_param) = q.query_parameters.first() {
+                        let query_match = QueryParamMatch::from_xds(query_param)?;
+                        Ok((
+                            q.descriptor_key.clone(),
+                            RateLimitBucket::QueryParam(query_match),
+                        ))
+                    } else {
+                        Err(Error::new_static("no query param specified"))
+                            .with_field("action_specifier")
+                            .with_field_index("actions", i)
+                    }
+                }
+                _ => Err(Error::new_static("unsupported rate limit match"))
+                    .with_field("action_specifier")
+                    .with_field_index("actions", i),
+            })
+            .collect::<Result<HashMap<_, _>, Error>>()
+    }
+
+    fn to_xds(&self) -> xds_ratelimit::action::ActionSpecifier {
+        match self {
+            RateLimitBucket::Header(header) => match header {
+                HeaderMatch::RegularExpression { name, value } => {
+                    xds_ratelimit::action::ActionSpecifier::HeaderValueMatch(HeaderValueMatch {
+                        descriptor_key: format!("header_regex_{}_{:?}", name, value),
+                        headers: vec![HeaderMatcher {
+                            name: name.clone(),
+                            header_match_specifier: Some(HeaderMatchSpecifier::SafeRegexMatch(
+                                regex_matcher(value),
+                            )),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                }
+                HeaderMatch::Present { name, value } => {
+                    xds_ratelimit::action::ActionSpecifier::HeaderValueMatch(HeaderValueMatch {
+                        descriptor_key: format!("header_present_{}_{:?}", name, value),
+                        headers: vec![HeaderMatcher {
+                            name: name.clone(),
+                            header_match_specifier: Some(HeaderMatchSpecifier::PresentMatch(
+                                *value,
+                            )),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                }
+                HeaderMatch::Exact { name, value } => {
+                    xds_ratelimit::action::ActionSpecifier::HeaderValueMatch(HeaderValueMatch {
+                        descriptor_key: format!("header_exact_{}_{:?}", name, value),
+                        headers: vec![HeaderMatcher {
+                            name: name.clone(),
+                            header_match_specifier: Some(HeaderMatchSpecifier::ExactMatch(
+                                value.to_string(),
+                            )),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                }
+            },
+            RateLimitBucket::QueryParam(query_param) => match query_param {
+                QueryParamMatch::RegularExpression { name, value } => {
+                    xds_ratelimit::action::ActionSpecifier::QueryParameterValueMatch(
+                        QueryParameterValueMatch {
+                            descriptor_key: format!("query_param_regex_{}_{:?}", name, value),
+                            query_parameters: vec![QueryParameterMatcher {
+                                name: name.clone(),
+                                query_parameter_match_specifier: Some(
+                                    QueryParameterMatchSpecifier::StringMatch(StringMatcher {
+                                        match_pattern: Some(MatchPattern::SafeRegex(
+                                            regex_matcher(value),
+                                        )),
+                                        ..Default::default()
+                                    }),
+                                ),
+                            }],
+                            ..Default::default()
+                        },
+                    )
+                }
+                QueryParamMatch::Exact { name, value } => {
+                    xds_ratelimit::action::ActionSpecifier::QueryParameterValueMatch(
+                        QueryParameterValueMatch {
+                            descriptor_key: format!("query_param_exact_{}_{:?}", name, value),
+                            query_parameters: vec![QueryParameterMatcher {
+                                name: name.clone(),
+                                query_parameter_match_specifier: Some(
+                                    QueryParameterMatchSpecifier::StringMatch(StringMatcher {
+                                        match_pattern: Some(MatchPattern::Exact(value.to_string())),
+                                        ..Default::default()
+                                    }),
+                                ),
+                            }],
+                            ..Default::default()
+                        },
+                    )
+                }
+                QueryParamMatch::Present { name, value } => {
+                    xds_ratelimit::action::ActionSpecifier::QueryParameterValueMatch(
+                        QueryParameterValueMatch {
+                            descriptor_key: format!("query_param_present_{}_{:?}", name, value),
+                            query_parameters: vec![QueryParameterMatcher {
+                                name: name.clone(),
+                                query_parameter_match_specifier: Some(
+                                    QueryParameterMatchSpecifier::PresentMatch(*value),
+                                ),
+                            }],
+                            ..Default::default()
+                        },
+                    )
+                }
+            },
+        }
     }
 }
 
@@ -413,24 +752,32 @@ impl QueryParamMatch {
         let (name, matcher) = match self {
             QueryParamMatch::RegularExpression { name, value } => {
                 let name = name.clone();
-                let matcher = MatchPattern::SafeRegex(regex_matcher(value));
+                let matcher = QueryParameterMatchSpecifier::StringMatch(StringMatcher {
+                    match_pattern: Some(MatchPattern::SafeRegex(regex_matcher(value))),
+                    ignore_case: false,
+                });
+
                 (name, matcher)
             }
             QueryParamMatch::Exact { name, value } => {
                 let name = name.clone();
-                let matcher = MatchPattern::Exact(value.to_string());
+                let matcher = QueryParameterMatchSpecifier::StringMatch(StringMatcher {
+                    match_pattern: Some(MatchPattern::Exact(value.to_string())),
+                    ignore_case: false,
+                });
+
+                (name, matcher)
+            }
+            QueryParamMatch::Present { name, value } => {
+                let name = name.clone();
+                let matcher = QueryParameterMatchSpecifier::PresentMatch(*value);
                 (name, matcher)
             }
         };
 
         xds_route::QueryParameterMatcher {
             name,
-            query_parameter_match_specifier: Some(QueryParameterMatchSpecifier::StringMatch(
-                StringMatcher {
-                    match_pattern: Some(matcher),
-                    ignore_case: false,
-                },
-            )),
+            query_parameter_match_specifier: Some(matcher),
         }
     }
 }
@@ -479,6 +826,13 @@ impl HeaderMatch {
                 name: name.clone(),
                 header_match_specifier: Some(
                     xds_route::header_matcher::HeaderMatchSpecifier::ExactMatch(value.to_string()),
+                ),
+                ..Default::default()
+            },
+            HeaderMatch::Present { name, value } => xds_route::HeaderMatcher {
+                name: name.clone(),
+                header_match_specifier: Some(
+                    xds_route::header_matcher::HeaderMatchSpecifier::PresentMatch(*value),
                 ),
                 ..Default::default()
             },
@@ -739,6 +1093,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 backends: vec![WeightedBackend {
@@ -758,6 +1113,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
@@ -783,6 +1139,7 @@ mod test {
 
         let original = Route {
             vhost: web.clone().into_vhost(None),
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 ..Default::default()
@@ -795,6 +1152,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
@@ -816,6 +1174,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: BTreeMap::from_iter([("foo".to_string(), "bar".to_string())]),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
@@ -837,6 +1196,29 @@ mod test {
     }
 
     #[test]
+    fn test_rate_limit_roundtrip() {
+        let web = Target::kube_service("prod", "web").unwrap();
+
+        assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
+            vhost: VirtualHost {
+                target: web.clone(),
+                port: None,
+            },
+            rate_limits: vec![RateLimit {
+                interval: Duration::from_secs(1),
+                refill_rate: 1,
+                capacity: 1,
+                bucket_by: vec![RateLimitBucket::Header(HeaderMatch::Present {
+                    name: "foo".to_string(),
+                    value: true,
+                })],
+            }],
+            tags: Default::default(),
+            rules: vec![],
+        });
+    }
+
+    #[test]
     fn test_multiple_rules_roundtrip() {
         let web = Target::kube_service("prod", "web").unwrap();
         let staging = Target::kube_service("staging", "web").unwrap();
@@ -847,6 +1229,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -899,6 +1282,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -946,6 +1330,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -999,6 +1384,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -1045,6 +1431,7 @@ mod test {
                     target: web.clone(),
                     port: None,
                 },
+                rate_limits: Default::default(),
                 tags: Default::default(),
                 rules: vec![RouteRule {
                     matches: vec![
@@ -1083,6 +1470,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![
@@ -1127,6 +1515,7 @@ mod test {
                 target: web.clone(),
                 port: None,
             },
+            rate_limits: Default::default(),
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {

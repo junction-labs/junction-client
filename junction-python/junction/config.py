@@ -137,6 +137,27 @@ class RouteRetry(typing.TypedDict):
     retries."""
 
 
+class HeaderRateLimitFilter(typing.TypedDict):
+    type: typing.Literal["header"]
+    name: str
+    value: str
+
+
+class QueryParamRateLimitFilter(typing.TypedDict):
+    type: typing.Literal["query_param"]
+    name: str
+    value: str
+
+
+RateLimitFilter = HeaderRateLimitFilter | QueryParamRateLimitFilter
+
+
+class RateLimit(typing.TypedDict):
+    """Configure client rate limit policy."""
+
+    filter: typing.List[RateLimitFilter]
+
+
 class HeaderValue(typing.TypedDict):
     name: str
     """The name of the HTTP Header. Note header names are case insensitive. (See

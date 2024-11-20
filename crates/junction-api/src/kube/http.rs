@@ -120,7 +120,12 @@ impl TryFrom<&HTTPRoute> for crate::http::Route {
         let tags = read_tags(route.annotations());
         let rules = vec_from_gateway!(route.spec.rules).with_fields("spec", "rules")?;
 
-        Ok(Self { vhost, tags, rules })
+        Ok(Self {
+            vhost,
+            tags,
+            rules,
+            rate_limits: vec![],
+        })
     }
 }
 
@@ -139,6 +144,7 @@ impl TryFrom<&HTTPRouteRules> for crate::http::RouteRule {
             filters,
             timeouts,
             retry,
+            rate_limits: vec![],
             backends,
         })
     }
@@ -519,6 +525,8 @@ impl TryFrom<&crate::http::QueryParamMatch> for HTTPRouteRulesMatchesQueryParams
                     value: value.clone(),
                 }
             }
+            // TODO: Should this be handled?
+            _ => unimplemented!(),
         })
     }
 }
@@ -566,6 +574,8 @@ impl TryFrom<&crate::http::HeaderMatch> for HTTPRouteRulesMatchesHeaders {
                 r#type: Some(HTTPRouteRulesMatchesHeadersType::Exact),
                 value: value.clone(),
             },
+            // TODO: Should this be handled?
+            _ => unimplemented!(),
         })
     }
 }
@@ -724,6 +734,7 @@ spec:
                 }],
                 ..Default::default()
             }],
+            rate_limits: vec![],
         };
 
         assert_eq!(
@@ -768,6 +779,7 @@ spec:
                     .into_vhost(None),
                 tags: Default::default(),
                 rules: vec![],
+                rate_limits: vec![],
             }
         );
     }
@@ -806,6 +818,7 @@ spec:
                 }],
                 ..Default::default()
             }],
+            rate_limits: vec![],
         };
 
         assert_eq!(
