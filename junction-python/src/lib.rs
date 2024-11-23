@@ -1,4 +1,4 @@
-use junction_api::{backend::Backend, http::Route};
+use junction_api::{backend::Backend, http::Route, BackendId};
 use junction_core::{ConfigMode, ResourceVersion};
 use once_cell::sync::Lazy;
 use pyo3::{
@@ -86,6 +86,21 @@ impl std::fmt::Display for EndpointAddress {
         match self {
             EndpointAddress::SocketAddr { addr, port } => write!(f, "{addr}:{port}"),
             EndpointAddress::DnsName { name, port } => write!(f, "{name}:{port}"),
+        }
+    }
+}
+
+impl From<&junction_core::EndpointAddress> for EndpointAddress {
+    fn from(addr: &junction_core::EndpointAddress) -> Self {
+        match addr {
+            junction_core::EndpointAddress::SocketAddr(addr) => Self::SocketAddr {
+                addr: addr.ip(),
+                port: addr.port() as u32,
+            },
+            junction_core::EndpointAddress::DnsName(name, port) => Self::DnsName {
+                name: name.clone(),
+                port: *port,
+            },
         }
     }
 }
@@ -239,13 +254,13 @@ fn new_client(
     })
 }
 
-fn default_ads_server(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<String> {
+fn default_ads_server(
+    kwargs: Option<&Bound<'_, PyDict>>,
+    message: &'static str,
+) -> PyResult<String> {
     kwarg_string("ads_server", kwargs)?
         .or(env::var("JUNCTION_ADS_SERVER").ok())
-        .ok_or(
-            PyRuntimeError::new_err(
-                "Can not contact ADS server as neither ads_server option was passed nor is JUNCTION_ADS_SERVER environment variable set",
-            ))
+        .ok_or(PyRuntimeError::new_err(message))
 }
 
 fn default_node_info(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<(String, String)> {
@@ -358,7 +373,10 @@ fn dump_kube_backend(backend: Bound<'_, PyAny>) -> PyResult<String> {
 }
 
 static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
-    let ads = default_ads_server(None)?;
+    let ads = default_ads_server(
+        None,
+        "JUNCTION_ADS_SERVER isn't set, can't use the default client",
+    )?;
     let (node, cluster) = default_node_info(None)?;
     new_client(ads, node, cluster)
 });
@@ -397,7 +415,10 @@ impl Junction {
     #[new]
     #[pyo3(signature = (**kwargs))]
     fn new(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
-        let ads = default_ads_server(kwargs)?;
+        let ads = default_ads_server(
+            kwargs,
+            "no ads server specified: ads_server wasn't passed and JUNCTION_ADS_SERVER isn't set",
+        )?;
         let (node, cluster) = default_node_info(kwargs)?;
         let routes = default_routes(kwargs)?;
         let backends = default_backends(kwargs)?;
@@ -434,11 +455,9 @@ impl Junction {
             junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
         let headers = headers_from_py(headers)?;
 
-        let request = junction_core::HttpRequest {
-            method: &method,
-            url: &url,
-            headers: &headers,
-        };
+        let request = junction_core::HttpRequest::from_parts(&method, &url, &headers)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
         let config_mode = match dynamic {
             true => ConfigMode::Dynamic,
             false => ConfigMode::Static,
@@ -454,12 +473,26 @@ impl Junction {
         Ok((route, resolved.rule, backend))
     }
 
+    /// Return the list of addresses currently in cache for a backend. These
+    /// endpoints are a snapshot of what is currently in cache.
+    #[pyo3(signature = (backend))]
+    fn get_endpoints(&self, backend: Bound<'_, PyAny>) -> PyResult<Vec<EndpointAddress>> {
+        let backend: BackendId = pythonize::depythonize_bound(backend)?;
+        let endpoint_iter = match self.core.get_endpoints(&backend) {
+            Some(iter) => iter,
+            None => return Ok(Vec::new()),
+        };
+
+        Ok(endpoint_iter.addrs().map(EndpointAddress::from).collect())
+    }
+
     /// Resolve an endpoint based on an HTTP method, url, and headers.
     ///
     /// Returns the list of endpoints that traffic should be directed to, taking
     /// in to account load balancing and any prior requests. A request should be
     /// sent to all endpoints, and it's up to the caller to decide how to
     /// combine multiple responses.
+    #[pyo3(signature = (method, url, headers))]
     fn resolve_http(
         &mut self,
         method: &str,

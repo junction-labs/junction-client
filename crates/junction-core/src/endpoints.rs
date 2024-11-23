@@ -1,5 +1,7 @@
 use junction_api::http::{RouteRetry, RouteTimeouts};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
+
+use crate::load_balancer::EndpointGroup;
 
 /// An HTTP endpoint to make a request to.
 ///
@@ -47,5 +49,26 @@ impl std::fmt::Display for EndpointAddress {
             EndpointAddress::SocketAddr(addr) => addr.fmt(f),
             EndpointAddress::DnsName(name, port) => write!(f, "{name}:{port}"),
         }
+    }
+}
+
+/// A snapshot of endpoint data.
+pub struct EndpointIter {
+    endpoint_group: Arc<EndpointGroup>,
+}
+
+impl From<Arc<EndpointGroup>> for EndpointIter {
+    fn from(endpoint_group: Arc<EndpointGroup>) -> Self {
+        Self { endpoint_group }
+    }
+}
+
+// TODO: add a way to see endpoints grouped by locality. have to decide how
+// to publicy expose Locality.
+impl EndpointIter {
+    /// Iterate over all of the addresses in this group, discarding any locality
+    /// information.
+    pub fn addrs(&self) -> impl Iterator<Item = &EndpointAddress> {
+        self.endpoint_group.iter()
     }
 }

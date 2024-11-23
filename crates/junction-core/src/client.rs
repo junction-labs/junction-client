@@ -1,4 +1,7 @@
-use crate::{load_balancer::BackendLb, xds::AdsClient, ConfigCache, Endpoint, Error, StaticConfig};
+use crate::{
+    endpoints::EndpointIter, load_balancer::BackendLb, xds::AdsClient, ConfigCache, Endpoint,
+    Error, StaticConfig,
+};
 use junction_api::{
     backend::Backend,
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
@@ -8,6 +11,52 @@ use rand::distributions::WeightedError;
 use std::time::Duration;
 use std::{collections::BTreeSet, sync::Arc};
 use std::{future::Future, str::FromStr};
+
+/// A view into an HTTP Request before any rewrites or modifications have been
+/// made. It includes the potential [VirtualHost]s that this request may match.
+///
+/// Requests are a collection of references and are intended to be cheap to
+/// clone.
+#[derive(Debug, Clone)]
+pub struct HttpRequest<'a> {
+    /// The HTTP Method of the request.
+    pub method: &'a http::Method,
+
+    /// The request URL, before any rewrites or modifications have been made.
+    pub url: &'a crate::Url,
+
+    /// The request headers, before
+    pub headers: &'a http::HeaderMap,
+
+    // NOTE: This is an Arc because it seems nice to keep HttpRequest Send and
+    // Sync. There's the added cost of bumping an atomic every time we clone but
+    // in the grand scheme of making an HTTP call, this does not seem like it
+    // is worth caring about.
+    vhosts: Arc<[VirtualHost]>,
+}
+
+impl<'a> HttpRequest<'a> {
+    /// The `VirtualHost`s that this request may match.
+    pub fn vhosts(&self) -> &[VirtualHost] {
+        &self.vhosts
+    }
+
+    /// Create a request from individual parts.
+    pub fn from_parts(
+        method: &'a http::Method,
+        url: &'a crate::Url,
+        headers: &'a http::HeaderMap,
+    ) -> crate::Result<Self> {
+        let vhosts = Arc::from(vhosts_for_url(url)?);
+
+        Ok(Self {
+            method,
+            url,
+            headers,
+            vhosts,
+        })
+    }
+}
 
 /// A service discovery client that looks up URL information based on URLs,
 /// headers, and methods.
@@ -211,38 +260,54 @@ impl Client {
 
     /// Resolve an HTTP method, URL, and headers to a target backend, returning
     /// the Route that matched, the index of the rule that matched, and the
-    /// backend that the [Target] that was selected.
+    /// backend that was chosen - to make backend choice determinstic with
+    /// multiple backends, set the `JUNCTION_SEED` environment variable.
     ///
     /// This is a lower-level method that only performs the Route matching half
-    /// of full resolution. It's intended for debugging or querying a client
-    /// for specific information. For everyday use, prefer
+    /// of resolution. It's intended for debugging or querying a client for
+    /// specific information. For everyday use, prefer [Client::resolve_http].
     /// [Client::resolve_http].
     pub fn resolve_routes(
         &self,
         config_mode: ConfigMode,
         request: HttpRequest<'_>,
     ) -> crate::Result<ResolvedRoute> {
-        match config_mode {
-            ConfigMode::Dynamic => {
-                // in dynamic mode, use every target as an ads client
-                // subscription. this pins every target to the ads cache.
-                resolve_routes(
-                    &self.ads,
-                    &self.defaults,
-                    request,
-                    |vhosts: &[VirtualHost]| {
-                        self.ads
-                            .subscribe_to_vhosts(vhosts.iter().cloned())
-                            .unwrap();
-                    },
-                )
-            }
-            _ => {
-                // otherwise just no-op the subscribe fn and use the existing
-                // ads cache/defaults
-                resolve_routes(&self.ads, &self.defaults, request, |_| {})
-            }
+        if ConfigMode::Dynamic == config_mode {
+            self.ads
+                .subscribe_to_vhosts(request.vhosts().iter().cloned())
+                .expect("ads client overloaded, this is a bug in Junction");
         }
+
+        resolve_routes(&self.ads, &self.defaults, request)
+    }
+
+    /// Use a resolved Route and Backend to select an endpoint for a request.
+    ///
+    /// This is a lower level method that only performs the Backend
+    /// load-balancing half of resolution. It's intended for debugging or
+    /// querying a client for specific information. For everday
+    /// use, prefer [Client::resolve_http].
+    pub fn resolve_endpoint(
+        &self,
+        config_mode: ConfigMode,
+        resolved: ResolvedRoute,
+        request: HttpRequest<'_>,
+    ) -> crate::Result<Vec<Endpoint>> {
+        if ConfigMode::Dynamic == config_mode {
+            self.ads
+                .subscribe_to_backends([resolved.backend.clone()])
+                .expect("ads client overloaded, this is a bug in Junction");
+        }
+
+        resolve_endpoint(&self.ads, &self.defaults, resolved, request)
+    }
+
+    /// Return the endpoints currently in cache for this backend.
+    ///
+    /// The returned endpoints are a snapshot of what is currently in cache and
+    /// will not update as new discovery information is pushed.
+    pub fn get_endpoints(&self, backend: &BackendId) -> Option<EndpointIter> {
+        self.ads.get_endpoints(backend).map(EndpointIter::from)
     }
 
     /// Resolve an HTTP method, URL, and headers into a set of [Endpoint]s.
@@ -256,11 +321,7 @@ impl Client {
         url: &crate::Url,
         headers: &http::HeaderMap,
     ) -> crate::Result<Vec<crate::Endpoint>> {
-        let request = HttpRequest {
-            method,
-            url,
-            headers,
-        };
+        let request = HttpRequest::from_parts(method, url, headers)?;
 
         // FIXME: this is deeply janky, manual exponential backoff. it should be
         // possible for the ADS client to signal when a cache entry is
@@ -277,7 +338,7 @@ impl Client {
         ];
 
         for backoff in RESOLVE_BACKOFF {
-            match self.resolve(request) {
+            match self.resolve(ConfigMode::Dynamic, request.clone()) {
                 Ok(endpoints) => return Ok(endpoints),
                 Err(e) => {
                     if !e.is_temporary() {
@@ -287,17 +348,17 @@ impl Client {
                 }
             }
         }
-        self.resolve(request)
+        self.resolve(ConfigMode::Dynamic, request)
     }
 
-    fn resolve(&self, request: HttpRequest<'_>) -> crate::Result<Vec<crate::Endpoint>> {
-        let resolved_route = self.resolve_routes(ConfigMode::Dynamic, request)?;
-
-        self.ads
-            .subscribe_to_backends(Some(resolved_route.backend.clone()))
-            .unwrap();
-
-        resolve_endpoint(&self.ads, &self.defaults, resolved_route, request)
+    #[inline]
+    fn resolve(
+        &self,
+        config_mode: ConfigMode,
+        request: HttpRequest<'_>,
+    ) -> crate::Result<Vec<crate::Endpoint>> {
+        let resolved = self.resolve_routes(config_mode, request.clone())?;
+        self.resolve_endpoint(config_mode, resolved, request)
     }
 }
 
@@ -324,20 +385,6 @@ pub(crate) fn vhosts_for_url(url: &crate::Url) -> crate::Result<Vec<VirtualHost>
     ])
 }
 
-/// A view into an HTTP Request, before any rewrites or modifications have been
-/// made while sending or processing a response.
-#[derive(Debug, Clone, Copy)]
-pub struct HttpRequest<'a> {
-    /// The HTTP Method of the request.
-    pub method: &'a http::Method,
-
-    /// The request URL, before any rewrites or modifications have been made.
-    pub url: &'a crate::Url,
-
-    /// The request headers, before
-    pub headers: &'a http::HeaderMap,
-}
-
 /// The result of [resolving a route][Client::resolve_routes].
 #[derive(Debug, Clone)]
 pub struct ResolvedRoute {
@@ -353,22 +400,15 @@ pub struct ResolvedRoute {
     pub backend: BackendId,
 }
 
-pub(crate) fn resolve_routes<F>(
+pub(crate) fn resolve_routes(
     cache: &impl ConfigCache,
     defaults: &impl ConfigCache,
     request: HttpRequest<'_>,
-    subscribe: F,
-) -> crate::Result<ResolvedRoute>
-where
-    F: Fn(&[VirtualHost]),
-{
+) -> crate::Result<ResolvedRoute> {
     use rand::seq::SliceRandom;
 
-    let vhosts = vhosts_for_url(request.url)?;
-    subscribe(&vhosts);
-
-    let default_route = defaults.get_route_with_fallbacks(&vhosts);
-    let configured_route = cache.get_route_with_fallbacks(&vhosts);
+    let default_route = defaults.get_route_with_fallbacks(request.vhosts());
+    let configured_route = cache.get_route_with_fallbacks(request.vhosts());
 
     // FIXME: for now, the default routes are only looked up if there is no
     // route coming from XDS. Whereas in reality we likely want to merge the
@@ -384,7 +424,7 @@ where
         }
         (None, Some(configured_route)) => configured_route,
         (Some(default_route), None) => default_route.clone(),
-        _ => return Err(Error::no_route_matched(vhosts)),
+        _ => return Err(Error::no_route_matched(request.vhosts().to_vec())),
     };
 
     // if this is the trivial route, match it immediately and return
@@ -595,6 +635,15 @@ mod test {
 
     use super::*;
 
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+
+    #[test]
+    fn assert_send_sync() {
+        assert_send::<HttpRequest<'_>>();
+        assert_sync::<HttpRequest<'_>>();
+    }
+
     #[test]
     fn test_resolve_passthrough_route() {
         let target = Target::dns("example.com").unwrap();
@@ -604,13 +653,11 @@ mod test {
         );
         let defaults = StaticConfig::default();
 
-        let request = HttpRequest {
-            method: &http::Method::GET,
-            url: &Url::from_str("http://example.com/test-path").unwrap(),
-            headers: &http::HeaderMap::default(),
-        };
+        let url = Url::from_str("http://example.com/test-path").unwrap();
+        let headers = http::HeaderMap::default();
+        let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
 
-        let resolved = resolve_routes(&routes, &defaults, request, |_| {}).unwrap();
+        let resolved = resolve_routes(&routes, &defaults, request).unwrap();
         assert_eq!(resolved.backend, target.into_backend(80));
     }
 
@@ -625,17 +672,11 @@ mod test {
         let routes = StaticConfig::new(vec![route], vec![]);
         let defaults = StaticConfig::default();
 
-        let resolved = resolve_routes(
-            &routes,
-            &defaults,
-            HttpRequest {
-                method: &http::Method::GET,
-                url: &Url::from_str("http://example.com:3214/users/123").unwrap(),
-                headers: &http::HeaderMap::default(),
-            },
-            |_| {},
-        )
-        .unwrap();
+        let url = Url::from_str("http://example.com:3214/users/123").unwrap();
+        let headers = http::HeaderMap::default();
+        let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
+
+        let resolved = resolve_routes(&routes, &defaults, request).unwrap();
         assert_eq!(resolved.rule, None);
         assert_eq!(
             resolved.backend,
@@ -663,17 +704,12 @@ mod test {
         let defaults = StaticConfig::default();
 
         for port in [80, 7887] {
-            let resolved = resolve_routes(
-                &routes,
-                &defaults,
-                HttpRequest {
-                    method: &http::Method::GET,
-                    url: &Url::from_str(&format!("http://example.com:{port}/users/123")).unwrap(),
-                    headers: &http::HeaderMap::default(),
-                },
-                |_| {},
-            )
-            .unwrap();
+            let method = &http::Method::GET;
+            let url = &Url::from_str(&format!("http://example.com:{port}/users/123")).unwrap();
+            let headers = &http::HeaderMap::default();
+            let request = HttpRequest::from_parts(method, url, headers).unwrap();
+
+            let resolved = resolve_routes(&routes, &defaults, request).unwrap();
 
             assert_eq!(
                 resolved.backend,
@@ -721,49 +757,31 @@ mod test {
         let routes = StaticConfig::new(vec![route], vec![]);
         let defaults = StaticConfig::default();
 
-        let resolved = resolve_routes(
-            &routes,
-            &defaults,
-            HttpRequest {
-                method: &http::Method::GET,
-                url: &Url::from_str("http://example.com/test-path").unwrap(),
-                headers: &http::HeaderMap::default(),
-            },
-            |_| {},
-        )
-        .unwrap();
+        let url = &Url::from_str("http://example.com/test-path").unwrap();
+        let headers = &http::HeaderMap::default();
+        let request = HttpRequest::from_parts(&http::Method::GET, url, headers).unwrap();
+        let resolved = resolve_routes(&routes, &defaults, request).unwrap();
+
         // should match the fallthrough rule
         assert_eq!(resolved.rule, Some(1));
         assert_eq!(resolved.backend, backend_two);
 
-        let resolved = resolve_routes(
-            &routes,
-            &defaults,
-            HttpRequest {
-                method: &http::Method::GET,
-                url: &Url::from_str("http://example.com/users/123").unwrap(),
-                headers: &http::HeaderMap::default(),
-            },
-            |_| {},
-        )
-        .unwrap();
+        let url = Url::from_str("http://example.com/users/123").unwrap();
+        let headers = &http::HeaderMap::default();
+        let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
+        let resolved = resolve_routes(&routes, &defaults, request).unwrap();
+
         // should match the first rule, with the path match
         assert_eq!(resolved.backend, backend_one);
         assert!(!resolved.route.rules[resolved.rule.unwrap()]
             .matches
             .is_empty());
 
-        let resolved = resolve_routes(
-            &routes,
-            &defaults,
-            HttpRequest {
-                method: &http::Method::GET,
-                url: &Url::from_str("http://example.com/users/123").unwrap(),
-                headers: &http::HeaderMap::default(),
-            },
-            |_| {},
-        )
-        .unwrap();
+        let url = Url::from_str("http://example.com/users/123").unwrap();
+        let headers = &http::HeaderMap::default();
+        let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
+
+        let resolved = resolve_routes(&routes, &defaults, request).unwrap();
         // should match the first rule, with the path match
         assert_eq!(resolved.rule, Some(0));
         assert_eq!(resolved.backend, backend_one);
@@ -825,17 +843,11 @@ mod test {
         ];
 
         for url in wont_match {
-            let resolved = resolve_routes(
-                &routes,
-                &defaults,
-                HttpRequest {
-                    method: &http::Method::GET,
-                    url: &Url::from_str(url).unwrap(),
-                    headers: &http::HeaderMap::default(),
-                },
-                |_| {},
-            )
-            .unwrap();
+            let url = Url::from_str(url).unwrap();
+            let headers = &http::HeaderMap::default();
+            let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
+
+            let resolved = resolve_routes(&routes, &defaults, request).unwrap();
             // should match the fallthrough rule
             assert_eq!(resolved.rule, Some(1));
             assert_eq!(resolved.backend, backend_two);
@@ -848,17 +860,11 @@ mod test {
         ];
 
         for url in will_match {
-            let resolved = resolve_routes(
-                &routes,
-                &defaults,
-                HttpRequest {
-                    method: &http::Method::GET,
-                    url: &Url::from_str(url).unwrap(),
-                    headers: &http::HeaderMap::default(),
-                },
-                |_| {},
-            )
-            .unwrap();
+            let url = Url::from_str(url).unwrap();
+            let headers = &http::HeaderMap::default();
+            let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
+
+            let resolved = resolve_routes(&routes, &defaults, request).unwrap();
             // should match one of the query matches
             assert_eq!(
                 (resolved.rule, &resolved.backend),
