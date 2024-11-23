@@ -434,11 +434,9 @@ impl Junction {
             junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
         let headers = headers_from_py(headers)?;
 
-        let request = junction_core::HttpRequest {
-            method: &method,
-            url: &url,
-            headers: &headers,
-        };
+        let request = junction_core::HttpRequest::from_parts(&method, &url, &headers)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
         let config_mode = match dynamic {
             true => ConfigMode::Dynamic,
             false => ConfigMode::Static,

@@ -1,9 +1,9 @@
 //! Controlled randomness.
 //!
 //! This module implements PRNGs that can all be deterministically seeded from a
-//! single env variable, falling back to system entropy when ncessary. Using only
-//! PRNG values seeded from this package allows using a seed to do deterministic
-//! testing.
+//! the `JUNCTION_SEED` env variable, falling back to system entropy when
+//! ncessary. Using only PRNG values seeded from this package allows
+//! deterministic testing.
 //!
 //! This module is currently implemented using a two-stage strategy. A single
 //! global PRNG wrapped in a `Mutex`` is used to lazily initialize thread local
