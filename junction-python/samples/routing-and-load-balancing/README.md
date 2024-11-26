@@ -5,15 +5,11 @@ dynamic configuration capabilities.
 
 *All paths assume you are running from the top level junction-client directory*
 
-## Set up `ezbake` in your k8s development cluster
-See https://github.com/junction-labs/ezbake/README.md
-
-Make sure you set up your `JUNCTION_ADS_SERVER` environment variable!
-
-## Build the junction python client
+## Set up `ezbake` 
 ```bash
-cargo xtask python-build
-source .venv/bin/activate
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml
+kubectl apply -f junction-python/samples/routing-and-load-balancing/latest_ezbake.yml
+export JUNCTION_ADS_SERVER="grpc://"`kubectl get svc ezbake --namespace junction -o jsonpath='{.spec.clusterIP}'`":8008"
 ```
 
 ## Build Server docker image and deploy it
@@ -21,6 +17,12 @@ source .venv/bin/activate
 docker build --tag jct_http_server --file junction-python/samples/routing-and-load-balancing/Dockerfile-server --load .
 kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml 
 kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml 
+```
+
+## Build the junction python client
+```bash
+cargo xtask python-build
+source .venv/bin/activate
 ```
 
 ## Run client with just client config
@@ -43,6 +45,7 @@ python junction-python/samples/routing-and-load-balancing/client.py --sample pat
 
 ## Clean up
 ```bash
+kubectl delete -f junction-python/samples/routing-and-load-balancing/latest_ezbake.yml
 kubectl delete -f junction-python/samples/routing-and-load-balancing/gateway.yml
 kubectl delete -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml 
 kubectl delete -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml 
