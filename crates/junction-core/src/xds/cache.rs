@@ -876,11 +876,11 @@ impl Cache {
             self.find_or_create_ref(ResourceType::ClusterLoadAssignment, &cluster_name);
         self.refs.update_edge(node, cla_node, ());
 
-        // try to subscribe to the passthrough Listener for this Cluster if it
+        // try to subscribe to the lb_config Listener for this Cluster if it
         // doesn't already exist in the GC graph.
-        let passthrough_listener_name = cluster.backend_lb.config.id.passthrough_route_name();
+        let lb_config_listener_name = cluster.backend_lb.config.id.lb_config_route_name();
         let (default_listener_node, created) =
-            self.find_or_create_ref(ResourceType::Listener, &passthrough_listener_name);
+            self.find_or_create_ref(ResourceType::Listener, &lb_config_listener_name);
         if created {
             changed.insert(ResourceType::Listener);
         }
@@ -928,10 +928,10 @@ impl Cache {
     }
 
     fn find_lb_action(&self, cluster_name: &str) -> Option<Arc<xds_route::RouteAction>> {
-        // don't even parse the cluster name as a target, assume that the
-        // passthrough listener has the same name as the cluster.
+        // don't even parse the cluster name as a target, assume that the lb
+        // config listener has the same name as the cluster.
         let target = BackendId::from_str(cluster_name).ok()?;
-        let listener = self.data.listeners.get(&target.passthrough_route_name())?;
+        let listener = self.data.listeners.get(&target.lb_config_route_name())?;
 
         match &listener.data()?.route_config {
             ApiListenerData::RouteConfig { name } => {
@@ -1411,20 +1411,20 @@ mod test {
     }
 
     #[test]
-    fn test_cache_cluster_finds_passthrough_listener() {
+    fn test_cache_cluster_finds_lb_config_listener() {
         let mut cache = Cache::default();
 
         let svc = Target::kube_service("default", "something")
             .unwrap()
             .into_backend(8910);
         let cluster_name = svc.name().leak();
-        let passthrough_name = svc.passthrough_route_name().leak();
+        let lb_config_name = svc.lb_config_route_name().leak();
 
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
             ResourceVec::Listener(vec![xds_test::listener!(
-                passthrough_name => [xds_test::vhost!(
+                lb_config_name => [xds_test::vhost!(
                     "default",
                     ["*"],
                     [xds_test::route!(default ring_hash = "x-user", cluster_name)],
@@ -1455,20 +1455,20 @@ mod test {
     }
 
     #[test]
-    fn test_cache_cluster_finds_passthrough_route() {
+    fn test_cache_cluster_finds_lb_config_route() {
         let mut cache = Cache::default();
 
         let svc = Target::kube_service("default", "something")
             .unwrap()
             .into_backend(8910);
         let cluster_name = svc.name().leak();
-        let passthrough_name = svc.passthrough_route_name().leak();
+        let lb_config_name = svc.lb_config_route_name().leak();
 
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
             ResourceVec::Listener(vec![xds_test::listener!(
-                passthrough_name,
+                lb_config_name,
                 "example-route-config", // NOTE: doesn't have to be the same as the listener name!
             )]),
         );
@@ -1513,7 +1513,7 @@ mod test {
         let svc = Target::kube_service("default", "something")
             .unwrap()
             .into_backend(8910);
-        let cluster_name = svc.passthrough_route_name().leak();
+        let cluster_name = svc.lb_config_route_name().leak();
 
         assert_subscribe_insert(
             &mut cache,
@@ -1593,7 +1593,7 @@ mod test {
         let svc = Target::kube_service("default", "something")
             .unwrap()
             .into_backend(8910);
-        let cluster_name = svc.passthrough_route_name().leak();
+        let cluster_name = svc.lb_config_route_name().leak();
 
         assert_subscribe_insert(
             &mut cache,

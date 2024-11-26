@@ -78,7 +78,7 @@ impl Backend {
         Ok(Backend { id, lb })
     }
 
-    pub fn to_xds_cluster(&self) -> xds_cluster::Cluster {
+    pub fn to_xds(&self) -> xds_cluster::Cluster {
         use xds_cluster::cluster::ClusterDiscoveryType;
         use xds_cluster::cluster::DiscoveryType;
         use xds_cluster::cluster::EdsClusterConfig;
@@ -132,7 +132,12 @@ impl Backend {
         }
     }
 
-    pub fn to_xds_passthrough_route(&self) -> xds_route::RouteConfiguration {
+    /// Generate a RouteConfiguration that routes to this Cluster using its
+    /// hash_policy as RouteAction. This exists so we can guarantee that there's
+    /// at least one unique RouteConfiguration pointing at every cluster so the
+    /// client can deduce its hash policies that way.
+    #[doc(hidden)]
+    pub fn to_xds_lb_route_config(&self) -> xds_route::RouteConfiguration {
         use xds_route::route::Action;
         use xds_route::route_action::ClusterSpecifier;
         use xds_route::route_match::PathSpecifier;
@@ -158,13 +163,8 @@ impl Backend {
             ..Default::default()
         };
 
-        // NOTE: this is the only place where we use `backend_name` to name a
-        // RouteConfiguration.
-        //
-        // it's incorrect literally everywhere else, but should be done here to
-        // indicate that this is the passthrough route.
         xds_route::RouteConfiguration {
-            name: self.id.passthrough_route_name(),
+            name: self.id.lb_config_route_name(),
             virtual_hosts: vec![vhost],
             ..Default::default()
         }
@@ -401,10 +401,7 @@ mod test {
             id: web.into_backend(8891),
             lb: LbPolicy::Unspecified,
         };
-        assert_eq!(
-            backend,
-            Backend::from_xds(&backend.to_xds_cluster(), None).unwrap(),
-        );
+        assert_eq!(backend, Backend::from_xds(&backend.to_xds(), None).unwrap(),);
         assert_eq!(backend.to_xds_hash_policies(), vec![]);
     }
 
@@ -416,10 +413,7 @@ mod test {
             id: web.into_backend(7891),
             lb: LbPolicy::RoundRobin,
         };
-        assert_eq!(
-            backend,
-            Backend::from_xds(&backend.to_xds_cluster(), None).unwrap(),
-        );
+        assert_eq!(backend, Backend::from_xds(&backend.to_xds(), None).unwrap(),);
         assert_eq!(backend.to_xds_hash_policies(), vec![]);
     }
 
@@ -448,7 +442,7 @@ mod test {
             }),
         };
 
-        let cluster = backend.to_xds_cluster();
+        let cluster = backend.to_xds();
         let hash_policy = backend.to_xds_hash_policies();
 
         let parsed = Backend::from_xds(
@@ -463,7 +457,7 @@ mod test {
     }
 
     #[test]
-    fn test_passthrough_route_roundtrip() {
+    fn test_lb_route_config_roundtrip() {
         let web = Target::kube_service("prod", "web").unwrap();
 
         let backend = Backend {
@@ -487,11 +481,11 @@ mod test {
             }),
         };
 
-        let cluster = backend.to_xds_cluster();
-        let passthrough_route = backend.to_xds_passthrough_route();
+        let cluster = backend.to_xds();
+        let lb_config_route = backend.to_xds_lb_route_config();
 
         let parsed = Backend::from_xds(&cluster, {
-            let vhost = passthrough_route.virtual_hosts.first().unwrap();
+            let vhost = lb_config_route.virtual_hosts.first().unwrap();
             let route = vhost.routes.first().unwrap();
             route.action.as_ref().map(|action| match action {
                 xds_route::route::Action::Route(action) => action,
