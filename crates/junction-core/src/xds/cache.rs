@@ -339,7 +339,7 @@ impl ConfigCache for CacheReader {
         let listener = self.data.listeners.get(&target.name())?;
 
         match &listener.data()?.route_config {
-            ApiListenerData::RouteConfig(name) => {
+            ApiListenerData::Rds(name) => {
                 let route_config = self.data.route_configs.get(name.as_str())?;
                 route_config.data().and_then(|rc| match &rc.data {
                     RouteConfigData::Route { route, .. } => Some(route.clone()),
@@ -586,7 +586,7 @@ impl Cache {
                 self.reset_ref(node);
 
                 match &api_listener.route_config {
-                    ApiListenerData::RouteConfig(name) => {
+                    ApiListenerData::Rds(name) => {
                         // for RDS, update refs so we have new xds subscriptions
 
                         let (rc_node, created) = self
@@ -950,7 +950,7 @@ impl Cache {
         let listener = self.data.listeners.get(&target.lb_config_route_name())?;
 
         match &listener.data()?.route_config {
-            ApiListenerData::RouteConfig(name) => {
+            ApiListenerData::Rds(name) => {
                 let route_config = self.data.route_configs.get(name.as_str())?;
                 route_config.data().and_then(|rc| match &rc.data {
                     RouteConfigData::LbPolicy { action, .. } => Some(action.clone()),

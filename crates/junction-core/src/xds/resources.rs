@@ -290,7 +290,6 @@ impl<T> Ord for ResourceName<T> {
     }
 }
 
-// TODO: filters go here
 #[derive(Clone, Debug)]
 pub(crate) struct ApiListener {
     pub xds: xds_listener::Listener,
@@ -299,7 +298,7 @@ pub(crate) struct ApiListener {
 
 #[derive(Clone, Debug)]
 pub(crate) enum ApiListenerData {
-    RouteConfig(ResourceName<RouteConfig>),
+    Rds(ResourceName<RouteConfig>),
     Inlined(RouteConfigData),
 }
 
@@ -327,7 +326,7 @@ impl ApiListener {
         let data = match &conn_manager.route_specifier {
             Some(RouteSpecifier::Rds(rds)) => {
                 let name = rds.route_config_name.clone();
-                ApiListenerData::RouteConfig(name.into())
+                ApiListenerData::Rds(name.into())
             }
             Some(RouteSpecifier::RouteConfig(route_config)) => {
                 let data = RouteConfigData::from_xds(route_config)?;
