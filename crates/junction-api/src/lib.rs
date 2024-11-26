@@ -451,13 +451,13 @@ impl Target {
     }
 
     #[doc(hidden)]
-    pub fn passthrough_route_name(&self) -> String {
+    pub fn lb_config_route_name(&self) -> String {
         let mut buf = String::new();
-        self.write_passthrough_route_name(&mut buf).unwrap();
+        self.write_lb_config_route_name(&mut buf).unwrap();
         buf
     }
 
-    fn write_passthrough_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+    fn write_lb_config_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
         match self {
             Target::Dns(dns) => {
                 write!(w, "{}{}", dns.hostname, Target::BACKEND_SUBDOMAIN)?;
@@ -478,7 +478,7 @@ impl Target {
     }
 
     #[doc(hidden)]
-    pub fn from_passthrough_route_name(name: &str) -> Result<Self, Error> {
+    pub fn from_lb_config_route_name(name: &str) -> Result<Self, Error> {
         let hostname = Hostname::from_str(name)?;
 
         let Some(hostname) = hostname.strip_suffix(Target::BACKEND_SUBDOMAIN) else {
@@ -664,25 +664,25 @@ impl BackendId {
     }
 
     #[doc(hidden)]
-    pub fn passthrough_route_name(&self) -> String {
+    pub fn lb_config_route_name(&self) -> String {
         let mut buf = String::new();
-        self.write_passthrough_route_name(&mut buf).unwrap();
+        self.write_lb_config_route_name(&mut buf).unwrap();
         buf
     }
 
-    fn write_passthrough_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
-        self.target.write_passthrough_route_name(w)?;
+    fn write_lb_config_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.target.write_lb_config_route_name(w)?;
         write!(w, ":{port}", port = self.port)?;
         Ok(())
     }
 
     #[doc(hidden)]
-    pub fn from_passthrough_route_name(name: &str) -> Result<Self, Error> {
+    pub fn from_lb_config_route_name(name: &str) -> Result<Self, Error> {
         let (name, port) = parse_port(name)?;
         let port =
             port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
 
-        let target = Target::from_passthrough_route_name(name)?;
+        let target = Target::from_lb_config_route_name(name)?;
 
         Ok(Self { target, port })
     }
@@ -840,22 +840,22 @@ mod test {
     }
 
     #[test]
-    fn test_target_passthrough_name() {
-        assert_passthrough_name(
+    fn test_target_lb_config_name() {
+        assert_lb_config_name(
             Target::kube_service("production", "potato").unwrap(),
             "potato.production.svc.cluster.local.lb.jct",
         );
 
-        assert_passthrough_name(
+        assert_lb_config_name(
             Target::dns("cool-stuff.example.com").unwrap(),
             "cool-stuff.example.com.lb.jct",
         );
     }
 
     #[track_caller]
-    fn assert_passthrough_name(target: Target, str: &'static str) {
-        assert_eq!(&target.passthrough_route_name(), str);
-        let parsed = Target::from_passthrough_route_name(str).unwrap();
+    fn assert_lb_config_name(target: Target, str: &'static str) {
+        assert_eq!(&target.lb_config_route_name(), str);
+        let parsed = Target::from_lb_config_route_name(str).unwrap();
         assert_eq!(parsed, target);
     }
 

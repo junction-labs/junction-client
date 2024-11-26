@@ -349,8 +349,8 @@ impl ApiListener {
             Some(RouteSpecifier::RouteConfig(route_config)) => {
                 let clusters = RouteConfig::cluster_names(route_config);
                 let route = Arc::new(Route::from_xds(route_config)?);
-                // TODO: stop parsing lb_policy_action if this isn't tagged as a
-                // policy passthrough listener/route.
+                // TODO: stop parsing lb_policy_action if this isn't tagged as
+                // an lb policy listener/route.
                 let lb_action = RouteConfig::lb_policy_action(route_config);
                 ApiListenerData::Inlined {
                     clusters,
@@ -387,8 +387,8 @@ impl RouteConfig {
     ) -> Result<Self, junction_api::Error> {
         let clusters = RouteConfig::cluster_names(&xds);
         let route = Arc::new(Route::from_xds(&xds)?);
-        // TODO: stop parsing lb_policy_action if this isn't tagged as a
-        // policy passthrough listener/route.
+        // TODO: stop parsing lb_policy_action if this isn't tagged as an lb
+        // policy listener/route.
         let lb_action = RouteConfig::lb_policy_action(&xds);
 
         Ok(Self {

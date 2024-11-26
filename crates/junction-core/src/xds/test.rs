@@ -305,7 +305,7 @@ pub fn cluster_from_name(
         lb: LbPolicy::Unspecified,
     };
 
-    let mut cluster = backend.to_xds_cluster();
+    let mut cluster = backend.to_xds();
     if let Some(lb_policy) = lb_policy {
         cluster.lb_policy = lb_policy.into();
     }
