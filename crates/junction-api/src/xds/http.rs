@@ -42,13 +42,7 @@ impl From<&Route> for xds_route::RouteConfiguration {
 
 impl Route {
     pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, Error> {
-        // try to parse the target as a backend name in case it's an lb config
-        // route, and then try parsing it as a regular target.
-        let route_vhost = BackendId::from_lb_config_route_name(&xds.name)
-            .map(BackendId::into_vhost)
-            .or_else(|_| VirtualHost::from_str(&xds.name))
-            .with_field("name")?;
-
+        let route_vhost = VirtualHost::from_str(&xds.name).with_field("name")?;
         let tags = tags_from_xds(&xds.metadata)?;
 
         let mut rules = vec![];
