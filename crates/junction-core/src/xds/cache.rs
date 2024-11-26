@@ -112,7 +112,7 @@ use crate::{BackendLb, ConfigCache, EndpointGroup};
 
 use super::resources::{
     ApiListener, ApiListenerData, Cluster, LoadAssignment, ResourceError, ResourceName,
-    ResourceType, ResourceTypeSet, ResourceVec, RouteConfig,
+    ResourceType, ResourceTypeSet, ResourceVec, RouteConfig, RouteConfigData,
 };
 use super::{ResourceVersion, XdsConfig};
 
@@ -278,16 +278,19 @@ impl CacheReader {
             entry
                 .data()
                 .and_then(|api_listener| match &api_listener.route_config {
-                    ApiListenerData::Inlined { route, .. } => Some(route.clone()),
+                    ApiListenerData::Inlined(RouteConfigData::Route { route, .. }) => {
+                        Some(route.clone())
+                    }
                     _ => None,
                 })
         });
 
-        let route_config_routes = self
-            .data
-            .route_configs
-            .iter()
-            .filter_map(|entry| entry.data().map(|route_config| route_config.route.clone()));
+        let route_config_routes = self.data.route_configs.iter().filter_map(|entry| {
+            entry.data().and_then(|rc| match &rc.data {
+                RouteConfigData::Route { route, .. } => Some(route.clone()),
+                _ => None,
+            })
+        });
 
         listener_routes.chain(route_config_routes)
     }
@@ -336,11 +339,17 @@ impl ConfigCache for CacheReader {
         let listener = self.data.listeners.get(&target.name())?;
 
         match &listener.data()?.route_config {
-            ApiListenerData::RouteConfig { name } => {
+            ApiListenerData::RouteConfig(name) => {
                 let route_config = self.data.route_configs.get(name.as_str())?;
-                route_config.data().map(|r| r.route.clone())
+                route_config.data().and_then(|rc| match &rc.data {
+                    RouteConfigData::Route { route, .. } => Some(route.clone()),
+                    _ => None,
+                })
             }
-            ApiListenerData::Inlined { route, .. } => Some(route.clone()),
+            ApiListenerData::Inlined(data) => match &data {
+                RouteConfigData::Route { route, .. } => Some(route.clone()),
+                _ => None,
+            },
         }
     }
 
@@ -577,7 +586,9 @@ impl Cache {
                 self.reset_ref(node);
 
                 match &api_listener.route_config {
-                    ApiListenerData::RouteConfig { name } => {
+                    ApiListenerData::RouteConfig(name) => {
+                        // for RDS, update refs so we have new xds subscriptions
+
                         let (rc_node, created) = self
                             .find_or_create_ref(ResourceType::RouteConfiguration, name.as_str());
                         self.refs.update_edge(node, rc_node, ());
@@ -586,41 +597,42 @@ impl Cache {
                             changed.insert(ResourceType::RouteConfiguration);
                         }
                     }
-                    ApiListenerData::Inlined {
-                        clusters,
-                        lb_action,
-                        ..
-                    } => {
+                    ApiListenerData::Inlined(RouteConfigData::Route { clusters, .. }) => {
+                        // for inline RDS, update cluster refs for everything downstream
+
                         let mut clusters_changed = false;
 
-                        // update cluster refs for everything downstream
                         for cluster in clusters {
                             let (cluster_node, created) =
                                 self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
                             self.refs.update_edge(node, cluster_node, ());
                             clusters_changed |= created;
                         }
+
                         if clusters_changed {
                             changed.insert(ResourceType::Cluster);
                         }
+                    }
+                    ApiListenerData::Inlined(RouteConfigData::LbPolicy { action, cluster }) => {
+                        // for an LB policy update, recompute the lb config for
+                        // the cluster. have to set the gc graph subscription in
+                        // case this cluster doesn't exist yet.
 
-                        // if this Listener looks like it is the default route
-                        // for a Cluster, recompute the LB config for that
-                        // Cluster.
-                        if let Some(lb_action) = lb_action {
-                            if let Err(e) = self.rebuild_cluster(
-                                &mut changed,
-                                &lb_action.cluster,
-                                &lb_action.route_action,
-                            ) {
-                                self.data.listeners.insert_error(
-                                    listener_name,
-                                    version.clone(),
-                                    e.clone(),
-                                );
-                                errors.push(e);
-                                continue;
-                            }
+                        let (cluster_node, created) =
+                            self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
+                        self.refs.update_edge(node, cluster_node, ());
+                        if created {
+                            changed.insert(ResourceType::Cluster);
+                        }
+
+                        if let Err(e) = self.rebuild_cluster(&mut changed, cluster, action) {
+                            self.data.listeners.insert_error(
+                                listener_name,
+                                version.clone(),
+                                e.clone(),
+                            );
+                            errors.push(e);
+                            continue;
                         }
                     }
                 }
@@ -719,26 +731,32 @@ impl Cache {
                             version.clone(),
                             e.clone(),
                         );
-                        errors.push(e.into());
+                        errors.push(e);
                         continue;
                     }
                 };
 
-                // if this looks like the default RouteConfiguration for a
-                // Cluster, rebuild it.
-                if let Some(a) = &route_config.lb_action {
-                    if let Err(e) = self.rebuild_cluster(&mut changed, &a.cluster, &a.route_action)
-                    {
-                        errors.push(e);
+                match &route_config.data {
+                    RouteConfigData::Route { clusters, .. } => {
+                        // update the reference graph to include edges from this route to clusters.
+                        self.reset_ref(node);
+                        for cluster in clusters {
+                            let (cluster_node, _) =
+                                self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
+                            self.refs.update_edge(node, cluster_node, ());
+                        }
                     }
-                }
+                    RouteConfigData::LbPolicy { action, cluster } => {
+                        // if this looks like the default RouteConfiguration for a
+                        // Cluster, rebuild it.
+                        let (cluster_node, _) =
+                            self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
+                        self.refs.update_edge(node, cluster_node, ());
 
-                // add an edge for every cluster reference in this RouteConfig
-                self.reset_ref(node);
-                for cluster in &route_config.clusters {
-                    let (cluster, _) =
-                        self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
-                    self.refs.update_edge(node, cluster, ());
+                        if let Err(e) = self.rebuild_cluster(&mut changed, cluster, action) {
+                            errors.push(e);
+                        }
+                    }
                 }
 
                 // actually insert the route config
@@ -928,20 +946,21 @@ impl Cache {
     }
 
     fn find_lb_action(&self, cluster_name: &str) -> Option<Arc<xds_route::RouteAction>> {
-        // don't even parse the cluster name as a target, assume that the lb
-        // config listener has the same name as the cluster.
         let target = BackendId::from_str(cluster_name).ok()?;
         let listener = self.data.listeners.get(&target.lb_config_route_name())?;
 
         match &listener.data()?.route_config {
-            ApiListenerData::RouteConfig { name } => {
-                let route = self.data.route_configs.get(name.as_str())?;
-                let lb_action = &route.data()?.lb_action;
-                lb_action.as_ref().map(|a| a.route_action.clone())
+            ApiListenerData::RouteConfig(name) => {
+                let route_config = self.data.route_configs.get(name.as_str())?;
+                route_config.data().and_then(|rc| match &rc.data {
+                    RouteConfigData::LbPolicy { action, .. } => Some(action.clone()),
+                    _ => None,
+                })
             }
-            ApiListenerData::Inlined { lb_action, .. } => {
-                lb_action.as_ref().map(|a| a.route_action.clone())
-            }
+            ApiListenerData::Inlined(data) => match &data {
+                RouteConfigData::LbPolicy { action, .. } => Some(action.clone()),
+                _ => None,
+            },
         }
     }
 
@@ -1467,19 +1486,16 @@ mod test {
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
-            ResourceVec::Listener(vec![xds_test::listener!(
-                lb_config_name,
-                "example-route-config", // NOTE: doesn't have to be the same as the listener name!
-            )]),
+            ResourceVec::Listener(vec![xds_test::listener!(lb_config_name, lb_config_name)]),
         );
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::RouteConfiguration(vec![xds_test::route_config!(
-                "example-route-config",
+                lb_config_name,
                 [xds_test::vhost!(
                     "example-vhost",
                     ["listener.example.svc.cluster.local"],
-                    [xds_test::route!(default ring_hash = "x-user", cluster_name),],
+                    [xds_test::route!(default ring_hash = "x-user", cluster_name)],
                 )]
             )]),
         ));
@@ -1593,20 +1609,18 @@ mod test {
         let svc = Target::kube_service("default", "something")
             .unwrap()
             .into_backend(8910);
-        let cluster_name = svc.lb_config_route_name().leak();
+        let cluster_name = svc.name().leak();
+        let lb_config_name = svc.lb_config_route_name().leak();
 
         assert_subscribe_insert(
             &mut cache,
             "123".into(),
-            ResourceVec::Listener(vec![xds_test::listener!(
-                cluster_name,
-                "example-route-config",
-            )]),
+            ResourceVec::Listener(vec![xds_test::listener!(lb_config_name, lb_config_name)]),
         );
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::RouteConfiguration(vec![xds_test::route_config!(
-                "example-route-config",
+                lb_config_name,
                 [xds_test::vhost!(
                     "example-vhost",
                     ["listener.example.svc.cluster.local"],
@@ -1639,11 +1653,11 @@ mod test {
         assert_insert(cache.insert(
             "123".into(),
             ResourceVec::RouteConfiguration(vec![xds_test::route_config!(
-                "example-route-config",
+                lb_config_name,
                 [xds_test::vhost!(
                     "example-vhost",
                     ["listener.example.svc.cluster.local"],
-                    [xds_test::route!(default ring_hash = "x-user", cluster_name),],
+                    [xds_test::route!(default ring_hash = "x-user", cluster_name)],
                 )]
             )]),
         ));

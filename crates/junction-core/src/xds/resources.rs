@@ -290,18 +290,6 @@ impl<T> Ord for ResourceName<T> {
     }
 }
 
-/// an xDS RouteAction created by a Junction control plane exclusively for the
-/// purpose of making it clear what the LB policy is for a specific backend.
-///
-/// the action is wrapped in an Arc so it can be grabbed from multiple paths
-/// in the cache (listener update and cluster update) without being cloned
-/// like mad everywhere.
-#[derive(Clone, Debug)]
-pub(crate) struct LbPolicyAction {
-    pub cluster: ResourceName<Cluster>,
-    pub route_action: Arc<xds_route::RouteAction>,
-}
-
 // TODO: filters go here
 #[derive(Clone, Debug)]
 pub(crate) struct ApiListener {
@@ -311,14 +299,8 @@ pub(crate) struct ApiListener {
 
 #[derive(Clone, Debug)]
 pub(crate) enum ApiListenerData {
-    RouteConfig {
-        name: ResourceName<RouteConfig>,
-    },
-    Inlined {
-        route: Arc<Route>,
-        clusters: Vec<ResourceName<Cluster>>,
-        lb_action: Option<LbPolicyAction>,
-    },
+    RouteConfig(ResourceName<RouteConfig>),
+    Inlined(RouteConfigData),
 }
 
 fn api_listener(
@@ -343,20 +325,13 @@ impl ApiListener {
 
         let conn_manager = api_listener(&xds)?;
         let data = match &conn_manager.route_specifier {
-            Some(RouteSpecifier::Rds(rds_config)) => ApiListenerData::RouteConfig {
-                name: rds_config.route_config_name.clone().into(),
-            },
+            Some(RouteSpecifier::Rds(rds)) => {
+                let name = rds.route_config_name.clone();
+                ApiListenerData::RouteConfig(name.into())
+            }
             Some(RouteSpecifier::RouteConfig(route_config)) => {
-                let clusters = RouteConfig::cluster_names(route_config);
-                let route = Arc::new(Route::from_xds(route_config)?);
-                // TODO: stop parsing lb_policy_action if this isn't tagged as
-                // an lb policy listener/route.
-                let lb_action = RouteConfig::lb_policy_action(route_config);
-                ApiListenerData::Inlined {
-                    clusters,
-                    route,
-                    lb_action,
-                }
+                let data = RouteConfigData::from_xds(route_config)?;
+                ApiListenerData::Inlined(data)
             }
             _ => {
                 return Err(ResourceError::for_xds_static(
@@ -376,27 +351,43 @@ impl ApiListener {
 #[derive(Clone, Debug)]
 pub(crate) struct RouteConfig {
     pub xds: xds_route::RouteConfiguration,
-    pub route: Arc<Route>,
-    pub clusters: Vec<ResourceName<Cluster>>,
-    pub lb_action: Option<LbPolicyAction>,
+    pub data: RouteConfigData,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum RouteConfigData {
+    Route {
+        route: Arc<Route>,
+        clusters: Vec<ResourceName<Cluster>>,
+    },
+    LbPolicy {
+        action: Arc<xds_route::RouteAction>,
+        cluster: ResourceName<Cluster>,
+    },
+}
+
+impl RouteConfigData {
+    fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, ResourceError> {
+        match BackendId::from_lb_config_route_name(&xds.name) {
+            // it's a normal route
+            Err(_) => {
+                let clusters = RouteConfig::cluster_names(xds);
+                let route = Arc::new(Route::from_xds(xds)?);
+                Ok(RouteConfigData::Route { route, clusters })
+            }
+            // it's an lb config route
+            Ok(_) => RouteConfig::lb_policy_action(xds).ok_or(ResourceError::for_xds_static(
+                xds.name.clone(),
+                "failed to parse LB config route",
+            )),
+        }
+    }
 }
 
 impl RouteConfig {
-    pub(crate) fn from_xds(
-        xds: xds_route::RouteConfiguration,
-    ) -> Result<Self, junction_api::Error> {
-        let clusters = RouteConfig::cluster_names(&xds);
-        let route = Arc::new(Route::from_xds(&xds)?);
-        // TODO: stop parsing lb_policy_action if this isn't tagged as an lb
-        // policy listener/route.
-        let lb_action = RouteConfig::lb_policy_action(&xds);
-
-        Ok(Self {
-            xds,
-            route,
-            clusters,
-            lb_action,
-        })
+    pub(crate) fn from_xds(xds: xds_route::RouteConfiguration) -> Result<Self, ResourceError> {
+        let data = RouteConfigData::from_xds(&xds)?;
+        Ok(Self { xds, data })
     }
 
     fn cluster_names(xds: &xds_route::RouteConfiguration) -> Vec<ResourceName<Cluster>> {
@@ -425,7 +416,7 @@ impl RouteConfig {
         clusters.into_iter().map(|n| n.into()).collect()
     }
 
-    fn lb_policy_action(xds: &xds_route::RouteConfiguration) -> Option<LbPolicyAction> {
+    fn lb_policy_action(xds: &xds_route::RouteConfiguration) -> Option<RouteConfigData> {
         let vhost = match &xds.virtual_hosts.as_slice() {
             &[vhost] => vhost,
             _ => return None,
@@ -436,14 +427,14 @@ impl RouteConfig {
             _ => return None,
         };
 
-        let Some(xds_route::route::Action::Route(route_action)) = &route.action else {
+        let Some(xds_route::route::Action::Route(action)) = &route.action else {
             return None;
         };
-        match &route_action.cluster_specifier {
+        match &action.cluster_specifier {
             Some(xds_route::route_action::ClusterSpecifier::Cluster(cluster)) => {
-                Some(LbPolicyAction {
+                Some(RouteConfigData::LbPolicy {
+                    action: Arc::new(action.clone()),
                     cluster: cluster.clone().into(),
-                    route_action: Arc::new(route_action.clone()),
                 })
             }
             _ => None,
