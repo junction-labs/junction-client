@@ -12,9 +12,6 @@ use tokio::sync::Notify;
 
 use crate::load_balancer::EndpointGroup;
 
-// FIXME: figure out shutdown. it can't be a Weak that wraps inner because the
-// workers need to hold a ref to the Condvar/Mutex.
-
 /// A blocking resolver that uses the stdlib to resolve hostnames to addresses.
 ///
 /// Names are resolved regularly in the background. If the addresses behind a
@@ -36,28 +33,26 @@ pub(crate) struct StdlibResolver {
     inner: Arc<StdlibResolverInner>,
 }
 
-// internal state for a stdlib resolver, shared between all of its workers.
-//
-// state is roughly split into three:
-//
-// - a ResolverTasks that functions as a work queue, and worker threads use a
-//  mutex/condvar pair to wait for the next task or to chill until a new task
-//  is added to the queue.
-//
-// - a shutdown flag for the background workers
-//
-// - async notification tracking, so get_await can yield appropriately.
 #[derive(Debug)]
 struct StdlibResolverInner {
     lookup_interval: Duration,
     lookup_jitter: Duration,
 
-    // a mutex/condvar pair wrapped around resolver state.
+    // a mutex/condvar pair wrapped around resolver state. see ResolverState for
+    // exactly what that does. nothing here should be much more than locking
+    // around accessing that struct.
     cond: Condvar,
     tasks: Mutex<ResolverState>,
 
-    // a notify to let async callers know a names have changed.
+    // a notify to let async callers know names have changed while they're
+    // waiting. not specific to any name - will definitely get busy and have
+    // spurious wakeups at hgih volumes of names.
     async_notify: Notify,
+
+    // the the number of worker threads the resolver was started with. if the
+    // number of references to this struct ever drops, it's time for the
+    // resolver threads to shut down.
+    worker_count: usize,
 }
 
 macro_rules! no_poison {
@@ -84,6 +79,7 @@ impl StdlibResolver {
             tasks: Mutex::new(ResolverState::default()),
             cond: Condvar::new(),
             async_notify: Notify::new(),
+            worker_count: threads,
         };
         let resolver = StdlibResolver {
             inner: Arc::new(inner),
@@ -113,7 +109,6 @@ impl StdlibResolver {
     ) -> Option<Arc<EndpointGroup>> {
         // fast path: the endpoints are in the map.
         if let Some(endpoints) = self.get_endpoints(hostname, port) {
-            tracing::trace!(%hostname, %port, ?endpoints, "fast path hit");
             return Some(endpoints);
         }
 
@@ -135,15 +130,11 @@ impl StdlibResolver {
         // for an example that uses notify_one() instead, see Notify
         //
         // https://docs.rs/tokio/latest/tokio/sync/futures/struct.Notified.html#method.enable
-        tracing::trace!(%hostname, %port, "on the slow path");
-
         let changed = self.inner.async_notify.notified();
         tokio::pin!(changed);
         loop {
-            tracing::trace!(%hostname, %port, "starting wait loop");
             // check the map
             if let Some(entry) = self.get_endpoints(hostname, port) {
-                tracing::trace!(%hostname, %port, "found name");
                 return Some(entry);
             }
 
@@ -152,7 +143,6 @@ impl StdlibResolver {
 
             // this uses Pin::set so we're not allocating/deallocating a new
             // wakeup future every time.
-            tracing::trace!(%hostname, %port, "waiting");
             changed.set(self.inner.async_notify.notified());
         }
     }
@@ -181,12 +171,15 @@ impl StdlibResolver {
     }
 
     pub(crate) fn run(&self) {
-        tracing::trace!("thread starting");
+        tracing::trace!("resolver: worker starting");
         loop {
             // grab the next name
-            tracing::trace!("waiting for next name");
             let Some(name) = self.next_name() else {
-                tracing::trace!("thread exiting");
+                tracing::trace!(
+                    worker_count = self.inner.worker_count,
+                    strong_count = Arc::strong_count(&self.inner),
+                    "resolver: worker exiting"
+                );
                 return;
             };
 
@@ -194,7 +187,7 @@ impl StdlibResolver {
             //
             // this always uses 80 and then immediately discards the port. we
             // don't actually care about what the port is here.
-            tracing::trace!(%name, "starting lookup");
+            tracing::trace!(%name, "resolver: starting lookup");
             let addr = (&name[..], 80);
             let answer = std::net::ToSocketAddrs::to_socket_addrs(&addr).map(|answer| {
                 // TODO: we're filtering out every v6 address here. this isn't
@@ -207,16 +200,24 @@ impl StdlibResolver {
             tracing::trace!(
                 %name,
                 ?answer,
-                "saving answer",
+                "resolver: saving answer",
             );
             self.insert_answer(name, Instant::now(), answer);
         }
+    }
+
+    fn is_shutdown(&self) -> bool {
+        Arc::strong_count(&self.inner) <= self.inner.worker_count
     }
 
     fn next_name(&self) -> Option<Hostname> {
         let mut tasks = no_poison!(self.inner.tasks.lock());
 
         loop {
+            if self.is_shutdown() {
+                return None;
+            }
+
             // claim a name older than the cutoff
             let before = Instant::now() - self.inner.lookup_interval;
             if let Some(name) = tasks.next_name(before) {
