@@ -24,12 +24,15 @@ async fn main() {
     )
     .await
     .unwrap();
-    tokio::spawn(client.csds_server(8009));
+
+    // spawn a CSDS server that allows inspecting xDS over gRPC while the client
+    // is running
+    tokio::spawn(client.clone().csds_server(8009));
 
     let nginx = Target::kube_service("default", "nginx").unwrap();
     let nginx_staging = Target::kube_service("default", "nginx-staging").unwrap();
 
-    let default_routes = vec![Route {
+    let routes = vec![Route {
         vhost: nginx.clone().into_vhost(None),
         tags: Default::default(),
         rules: vec![
@@ -56,7 +59,7 @@ async fn main() {
             },
         ],
     }];
-    let default_backends = vec![
+    let backends = vec![
         Backend {
             id: nginx.into_backend(80),
             lb: LbPolicy::Unspecified,
@@ -66,9 +69,7 @@ async fn main() {
             lb: LbPolicy::Unspecified,
         },
     ];
-    let mut client = client
-        .with_defaults(default_routes, default_backends)
-        .unwrap();
+    let mut client = client.with_static_config(routes, backends);
 
     let url: junction_core::Url = "https://nginx.default.svc.cluster.local".parse().unwrap();
     let prod_headers = http::HeaderMap::new();
@@ -79,8 +80,12 @@ async fn main() {
     };
 
     loop {
-        let prod_endpoints = client.resolve_http(&http::Method::GET, &url, &prod_headers);
-        let staging_endpoints = client.resolve_http(&http::Method::GET, &url, &staging_headers);
+        let prod_endpoints = client
+            .resolve_http(&http::Method::GET, &url, &prod_headers)
+            .await;
+        let staging_endpoints = client
+            .resolve_http(&http::Method::GET, &url, &staging_headers)
+            .await;
 
         let mut error = false;
         if let Err(e) = &prod_endpoints {

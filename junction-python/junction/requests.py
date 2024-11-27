@@ -205,8 +205,8 @@ class Session(requests.Session):
 
     def __init__(
         self,
-        default_routes: List[junction.config.Route] | None = None,
-        default_backends: List[junction.config.Backend] | None = None,
+        static_routes: List[junction.config.Route] | None = None,
+        static_backends: List[junction.config.Backend] | None = None,
         junction_client: junction.Junction | None = None,
     ) -> None:
         super().__init__()
@@ -215,7 +215,7 @@ class Session(requests.Session):
             self.junction = junction_client
         else:
             self.junction = junction._default_client(
-                default_routes=default_routes, default_backends=default_backends
+                static_routes=static_routes, static_backends=static_backends
             )
 
         self.mount("https://", HTTPAdapter(junction_client=self.junction))

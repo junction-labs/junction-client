@@ -41,8 +41,8 @@ class PoolManager(urllib3.PoolManager):
         num_pools: int = 10,
         headers: typing.Mapping[str, str] | None = None,
         # junction
-        default_routes: typing.List[junction.config.Route] | None = None,
-        default_backends: typing.List[junction.config.Backend] | None = None,
+        static_routes: typing.List[junction.config.Route] | None = None,
+        static_backends: typing.List[junction.config.Backend] | None = None,
         junction_client: junction.Junction | None = None,
         # kwargs
         **kwargs: typing.Any,
@@ -51,7 +51,7 @@ class PoolManager(urllib3.PoolManager):
             self.junction = junction_client
         else:
             self.junction = junction._default_client(
-                default_routes=default_routes, default_backends=default_backends
+                static_routes=static_routes, static_backends=static_backends
             )
 
         super().__init__(num_pools, headers, **kwargs)

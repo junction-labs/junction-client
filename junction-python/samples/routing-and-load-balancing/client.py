@@ -29,17 +29,17 @@ def retry_sample(args):
         "Retry Test - 502's have retries configured and will succeed, 501s do not"
     )
 
-    default_target: junction.config.Target = {
+    http_server: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
-    feature_target: junction.config.Target = {
+    http_server_feature_1: junction.config.Target = {
         "name": "jct-http-server-feature-1",
         "namespace": "default",
     }
-    default_routes: List[junction.config.Route] = [
+    routes: List[junction.config.Route] = [
         {
-            "vhost": default_target,
+            "vhost": http_server,
             "rules": [
                 {
                     "matches": [
@@ -55,18 +55,18 @@ def retry_sample(args):
                         backoff=0.001,
                     ),
                     "backends": [
-                        {**feature_target, "port": 8008},
+                        {**http_server_feature_1, "port": 8008},
                     ],
                 },
                 {
                     "backends": [
-                        {**default_target, "port": 8008},
+                        {**http_server, "port": 8008},
                     ]
                 },
             ],
         }
     ]
-    session = junction.requests.Session(default_routes)
+    session = junction.requests.Session(routes)
 
     results = []
     for code in [501, 502]:
@@ -87,28 +87,28 @@ def retry_sample(args):
 def path_match_sample(args):
     print_header("Header Match - 50% of /feature-1/index sent to a different backend")
 
-    default_target: junction.config.Target = {
+    http_server: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
-    feature_target: junction.config.Target = {
+    http_server_feature_1: junction.config.Target = {
         "name": "jct-http-server-feature-1",
         "namespace": "default",
     }
-    default_routes: List[junction.config.Route] = [
+    routes: List[junction.config.Route] = [
         {
-            "vhost": default_target,
+            "vhost": http_server,
             "rules": [
                 {
                     "matches": [{"path": {"value": "/feature-1/index"}}],
                     "backends": [
                         {
-                            **default_target,
+                            **http_server,
                             "weight": 50,
                             "port": 8008,
                         },
                         {
-                            **feature_target,
+                            **http_server_feature_1,
                             "weight": 50,
                             "port": 8008,
                         },
@@ -116,14 +116,13 @@ def path_match_sample(args):
                 },
                 {
                     "backends": [
-                        {**default_target, "port": 8008},
+                        {**http_server, "port": 8008},
                     ]
                 },
             ],
         }
     ]
-    default_backends: List[junction.config.Backend] = []
-    session = junction.requests.Session(default_routes, default_backends)
+    session = junction.requests.Session(static_routes=routes)
 
     results = []
     for path in ["/index", "/feature-1/index"]:
@@ -155,14 +154,14 @@ def ring_hash_sample(args):
     print_header(
         "RingHash - header USER is hashed so requests with fixed value go to one backend server"
     )
-    default_target: junction.config.Target = {
+    http_server: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
         "port": 8008,
     }
-    default_backends: List[junction.config.Backend] = [
+    backends: List[junction.config.Backend] = [
         {
-            "id": default_target,
+            "id": http_server,
             "lb": {
                 "type": "RingHash",
                 "minRingSize": 1024,
@@ -170,7 +169,7 @@ def ring_hash_sample(args):
             },
         }
     ]
-    session = junction.requests.Session(default_backends=default_backends)
+    session = junction.requests.Session(static_backends=backends)
 
     results = []
     for headers in [{}, {"USER": "user"}]:
@@ -196,25 +195,26 @@ def timeouts_sample(args):
         "Timeouts - timeout is 50ms, so if the server takes longer, request should throw"
     )
 
-    default_target: junction.config.Target = {
+    http_server: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
-    default_routes: List[junction.config.Route] = [
+    routes: List[junction.config.Route] = [
         {
-            "vhost": default_target,
+            "vhost": http_server,
             "rules": [
                 {
                     "backends": [
-                        {**default_target, "port": 8008},
+                        {**http_server, "port": 8008},
                     ],
                     "timeouts": {"backend_request": 0.05},
                 }
             ],
         }
     ]
-    default_backends: List[junction.config.Backend] = []
-    session = junction.requests.Session(default_routes, default_backends)
+    session = junction.requests.Session(
+        static_routes=routes,
+    )
 
     results = []
     for sleep_ms in [0, 100]:
@@ -240,27 +240,24 @@ def urllib3_sample(args):
         "urllib3 - We repeat the timeouts sample, using urllib3 directly instead"
     )
 
-    default_target: junction.config.Target = {
+    http_server: junction.config.Target = {
         "name": "jct-http-server",
         "namespace": "default",
     }
     default_routes: List[junction.config.Route] = [
         {
-            "vhost": default_target,
+            "vhost": http_server,
             "rules": [
                 {
                     "backends": [
-                        {**default_target, "port": 8008},
+                        {**http_server, "port": 8008},
                     ],
                     "timeouts": {"backend_request": 0.05},
                 }
             ],
         }
     ]
-    default_backends: List[junction.config.Backend] = []
-    http = JunctionPoolManger(
-        default_backends=default_backends, default_routes=default_routes
-    )
+    http = JunctionPoolManger(static_routes=default_routes)
 
     results = []
     for sleep_ms in [0, 100]:
