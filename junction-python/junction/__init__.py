@@ -11,8 +11,8 @@ from . import config, requests, urllib3
 
 
 def _default_client(
-    default_routes: typing.List[config.Route] | None,
-    default_backends: typing.List[config.Backend] | None,
+    static_routes: typing.List[config.Route] | None,
+    static_backends: typing.List[config.Backend] | None,
 ) -> Junction:
     """
     Return a Junction client with default Routes and Backends.
@@ -21,18 +21,18 @@ def _default_client(
     and Backends.
     """
     client_kwargs = {}
-    if default_routes:
+    if static_routes:
         # This check is just in case the user does something dumb as otherwise
         # the error on the return line is pretty ambiguous
-        if not isinstance(default_routes, typing.List):
-            raise ValueError("default_routes must be a list of routes")
-        client_kwargs["default_routes"] = default_routes
-    if default_backends:
+        if not isinstance(static_routes, typing.List):
+            raise ValueError("static_routes must be a list of routes")
+        client_kwargs["static_routes"] = static_routes
+    if static_backends:
         # This check is just in case the user does something dumb as otherwise
         # the error on the return line is pretty ambiguous
-        if not isinstance(default_backends, typing.List):
-            raise ValueError("default_backends must be a list of backends")
-        client_kwargs["default_backends"] = default_backends
+        if not isinstance(static_backends, typing.List):
+            raise ValueError("static_backends must be a list of backends")
+        client_kwargs["static_backends"] = static_backends
     return default_client(**client_kwargs)
 
 

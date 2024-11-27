@@ -28,40 +28,43 @@ async fn main() {
 
     let httpbin = Target::dns("httpbin.org").unwrap();
 
-    let default_route = Route {
+    let routes = vec![Route {
         vhost: httpbin.clone().into_vhost(None),
         tags: BTreeMap::new(),
         rules: vec![],
-    };
-    let http_backend = Backend {
-        id: httpbin.clone().into_backend(80),
-        lb: LbPolicy::RoundRobin,
-    };
-    let https_backend = Backend {
-        id: httpbin.clone().into_backend(443),
-        lb: LbPolicy::RoundRobin,
-    };
+    }];
+    let backends = vec![
+        Backend {
+            id: httpbin.clone().into_backend(80),
+            lb: LbPolicy::RoundRobin,
+        },
+        Backend {
+            id: httpbin.clone().into_backend(443),
+            lb: LbPolicy::RoundRobin,
+        },
+    ];
 
-    let mut client = client
-        .with_defaults(vec![default_route], vec![http_backend, https_backend])
-        .unwrap();
+    let mut client = client.with_static_config(routes, backends);
 
     let http_url: junction_core::Url = "http://httpbin.org".parse().unwrap();
     let https_url: junction_core::Url = "https://httpbin.org".parse().unwrap();
     let headers = http::HeaderMap::new();
 
     loop {
-        match client.resolve_http(&Method::GET, &http_url, &headers) {
+        match client.resolve_http(&Method::GET, &http_url, &headers).await {
             Ok(endpoints) => {
-                eprintln!("http: {}", &endpoints[0].address);
+                eprintln!(" http: {:>15}", &endpoints[0].address);
             }
-            Err(e) => eprintln!("oops, something went wrong: {e:?}"),
+            Err(e) => eprintln!("http: something went wrong: {e}"),
         }
-        match client.resolve_http(&Method::GET, &https_url, &headers) {
+        match client
+            .resolve_http(&Method::GET, &https_url, &headers)
+            .await
+        {
             Ok(endpoints) => {
-                eprintln!("https: {}", &endpoints[0].address);
+                eprintln!("https: {:>15}", &endpoints[0].address);
             }
-            Err(e) => eprintln!("oops, something went wrong: {e:?}"),
+            Err(e) => eprintln!("https: something went wrong: {e}"),
         }
 
         tokio::time::sleep(Duration::from_secs(2)).await;

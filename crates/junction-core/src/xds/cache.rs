@@ -86,6 +86,7 @@ use prost::Name;
 use std::collections::BTreeSet;
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::sync::Notify;
 use xds_api::pb::envoy::config::{
     cluster::v3::{self as xds_cluster},
     endpoint::v3::{self as xds_endpoint},
@@ -149,34 +150,84 @@ impl_cache_entry!(Cluster, xds_cluster::Cluster);
 impl_cache_entry!(LoadAssignment, xds_endpoint::ClusterLoadAssignment);
 
 #[derive(Debug)]
-struct ResourceMap<T>(SkipMap<String, CacheEntry<T>>);
+struct ResourceMap<T> {
+    changed: Arc<Notify>,
+    map: SkipMap<String, CacheEntry<T>>,
+}
 
+// NOTE: manually derived because the Derive macro requires T: Default, and
+// this impl doesn't care - an empty map doesn't need a T.
 impl<T> Default for ResourceMap<T> {
     fn default() -> Self {
-        Self(Default::default())
+        Self {
+            changed: Arc::new(Notify::new()),
+            map: Default::default(),
+        }
     }
 }
 
 impl<T: Send + 'static> ResourceMap<T> {
     #[cfg(test)]
     fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.map.is_empty()
     }
 
     fn get<'a>(&'a self, name: &str) -> Option<ResourceEntry<'a, T>> {
-        self.0.get(name).map(ResourceEntry)
+        self.map.get(name).map(ResourceEntry)
+    }
+
+    async fn get_await<'a>(&'a self, name: &str) -> Option<ResourceEntry<'a, T>> {
+        // fast path: try a get and return it if it works out.
+        if let Some(entry) = self.map.get(name).map(ResourceEntry) {
+            return Some(entry);
+        }
+
+        // slow path: we're waiting
+        //
+        // on every run through the loop, we need to, IN ORDER, do the
+        // following:
+        //
+        // - register for notifications
+        // - try to get a name in the map, returning it if present
+        // - wait for the next notification
+        //
+        // given this order of events, and the guarantees on Notify, there is no
+        // interleaving of events where we can miss a notification.
+        //
+        // SAFETY: this assumes that the writer half of a notify is always using
+        // notify_waiters and not ever using notify_one.
+        //
+        // for an example that uses notify_one() instead, see Notify
+        //
+        // https://docs.rs/tokio/latest/tokio/sync/futures/struct.Notified.html#method.enable
+        let changed = self.changed.notified();
+        tokio::pin!(changed);
+        loop {
+            // check the map
+            if let Some(entry) = self.map.get(name).map(ResourceEntry) {
+                return Some(entry);
+            }
+
+            // wait for a change
+            changed.as_mut().await;
+
+            // this uses Pin::set so we're not allocating/deallocating a new
+            // wakeup future every time.
+            changed.set(self.changed.notified());
+        }
     }
 
     fn iter(&self) -> impl Iterator<Item = ResourceEntry<T>> + '_ {
-        self.0.iter().map(ResourceEntry)
+        self.map.iter().map(ResourceEntry)
     }
 
     fn names(&self) -> impl Iterator<Item = String> + '_ {
-        self.0.iter().map(|e| e.key().clone())
+        self.map.iter().map(|e| e.key().clone())
     }
 
     fn remove(&self, name: &str) {
-        self.0.remove(name);
+        self.map.remove(name);
+        self.changed.notify_waiters();
     }
 
     fn remove_all<I>(&self, names: I)
@@ -184,7 +235,8 @@ impl<T: Send + 'static> ResourceMap<T> {
         I: IntoIterator<Item: AsRef<str>>,
     {
         for name in names {
-            self.0.remove(name.as_ref());
+            self.map.remove(name.as_ref());
+            self.changed.notify_waiters();
         }
     }
 }
@@ -195,7 +247,7 @@ where
     X: PartialEq + prost::Name,
 {
     fn insert_ok(&self, name: String, version: ResourceVersion, t: T) {
-        self.0.insert(
+        self.map.insert(
             name,
             CacheEntry {
                 version,
@@ -203,6 +255,7 @@ where
                 data: Some(t),
             },
         );
+        self.changed.notify_waiters();
     }
 
     fn insert_error<E: Into<ResourceError>>(
@@ -211,14 +264,15 @@ where
         version: ResourceVersion,
         error: E,
     ) {
-        match self.0.get(&name) {
+        match self.map.get(&name) {
             Some(entry) => {
                 let mut updated_entry = entry.value().clone();
                 updated_entry.last_error = Some((version, error.into()));
-                self.0.insert(name, updated_entry);
+                self.map.insert(name, updated_entry);
+                self.changed.notify_waiters();
             }
             None => {
-                self.0.insert(
+                self.map.insert(
                     name,
                     CacheEntry {
                         version: ResourceVersion::default(),
@@ -226,6 +280,7 @@ where
                         data: None,
                     },
                 );
+                self.changed.notify_waiters();
             }
         }
     }
@@ -234,7 +289,7 @@ where
     // mean a decent amount of churn replacing an identical resource on every
     // update.
     fn is_changed(&self, name: &str, t: &X) -> bool {
-        let Some(entry) = self.0.get(name) else {
+        let Some(entry) = self.map.get(name) else {
             return true;
         };
 
@@ -335,12 +390,13 @@ impl CacheReader {
 }
 
 impl ConfigCache for CacheReader {
-    fn get_route(&self, target: &VirtualHost) -> Option<Arc<Route>> {
-        let listener = self.data.listeners.get(&target.name())?;
+    async fn get_route(&self, target: &VirtualHost) -> Option<Arc<Route>> {
+        let listener = self.data.listeners.get_await(&target.name()).await?;
 
         match &listener.data()?.route_config {
             ApiListenerData::Rds(name) => {
-                let route_config = self.data.route_configs.get(name.as_str())?;
+                let route_config = self.data.route_configs.get_await(name.as_str()).await?;
+
                 route_config.data().and_then(|rc| match &rc.data {
                     RouteConfigData::Route { route, .. } => Some(route.clone()),
                     _ => None,
@@ -353,19 +409,16 @@ impl ConfigCache for CacheReader {
         }
     }
 
-    fn get_backend(&self, id: &BackendId) -> Option<Arc<BackendLb>> {
-        let cluster = self.data.clusters.get(&id.name())?;
+    async fn get_backend(&self, id: &BackendId) -> Option<Arc<BackendLb>> {
+        let cluster = self.data.clusters.get_await(&id.name()).await?;
         let cluster_data = cluster.data()?;
         Some(cluster_data.backend_lb.clone())
     }
 
-    fn get_endpoints(&self, backend: &BackendId) -> Option<Arc<EndpointGroup>> {
-        // we don't have DNS targets, but we're just trying everything anyway.
-        // it's the callers responsibility to stop us from getting here if this
-        // is not a DNS backend.
-        let load_assignment = self.data.load_assignments.get(&backend.name())?;
-        let load_assignment_data = load_assignment.data()?;
-        Some(load_assignment_data.endpoint_group.clone())
+    async fn get_endpoints(&self, id: &BackendId) -> Option<Arc<EndpointGroup>> {
+        let la = self.data.load_assignments.get_await(&id.name()).await?;
+        let la_data = la.data()?;
+        Some(la_data.endpoint_group.clone())
     }
 }
 

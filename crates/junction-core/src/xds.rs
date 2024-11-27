@@ -206,7 +206,7 @@ impl AdsClient {
     pub(super) fn csds_server(
         &self,
         port: u16,
-    ) -> impl Future<Output = Result<(), tonic::transport::Error>> {
+    ) -> impl Future<Output = Result<(), tonic::transport::Error>> + Send + 'static {
         csds::local_server(self.cache.clone(), port)
     }
 
@@ -224,27 +224,31 @@ impl AdsClient {
 }
 
 impl ConfigCache for AdsClient {
-    fn get_route(
+    async fn get_route(
         &self,
         target: &junction_api::VirtualHost,
     ) -> Option<std::sync::Arc<junction_api::http::Route>> {
-        self.cache.get_route(target)
+        self.cache.get_route(target).await
     }
 
-    fn get_backend(
+    async fn get_backend(
         &self,
         target: &junction_api::BackendId,
     ) -> Option<std::sync::Arc<crate::BackendLb>> {
-        self.cache.get_backend(target)
+        self.cache.get_backend(target).await
     }
 
-    fn get_endpoints(
+    async fn get_endpoints(
         &self,
         backend: &junction_api::BackendId,
     ) -> Option<std::sync::Arc<crate::load_balancer::EndpointGroup>> {
         match &backend.target {
-            junction_api::Target::Dns(dns) => self.dns.get_endpoints(&dns.hostname, backend.port),
-            _ => self.cache.get_endpoints(backend),
+            junction_api::Target::Dns(dns) => {
+                self.dns
+                    .get_endpoints_await(&dns.hostname, backend.port)
+                    .await
+            }
+            _ => self.cache.get_endpoints(backend).await,
         }
     }
 }

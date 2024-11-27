@@ -2,17 +2,18 @@ use std::{
     collections::{btree_map, BTreeMap, BTreeSet},
     io,
     net::SocketAddr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Condvar, Mutex,
-    },
+    sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
 
 use junction_api::Hostname;
 use rand::Rng;
+use tokio::sync::Notify;
 
 use crate::load_balancer::EndpointGroup;
+
+// FIXME: figure out shutdown. it can't be a Weak that wraps inner because the
+// workers need to hold a ref to the Condvar/Mutex.
 
 /// A blocking resolver that uses the stdlib to resolve hostnames to addresses.
 ///
@@ -35,18 +36,28 @@ pub(crate) struct StdlibResolver {
     inner: Arc<StdlibResolverInner>,
 }
 
-// internal state for a stdlib resolver, shared between all of its workers. the
-// internal ResolverTasks functions as a work queue, and worker threads use a
-// mutex/condvar pair to wait for the next task or to chill until a new task
-// is added to the queue.
+// internal state for a stdlib resolver, shared between all of its workers.
+//
+// state is roughly split into three:
+//
+// - a ResolverTasks that functions as a work queue, and worker threads use a
+//  mutex/condvar pair to wait for the next task or to chill until a new task
+//  is added to the queue.
+//
+// - a shutdown flag for the background workers
+//
+// - async notification tracking, so get_await can yield appropriately.
 #[derive(Debug)]
 struct StdlibResolverInner {
     lookup_interval: Duration,
     lookup_jitter: Duration,
 
+    // a mutex/condvar pair wrapped around resolver state.
     cond: Condvar,
     tasks: Mutex<ResolverState>,
-    shutdown: Arc<AtomicBool>,
+
+    // a notify to let async callers know a names have changed.
+    async_notify: Notify,
 }
 
 macro_rules! no_poison {
@@ -57,7 +68,7 @@ macro_rules! no_poison {
 
 impl Drop for StdlibResolver {
     fn drop(&mut self) {
-        self.shutdown();
+        // self.shutdown();
     }
 }
 
@@ -72,7 +83,7 @@ impl StdlibResolver {
             lookup_jitter,
             tasks: Mutex::new(ResolverState::default()),
             cond: Condvar::new(),
-            shutdown: Arc::new(AtomicBool::new(false)),
+            async_notify: Notify::new(),
         };
         let resolver = StdlibResolver {
             inner: Arc::new(inner),
@@ -95,18 +106,62 @@ impl StdlibResolver {
         tasks.get_endpoints(hostname, port)
     }
 
-    fn shutdown(&self) {
-        self.inner.shutdown.store(true, Ordering::Release);
-    }
+    pub(crate) async fn get_endpoints_await(
+        &self,
+        hostname: &Hostname,
+        port: u16,
+    ) -> Option<Arc<EndpointGroup>> {
+        // fast path: the endpoints are in the map.
+        if let Some(endpoints) = self.get_endpoints(hostname, port) {
+            return Some(endpoints);
+        }
 
-    fn is_shutdown(&self) -> bool {
-        self.inner.shutdown.load(Ordering::Acquire)
+        // slow path: we're waiting
+        //
+        // on every run through the loop, we need to, IN ORDER, do the
+        // following:
+        //
+        // - register for notifications
+        // - try to get a name in the map, returning it if present
+        // - wait for the next notification
+        //
+        // given this order of events, and the guarantees on Notify, there is no
+        // interleaving of events where we can miss a notification.
+        //
+        // SAFETY: this assumes that the writer half of a notify is always using
+        // notify_waiters and not ever using notify_one.
+        //
+        // for an example that uses notify_one() instead, see Notify
+        //
+        // https://docs.rs/tokio/latest/tokio/sync/futures/struct.Notified.html#method.enable
+        tracing::trace!(%hostname, %port, "on the slow path");
+
+        let changed = self.inner.async_notify.notified();
+        tokio::pin!(changed);
+        loop {
+            tracing::trace!(%hostname, %port, "starting wait loop");
+            // check the map
+            if let Some(entry) = self.get_endpoints(hostname, port) {
+                tracing::trace!(%hostname, %port, "found name");
+                return Some(entry);
+            }
+
+            // wait for a change
+            changed.as_mut().await;
+
+            // this uses Pin::set so we're not allocating/deallocating a new
+            // wakeup future every time.
+            tracing::trace!(%hostname, %port, "waiting");
+            changed.set(self.inner.async_notify.notified());
+        }
     }
 
     pub(crate) fn subscribe(&self, name: Hostname, port: u16) {
         let mut tasks = no_poison!(self.inner.tasks.lock());
-        tasks.pin(name, port);
-        self.inner.cond.notify_all();
+
+        if tasks.pin(name, port) {
+            self.inner.cond.notify_all();
+        }
     }
 
     pub(crate) fn unsubscribe(&self, name: &Hostname, port: u16) {
@@ -161,10 +216,6 @@ impl StdlibResolver {
         let mut tasks = no_poison!(self.inner.tasks.lock());
 
         loop {
-            if self.is_shutdown() {
-                return None;
-            }
-
             // claim a name older than the cutoff
             let before = Instant::now() - self.inner.lookup_interval;
             if let Some(name) = tasks.next_name(before) {
@@ -198,8 +249,18 @@ impl StdlibResolver {
         resolved_at: Instant,
         answer: io::Result<Vec<SocketAddr>>,
     ) {
-        let mut tasks = no_poison!(self.inner.tasks.lock());
-        tasks.insert_answer(&name, resolved_at, answer);
+        // grab the lock in a tight scope
+        {
+            let mut tasks = no_poison!(self.inner.tasks.lock());
+            tasks.insert_answer(&name, resolved_at, answer);
+        }
+
+        // after the lock is free:
+        //
+        // notify all async callers in get_await. since there's no
+        // blocking get_* method, there are no sync callers to notify.
+        tracing::trace!("notifying waiters");
+        self.inner.async_notify.notify_waiters();
     }
 }
 
@@ -319,10 +380,15 @@ impl ResolverState {
         }
     }
 
-    fn pin(&mut self, hostname: Hostname, port: u16) {
-        let name_info = self.0.entry(hostname).or_default();
+    fn pin(&mut self, hostname: Hostname, port: u16) -> bool {
+        let (created, name_info) = match self.0.entry(hostname) {
+            btree_map::Entry::Vacant(entry) => (true, entry.insert(Default::default())),
+            btree_map::Entry::Occupied(entry) => (false, entry.into_mut()),
+        };
         let port_info = name_info.ports.entry(port).or_default();
         port_info.pinned = true;
+
+        created
     }
 
     fn remove(&mut self, hostname: &Hostname, port: u16) {

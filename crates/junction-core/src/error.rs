@@ -35,6 +35,15 @@ impl Error {
 }
 
 impl Error {
+    // timeouts
+
+    pub(crate) fn timed_out(message: &'static str) -> Self {
+        let inner = ErrorImpl::TimedOut(Cow::from(message));
+        Self {
+            inner: Box::new(inner),
+        }
+    }
+
     // url problems
 
     pub(crate) fn into_invalid_url(message: String) -> Self {
@@ -92,12 +101,13 @@ impl Error {
             inner: Box::new(ErrorImpl::NoReachableEndpoints { vhost, backend }),
         }
     }
-
-    // methods
 }
 
 #[derive(Debug, thiserror::Error)]
 enum ErrorImpl {
+    #[error("timed out: {0}")]
+    TimedOut(Cow<'static, str>),
+
     #[error("invalid url: {0}")]
     InvalidUrl(Cow<'static, str>),
 

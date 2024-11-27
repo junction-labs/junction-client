@@ -1,17 +1,16 @@
 use junction_api::{backend::Backend, http::Route, BackendId};
-use junction_core::{ConfigMode, ResourceVersion};
+use junction_core::{ResolveMode, ResourceVersion};
 use once_cell::sync::Lazy;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     pyclass, pyfunction, pymethods, pymodule,
     types::{
-        PyAnyMethods, PyDict, PyDictMethods, PyMapping, PyMappingMethods, PyModule,
-        PySequenceMethods, PyStringMethods,
+        PyAnyMethods, PyMapping, PyMappingMethods, PyModule, PySequenceMethods, PyStringMethods,
     },
     wrap_pyfunction, Bound, Py, PyAny, PyResult, Python,
 };
-use serde::{Deserialize, Serialize};
-use std::{env, net::IpAddr, str::FromStr};
+use serde::Serialize;
+use std::{net::IpAddr, str::FromStr};
 use xds_api::pb::google::protobuf;
 
 #[pymodule]
@@ -23,6 +22,25 @@ fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dump_kube_backend, m)?)?;
 
     Ok(())
+}
+
+mod env {
+    use super::*;
+
+    pub(super) fn ads_server(arg: Option<String>, message: &'static str) -> PyResult<String> {
+        arg.or(std::env::var("JUNCTION_ADS_SERVER").ok())
+            .ok_or(PyRuntimeError::new_err(message))
+    }
+
+    pub(super) fn node_info(arg: Option<String>) -> String {
+        arg.or(std::env::var("JUNCTION_NODE_NAME").ok())
+            .unwrap_or_else(|| "junction-python".to_string())
+    }
+
+    pub(super) fn cluster_name(arg: Option<String>) -> String {
+        arg.or(std::env::var("JUNCTION_CLUSTER").ok())
+            .unwrap_or_else(|| "junction-python".to_string())
+    }
 }
 
 /// An endpoint that an HTTP call can be made to. Includes the address that the
@@ -211,13 +229,6 @@ impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
     }
 }
 
-/// A Junction endpoint discovery client.
-#[pyclass]
-#[derive(Clone)]
-pub struct Junction {
-    core: junction_core::Client,
-}
-
 static RUNTIME: once_cell::sync::Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -229,62 +240,6 @@ static RUNTIME: once_cell::sync::Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
     rt
 });
 
-/// Create a new client with a new config cache. Any call to resolve_endpoints
-/// on this client will use cached data if available.
-///
-/// This client is safe to share between multiple objects and use from multiple
-/// threads.
-fn new_client(
-    ads_address: String,
-    node_name: String,
-    cluster_name: String,
-) -> PyResult<junction_core::Client> {
-    let rt = &RUNTIME;
-    rt.block_on(junction_core::Client::build(
-        ads_address,
-        node_name,
-        cluster_name,
-    ))
-    .map_err(|e| {
-        let error_message = match e.source() {
-            Some(cause) => format!("ads connection failed: {e}: {cause}"),
-            None => format!("ads connection failed: {e}"),
-        };
-        PyRuntimeError::new_err(error_message)
-    })
-}
-
-fn default_ads_server(
-    kwargs: Option<&Bound<'_, PyDict>>,
-    message: &'static str,
-) -> PyResult<String> {
-    kwarg_string("ads_server", kwargs)?
-        .or(env::var("JUNCTION_ADS_SERVER").ok())
-        .ok_or(PyRuntimeError::new_err(message))
-}
-
-fn default_node_info(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<(String, String)> {
-    let node_name = kwarg_string("node_name", kwargs)?
-        .or(env::var("JUNCTION_NODE_NAME").ok())
-        .unwrap_or_else(|| "junction-python".to_string());
-
-    let cluster_name = kwarg_string("cluster_name", kwargs)?
-        .or(env::var("JUNCTION_CLUSTER").ok())
-        .unwrap_or_else(|| "junction-python".to_string());
-
-    Ok((node_name, cluster_name))
-}
-
-#[inline]
-fn default_routes(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Route>> {
-    kwarg_depythonize("default_routes", kwargs).map(|v| v.unwrap_or_default())
-}
-
-#[inline]
-fn default_backends(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Backend>> {
-    kwarg_depythonize("default_backends", kwargs).map(|v| v.unwrap_or_default())
-}
-
 /// Check route resolution.
 ///
 /// Resolve a request against a routing table. Returns the full route that was
@@ -294,6 +249,7 @@ fn default_backends(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Vec<Backend>
 /// This function is stateless, and doesn't require connecting to a control
 /// plane. Use it to unit test your routing rules.
 #[pyfunction]
+#[pyo3(signature = (routes, method, url, headers))]
 fn check_route(
     py: Python<'_>,
     routes: Bound<'_, PyAny>,
@@ -324,21 +280,23 @@ fn check_route(
 /// inferred, but routes with other targets need to have namespace and name
 /// kwargs set explicitly.
 #[pyfunction]
+#[pyo3(signature = (route, *, name, namespace))]
 fn dump_kube_route(
     route: Bound<'_, PyAny>,
-    kwargs: Option<&Bound<'_, PyDict>>,
+    name: Option<String>,
+    namespace: Option<String>,
 ) -> PyResult<String> {
     let route: Route = pythonize::depythonize_bound(route)?;
 
-    let (namespace, name) = match &route.vhost.target {
+    let (vhost_namespace, vhost_name) = match &route.vhost.target {
         junction_api::Target::KubeService(svc) => {
             (Some(svc.namespace.clone()), Some(svc.name.clone()))
         }
         _ => (None, None),
     };
 
-    let namespace = kwarg_from_string("namespace", kwargs)?.or(namespace);
-    let name = kwarg_from_string("name", kwargs)?.or(name);
+    let namespace = map_from_str(namespace)?.or(vhost_namespace);
+    let name = map_from_str(name)?.or(vhost_name);
 
     let Some((namespace, name)) = namespace.zip(name) else {
         return Err(PyValueError::new_err(
@@ -352,6 +310,20 @@ fn dump_kube_route(
 
     Ok(serde_yml::to_string(&route)
         .expect("Serialization failed. This is a bug in Junction, not your code."))
+}
+
+fn map_from_str<T>(v: Option<String>) -> PyResult<Option<T>>
+where
+    T: FromStr,
+    <T as FromStr>::Err: std::error::Error,
+{
+    match v {
+        Some(s) => {
+            let v = T::from_str(&s).map_err(|e| PyValueError::new_err(e.to_string()))?;
+            Ok(Some(v))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Dump a Backend to Kubernetes YAML.
@@ -372,14 +344,41 @@ fn dump_kube_backend(backend: Bound<'_, PyAny>) -> PyResult<String> {
         .expect("Serialization failed. This is a bug in Junction, not your code."))
 }
 
+/// A Junction endpoint discovery client.
+#[pyclass]
+#[derive(Clone)]
+pub struct Junction {
+    core: junction_core::Client,
+}
+
 static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
-    let ads = default_ads_server(
+    let ads = env::ads_server(
         None,
         "JUNCTION_ADS_SERVER isn't set, can't use the default client",
     )?;
-    let (node, cluster) = default_node_info(None)?;
+    let (node, cluster) = (env::node_info(None), env::cluster_name(None));
     new_client(ads, node, cluster)
 });
+
+fn new_client(
+    ads_address: String,
+    node_name: String,
+    cluster_name: String,
+) -> PyResult<junction_core::Client> {
+    let rt = &RUNTIME;
+    rt.block_on(junction_core::Client::build(
+        ads_address,
+        node_name,
+        cluster_name,
+    ))
+    .map_err(|e| {
+        let error_message = match e.source() {
+            Some(cause) => format!("ads connection failed: {e}: {cause}"),
+            None => format!("ads connection failed: {e}"),
+        };
+        PyRuntimeError::new_err(error_message)
+    })
+}
 
 /// Return a default Junction client. This client will be used by library
 /// integrations if they're not explicitly constructed with a client.
@@ -387,25 +386,32 @@ static DEFAULT_CLIENT: Lazy<PyResult<junction_core::Client>> = Lazy::new(|| {
 /// This client can be configured with an ADS server address and node info by
 /// setting the JUNCTION_ADS_SERVER, JUNCTION_NODE, and JUNCTION_CLUSTER
 /// environment variables.
-///
-/// Calls to this function accept `default_routes` and `default_backends`
-/// kwargs, to set defaults for the routing done by this client while still
-/// using the dynamic config cache shared with all other default clients.
 #[pyfunction]
-#[pyo3(signature = (**kwargs))]
-fn default_client(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Junction> {
-    let routes = default_routes(kwargs)?;
-    let backends = default_backends(kwargs)?;
-    match DEFAULT_CLIENT.as_ref() {
-        Ok(default_client) => {
-            let core = default_client
-                .clone()
-                .with_defaults(routes, backends)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok(Junction { core })
-        }
-        Err(e) => Err(PyRuntimeError::new_err(e)),
+#[pyo3(signature = (*, static_routes=None, static_backends=None))]
+fn default_client(
+    static_routes: Option<Bound<'_, PyAny>>,
+    static_backends: Option<Bound<'_, PyAny>>,
+) -> PyResult<Junction> {
+    let mut core = match DEFAULT_CLIENT.as_ref() {
+        Ok(default_client) => default_client.clone(),
+        Err(e) => return Err(PyRuntimeError::new_err(e)),
+    };
+
+    let routes = static_routes
+        .map(|routes| pythonize::depythonize_bound(routes))
+        .transpose()?;
+
+    let backends = static_backends
+        .map(|backends| pythonize::depythonize_bound(backends))
+        .transpose()?;
+
+    if routes.is_some() || backends.is_some() {
+        let routes = routes.unwrap_or_default();
+        let backends = backends.unwrap_or_default();
+        core = core.with_static_config(routes, backends);
     }
+
+    Ok(Junction { core })
 }
 
 #[pymethods]
@@ -413,25 +419,42 @@ impl Junction {
     /// Create a new Junction client. The client can be shared and is safe to
     /// use from multiple threads or tasks.
     #[new]
-    #[pyo3(signature = (**kwargs))]
-    fn new(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
-        let ads = default_ads_server(
-            kwargs,
+    #[pyo3(signature = (
+        *,
+        static_routes=None,
+        static_backends=None,
+        ads_server=None,
+        node=None,
+        cluster=None,
+    ))]
+    fn new(
+        static_routes: Option<Bound<'_, PyAny>>,
+        static_backends: Option<Bound<'_, PyAny>>,
+        ads_server: Option<String>,
+        node: Option<String>,
+        cluster: Option<String>,
+    ) -> PyResult<Self> {
+        let ads = env::ads_server(
+            ads_server,
             "no ads server specified: ads_server wasn't passed and JUNCTION_ADS_SERVER isn't set",
         )?;
-        let (node, cluster) = default_node_info(kwargs)?;
-        let routes = default_routes(kwargs)?;
-        let backends = default_backends(kwargs)?;
+        let node = env::node_info(node);
+        let cluster = env::cluster_name(cluster);
+        let mut core = new_client(ads, node, cluster).map_err(PyRuntimeError::new_err)?;
 
-        match new_client(ads, node, cluster) {
-            Ok(client) => {
-                let core = client
-                    .with_defaults(routes, backends)
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                Ok(Junction { core })
-            }
-            Err(e) => Err(PyRuntimeError::new_err(e)),
+        let routes = static_routes
+            .map(|routes| pythonize::depythonize_bound(routes))
+            .transpose()?;
+        let backends = static_backends
+            .map(|backends| pythonize::depythonize_bound(backends))
+            .transpose()?;
+        if routes.is_some() || backends.is_some() {
+            let routes = routes.unwrap_or_default();
+            let backends = backends.unwrap_or_default();
+            core = core.with_static_config(routes, backends);
         }
+
+        Ok(Junction { core })
     }
 
     /// Perform the route resolution half of resolve_http, returning the
@@ -459,13 +482,12 @@ impl Junction {
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         let config_mode = match dynamic {
-            true => ConfigMode::Dynamic,
-            false => ConfigMode::Static,
+            true => ResolveMode::Dynamic,
+            false => ResolveMode::Static,
         };
 
-        let resolved = self
-            .core
-            .resolve_routes(config_mode, request)
+        let resolved = RUNTIME
+            .block_on(self.core.resolve_routes(config_mode, request))
             .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
         let route = pythonize::pythonize(py, &resolved.route)?;
@@ -504,9 +526,8 @@ impl Junction {
         let method = method_from_py(method)?;
         let headers = headers_from_py(headers)?;
 
-        let endpoints = self
-            .core
-            .resolve_http(&method, &url, &headers)
+        let endpoints = RUNTIME
+            .block_on(self.core.resolve_http(&method, &url, &headers))
             .map(|endpoints| endpoints.into_iter().map(|e| e.into()).collect())
             .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
@@ -516,11 +537,11 @@ impl Junction {
     /// Spawn a new CSDS server on the given port. Spawning the server will not
     /// block the current thread.
     fn run_csds_server(&self, port: u16) -> PyResult<()> {
-        let server_fut = self.core.csds_server(port);
+        let run_server = self.core.clone().csds_server(port);
         // FIXME: figure out how to report an error better than this. just
         // printing the exception is good buuuuuuut.
         RUNTIME.spawn(async move {
-            if let Err(e) = server_fut.await {
+            if let Err(e) = run_server.await {
                 let py_err = PyRuntimeError::new_err(format!("csds server exited: {e}"));
                 Python::with_gil(|py| py_err.print(py));
             }
@@ -636,50 +657,4 @@ fn headers_from_py(header_dict: &Bound<PyMapping>) -> PyResult<http::HeaderMap> 
     }
 
     Ok(headers)
-}
-
-fn kwarg_string(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<String>> {
-    let Some(kwargs) = kwargs else {
-        return Ok(None);
-    };
-
-    let item = kwargs.get_item(key)?;
-    let py_str = item.map(|s| s.str()).transpose()?;
-    Ok(py_str.map(|s| s.to_string()))
-}
-
-#[inline]
-fn kwarg_from_string<T>(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<T>>
-where
-    T: TryFrom<String>,
-    <T as TryFrom<String>>::Error: std::fmt::Display,
-{
-    let Some(kwargs) = kwargs else {
-        return Ok(None);
-    };
-
-    match kwargs.get_item(key)? {
-        Some(val) => {
-            let py_str = val.str()?;
-            let value = T::try_from(py_str.to_string())
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok(Some(value))
-        }
-        None => Ok(None),
-    }
-}
-
-fn kwarg_depythonize<T>(key: &str, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Option<T>>
-where
-    T: for<'a> Deserialize<'a>,
-{
-    let Some(kwargs) = kwargs else {
-        return Ok(None);
-    };
-
-    let value = match kwargs.get_item(key)? {
-        Some(value) => Some(pythonize::depythonize_bound(value)?),
-        None => None,
-    };
-    Ok(value)
 }
