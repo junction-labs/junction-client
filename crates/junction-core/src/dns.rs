@@ -113,6 +113,7 @@ impl StdlibResolver {
     ) -> Option<Arc<EndpointGroup>> {
         // fast path: the endpoints are in the map.
         if let Some(endpoints) = self.get_endpoints(hostname, port) {
+            tracing::trace!(%hostname, %port, ?endpoints, "fast path hit");
             return Some(endpoints);
         }
 
@@ -285,7 +286,17 @@ struct NameInfo {
 #[derive(Debug, Default)]
 struct PortInfo {
     pinned: bool,
-    endpoint_group: Arc<EndpointGroup>,
+    endpoint_group: Option<Arc<EndpointGroup>>,
+}
+
+impl PortInfo {
+    fn set_addrs(&mut self, port: u16, addrs: &[SocketAddr]) {
+        let addrs = addrs.iter().cloned().map(|mut addr| {
+            addr.set_port(port);
+            addr
+        });
+        self.endpoint_group = Some(Arc::new(EndpointGroup::from_dns_addrs(addrs)))
+    }
 }
 
 impl NameInfo {
@@ -305,11 +316,7 @@ impl NameInfo {
                 // EndpointGroup for each port.
                 if Some(&addrs) != self.last_addrs.as_ref() {
                     for (port, port_info) in self.ports.iter_mut() {
-                        let addrs = addrs.iter().cloned().map(|mut addr| {
-                            addr.set_port(*port);
-                            addr
-                        });
-                        port_info.endpoint_group = Arc::new(EndpointGroup::from_dns_addrs(addrs))
+                        port_info.set_addrs(*port, &addrs);
                     }
                     self.last_addrs = Some(addrs);
                 }
@@ -361,7 +368,7 @@ impl ResolverState {
     fn get_endpoints(&self, hostname: &Hostname, port: u16) -> Option<Arc<EndpointGroup>> {
         let name_info = self.0.get(hostname)?;
         let port_info = name_info.ports.get(&port)?;
-        Some(port_info.endpoint_group.clone())
+        port_info.endpoint_group.clone()
     }
 
     fn insert_answer(
@@ -387,6 +394,10 @@ impl ResolverState {
         };
         let port_info = name_info.ports.entry(port).or_default();
         port_info.pinned = true;
+
+        if let Some(addrs) = &name_info.last_addrs {
+            port_info.set_addrs(port, addrs);
+        }
 
         created
     }
@@ -611,6 +622,39 @@ mod test {
         assert_eq!(
             resolver.names_and_ports(),
             &[("www.newthing.com", vec![443]),]
+        );
+    }
+
+    #[test]
+    fn test_pin_new_port() {
+        let mut resolver = ResolverState::default();
+
+        update_all(
+            &mut resolver,
+            [("www.junctionlabs.io", 80), ("www.junctionlabs.io", 443)],
+        );
+
+        resolver.insert_answer(
+            &Hostname::from_static("www.junctionlabs.io"),
+            Instant::now(),
+            // the port here shouldn't matter
+            Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234)]),
+        );
+
+        resolver.pin(Hostname::from_static("www.junctionlabs.io"), 7777);
+
+        let endpoints: Vec<_> = resolver
+            .get_endpoints(&Hostname::from_static("www.junctionlabs.io"), 7777)
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect();
+        assert_eq!(
+            endpoints,
+            vec![crate::EndpointAddress::SocketAddr(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                7777,
+            ))]
         );
     }
 
