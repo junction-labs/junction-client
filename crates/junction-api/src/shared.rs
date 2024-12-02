@@ -72,31 +72,30 @@ impl serde::Serialize for Regex {
     }
 }
 
-struct RegexVisitor;
-
-impl<'de> Visitor<'de> for RegexVisitor {
-    type Value = Regex;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a Regex")
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        match Regex::from_str(value) {
-            Ok(s) => Ok(s),
-            Err(e) => Err(E::custom(format!("could not parse {}: {}", value, e))),
-        }
-    }
-}
-
 impl<'de> Deserialize<'de> for Regex {
     fn deserialize<D>(deserializer: D) -> Result<Regex, D::Error>
     where
         D: Deserializer<'de>,
     {
+        struct RegexVisitor;
+
+        impl Visitor<'_> for RegexVisitor {
+            type Value = Regex;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a Regex")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                match Regex::from_str(value) {
+                    Ok(s) => Ok(s),
+                    Err(e) => Err(E::custom(format!("could not parse {}: {}", value, e))),
+                }
+            }
+        }
         deserializer.deserialize_string(RegexVisitor)
     }
 }
@@ -218,7 +217,7 @@ impl<'de> Deserialize<'de> for Duration {
         // https://serde.rs/string-or-struct.html
         struct DurationVisitor;
 
-        impl<'de> Visitor<'de> for DurationVisitor {
+        impl Visitor<'_> for DurationVisitor {
             type Value = Duration;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
