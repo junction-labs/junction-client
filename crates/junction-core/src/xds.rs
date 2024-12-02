@@ -576,7 +576,7 @@ impl<'a> AdsConnection<'a> {
     }
 }
 
-impl<'a> AdsConnection<'a> {
+impl AdsConnection<'_> {
     // inputs
 
     fn handle_subscription_update(&mut self, reg: SubscriptionUpdate) -> Vec<DiscoveryRequest> {
@@ -735,7 +735,7 @@ fn xds_unknown_type(discovery_response: DiscoveryResponse) -> DiscoveryRequest {
     }
 }
 
-impl<'a> AdsConnection<'a> {
+impl AdsConnection<'_> {
     fn xds_ack(
         &self,
         version: String,

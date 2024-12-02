@@ -302,7 +302,7 @@ where
 
 struct ResourceEntry<'a, T>(crossbeam_skiplist::map::Entry<'a, String, CacheEntry<T>>);
 
-impl<'a, T> ResourceEntry<'a, T> {
+impl<T> ResourceEntry<'_, T> {
     fn name(&self) -> &str {
         self.0.key()
     }
