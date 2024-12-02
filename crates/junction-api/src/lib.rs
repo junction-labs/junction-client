@@ -87,7 +87,7 @@ macro_rules! newtype_string {
     ($(#[$id_attr:meta])* pub $name:ident) => {
         $(#[$id_attr])*
         #[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct $name(String);
+        pub struct $name(smol_str::SmolStr);
 
         impl Deref for $name {
             type Target = str;
@@ -172,7 +172,7 @@ macro_rules! newtype_string {
 
             fn from_str(s: &str) -> Result<Self, Self::Err> {
                 Self::validate(s.as_bytes())?;
-                Ok($name(s.to_string()))
+                Ok($name(smol_str::SmolStr::new(s)))
             }
         }
 
@@ -181,7 +181,7 @@ macro_rules! newtype_string {
 
             fn try_from(value: String) -> Result<$name, Self::Error> {
                 $name::validate(value.as_bytes())?;
-                Ok($name(value))
+                Ok($name(smol_str::SmolStr::new(value)))
             }
         }
 
@@ -190,7 +190,7 @@ macro_rules! newtype_string {
 
             fn try_from(value: &'a str) -> Result<$name, Self::Error> {
                 $name::validate(value.as_bytes())?;
-                Ok($name(value.to_string()))
+                Ok($name(smol_str::SmolStr::new(value)))
             }
         }
     }
@@ -254,7 +254,7 @@ impl Hostname {
     /// hostname and will panic if it is not.
     pub fn from_static(src: &'static str) -> Self {
         Self::validate(src.as_bytes()).expect("expected a static Name to be valid");
-        Self(src.to_string())
+        Self(smol_str::SmolStr::new_static(src))
     }
 
     fn validate(bs: &[u8]) -> Result<(), Error> {
@@ -303,7 +303,7 @@ impl Name {
     /// and will panic if it is not.
     pub fn from_static(src: &'static str) -> Self {
         Self::validate(src.as_bytes()).expect("expected a static Name to be valid");
-        Self(src.to_string())
+        Self(smol_str::SmolStr::new_static(src))
     }
 
     /// Check that a `str` is a valid Name.
