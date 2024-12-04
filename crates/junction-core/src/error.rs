@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use junction_api::{BackendId, VirtualHost};
+use junction_api::{backend::BackendId, Name};
 
 /// A `Result` alias where the `Err` case is `junction_core::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -24,13 +24,7 @@ impl Error {
     /// Temporary errors may occur because of a network timeout or because of
     /// lag fetching a configuration from a Junction server.
     pub fn is_temporary(&self) -> bool {
-        matches!(
-            *self.inner,
-            ErrorImpl::NoRouteMatched { .. }
-                | ErrorImpl::NoBackend { .. }
-                | ErrorImpl::NoRuleMatched { .. }
-                | ErrorImpl::NoReachableEndpoints { .. }
-        )
+        matches!(*self.inner, ErrorImpl::NoReachableEndpoints { .. })
     }
 }
 
@@ -62,43 +56,39 @@ impl Error {
 
     // route problems
 
-    pub(crate) fn no_route_matched(routes: Vec<VirtualHost>) -> Self {
+    pub(crate) fn no_route_matched(authority: String) -> Self {
         Self {
-            inner: Box::new(ErrorImpl::NoRouteMatched { routes }),
+            inner: Box::new(ErrorImpl::NoRouteMatched { authority }),
         }
     }
 
-    pub(crate) fn no_rule_matched(route: VirtualHost) -> Self {
+    pub(crate) fn no_rule_matched(route: Name) -> Self {
         Self {
             inner: Box::new(ErrorImpl::NoRuleMatched { route }),
         }
     }
 
-    pub(crate) fn invalid_route(message: &'static str, vhost: VirtualHost, rule: usize) -> Self {
+    pub(crate) fn invalid_route(message: &'static str, id: Name, rule: usize) -> Self {
         Self {
-            inner: Box::new(ErrorImpl::InvalidRoute {
-                message,
-                vhost,
-                rule,
-            }),
+            inner: Box::new(ErrorImpl::InvalidRoute { id, message, rule }),
         }
     }
 
     // backend problems
 
-    pub(crate) fn no_backend(vhost: VirtualHost, rule: Option<usize>, backend: BackendId) -> Self {
+    pub(crate) fn no_backend(route: Name, rule: Option<usize>, backend: BackendId) -> Self {
         Self {
             inner: Box::new(ErrorImpl::NoBackend {
-                vhost,
+                route,
                 rule,
                 backend,
             }),
         }
     }
 
-    pub(crate) fn no_reachable_endpoints(vhost: VirtualHost, backend: BackendId) -> Self {
+    pub(crate) fn no_reachable_endpoints(route: Name, backend: BackendId) -> Self {
         Self {
-            inner: Box::new(ErrorImpl::NoReachableEndpoints { vhost, backend }),
+            inner: Box::new(ErrorImpl::NoReachableEndpoints { route, backend }),
         }
     }
 }
@@ -114,37 +104,23 @@ enum ErrorImpl {
     #[error("invalid route configuration")]
     InvalidRoute {
         message: &'static str,
-        vhost: VirtualHost,
+        id: Name,
         rule: usize,
     },
 
-    #[error(
-        "no routing info is available for any of the following vhosts: [{}]",
-        format_vhosts(.routes)
-    )]
-    NoRouteMatched { routes: Vec<VirtualHost> },
+    #[error("no route matched: '{authority}'")]
+    NoRouteMatched { authority: String },
 
     #[error("using route '{route}': no routing rules matched the request")]
-    NoRuleMatched { route: VirtualHost },
+    NoRuleMatched { route: Name },
 
-    #[error("{vhost}: backend not found: {backend}")]
+    #[error("{route}: backend not found: {backend}")]
     NoBackend {
-        vhost: VirtualHost,
+        route: Name,
         rule: Option<usize>,
         backend: BackendId,
     },
 
-    #[error("{vhost}: no reachable endpoints")]
-    NoReachableEndpoints {
-        vhost: VirtualHost,
-        backend: BackendId,
-    },
-}
-
-fn format_vhosts(vhosts: &[VirtualHost]) -> String {
-    vhosts
-        .iter()
-        .map(|a| a.to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
+    #[error("{backend}: no reachable endpoints")]
+    NoReachableEndpoints { route: Name, backend: BackendId },
 }

@@ -17,11 +17,12 @@ mod xds;
 
 pub use client::{Client, HttpRequest, ResolveMode, ResolvedRoute};
 use futures::FutureExt;
+use junction_api::Name;
 pub use xds::{ResourceVersion, XdsConfig};
 
+use junction_api::backend::BackendId;
 use junction_api::http::Route;
-use junction_api::{BackendId, VirtualHost};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -62,23 +63,20 @@ pub fn check_route(
 }
 
 pub(crate) trait ConfigCache {
-    async fn get_route(&self, target: &VirtualHost) -> Option<Arc<Route>>;
+    async fn get_route<S: AsRef<str>>(&self, authority: S) -> Option<Arc<Route>>;
     async fn get_backend(&self, target: &BackendId) -> Option<Arc<BackendLb>>;
     async fn get_endpoints(&self, backend: &BackendId) -> Option<Arc<EndpointGroup>>;
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StaticConfig {
-    pub routes: HashMap<VirtualHost, Arc<Route>>,
+    pub routes: Vec<Arc<Route>>,
     pub backends: HashMap<BackendId, Arc<BackendLb>>,
 }
 
 impl StaticConfig {
     pub(crate) fn new(routes: Vec<Route>, backends: Vec<Backend>) -> Self {
-        let routes: HashMap<_, _> = routes
-            .into_iter()
-            .map(|x| (x.vhost.clone(), Arc::new(x)))
-            .collect();
+        let routes = routes.into_iter().map(Arc::new).collect();
 
         let backends: HashMap<_, _> = backends
             .into_iter()
@@ -97,11 +95,7 @@ impl StaticConfig {
     }
 
     pub(crate) fn with_inferred(routes: Vec<Route>, backends: Vec<Backend>) -> Self {
-        let mut routes: HashMap<_, _> = routes
-            .into_iter()
-            .map(|x| (x.vhost.clone(), Arc::new(x)))
-            .collect();
-
+        let mut routes: Vec<_> = routes.into_iter().map(Arc::new).collect();
         let mut backends: HashMap<_, _> = backends
             .into_iter()
             .map(|config| {
@@ -115,36 +109,57 @@ impl StaticConfig {
             })
             .collect();
 
-        // infer default backends
+        // infer default backends for Routes with no specified backends.  we can
+        // only infer a backend for a backendref with a port
         let mut inferred_backends = vec![];
-        for route in routes.values() {
+        for route in &routes {
             for rule in &route.rules {
-                for wb in &rule.backends {
-                    if !backends.contains_key(&wb.backend) {
-                        let id = wb.backend.clone();
-                        let config = Backend {
-                            id: id.clone(),
-                            lb: LbPolicy::default(),
-                        };
-                        let load_balancer = LoadBalancer::from_config(&config.lb);
-                        inferred_backends.push((
-                            id,
-                            Arc::new(BackendLb {
-                                config,
-                                load_balancer,
-                            }),
-                        ));
+                for backend_ref in &rule.backends {
+                    let Some(backend_id) = backend_ref.as_backend_id() else {
+                        continue;
+                    };
+
+                    if backends.contains_key(&backend_id) {
+                        continue;
                     }
+
+                    let config = Backend {
+                        id: backend_id.clone(),
+                        lb: LbPolicy::default(),
+                    };
+                    let load_balancer = LoadBalancer::from_config(&config.lb);
+
+                    inferred_backends.push((
+                        backend_id,
+                        Arc::new(BackendLb {
+                            config,
+                            load_balancer,
+                        }),
+                    ))
                 }
             }
         }
 
-        // infer default routes
+        // infer default Routes for Backends. Track the set of Services
+        // referenced all Routes, and create a new passthrough for every
+        // Service that doesn't have one.
         let mut inferred_routes = vec![];
+        let mut route_refs = HashSet::new();
+        for route in &routes {
+            for rule in &route.rules {
+                for backend_ref in &rule.backends {
+                    route_refs.insert(backend_ref.service.clone());
+                }
+            }
+        }
         for backend in backends.values() {
-            let vhost = backend.config.id.clone().into_vhost().without_port();
-            if !routes.contains_key(&vhost) {
-                inferred_routes.push((vhost.clone(), Arc::new(Route::passthrough_route(vhost))));
+            if !route_refs.contains(&backend.config.id.service) {
+                let route = Route::passthrough_route(
+                    Name::from_static("inferred"),
+                    backend.config.id.service.clone(),
+                );
+                inferred_routes.push(Arc::new(route));
+                route_refs.insert(backend.config.id.service.clone());
             }
         }
 
@@ -161,10 +176,12 @@ impl StaticConfig {
         backends.extend(self.backends.keys().cloned());
 
         // all of the route targets
-        for route in self.routes.values() {
+        for route in &self.routes {
             for rule in &route.rules {
-                for wb in &rule.backends {
-                    backends.push(wb.backend.clone());
+                for backend_ref in &rule.backends {
+                    if let Some(port) = backend_ref.port {
+                        backends.push(backend_ref.service.as_backend_id(port));
+                    }
                 }
             }
         }
@@ -177,8 +194,14 @@ impl StaticConfig {
 }
 
 impl ConfigCache for StaticConfig {
-    fn get_route(&self, target: &VirtualHost) -> impl Future<Output = Option<Arc<Route>>> {
-        std::future::ready(self.routes.get(target).cloned())
+    async fn get_route<S: AsRef<str>>(&self, authority: S) -> Option<Arc<Route>> {
+        let (host, port) = authority.as_ref().split_once(":")?;
+        let port = port.parse().ok()?;
+
+        self.routes
+            .iter()
+            .find(|r| route_matches(r, host, port))
+            .map(Arc::clone)
     }
 
     fn get_backend(&self, target: &BackendId) -> impl Future<Output = Option<Arc<BackendLb>>> {
@@ -188,4 +211,16 @@ impl ConfigCache for StaticConfig {
     fn get_endpoints(&self, _: &BackendId) -> impl Future<Output = Option<Arc<EndpointGroup>>> {
         std::future::ready(None)
     }
+}
+
+fn route_matches(route: &Route, host: &str, port: u16) -> bool {
+    if !route.hostnames.iter().any(|h| h.matches_str(host)) {
+        return false;
+    }
+
+    if !(route.ports.is_empty() || route.ports.contains(&port)) {
+        return false;
+    }
+
+    true
 }

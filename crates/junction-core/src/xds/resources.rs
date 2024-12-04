@@ -7,7 +7,7 @@ use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 use enum_map::EnumMap;
 use junction_api::backend::Backend;
 use junction_api::http::Route;
-use junction_api::{BackendId, Target};
+use junction_api::{backend::BackendId, Service};
 use smol_str::SmolStr;
 use xds_api::pb::google::protobuf;
 use xds_api::{
@@ -100,7 +100,7 @@ impl_resource_version_from!(&String);
 impl_resource_version_from!(Arc<str>);
 impl_resource_version_from!(Box<str>);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, enum_map::Enum, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, enum_map::Enum, Hash, PartialOrd, Ord)]
 pub(crate) enum ResourceType {
     Listener,
     RouteConfiguration,
@@ -500,9 +500,9 @@ impl Locality {
 
 impl EndpointGroup {
     pub(crate) fn from_xds(target: &BackendId, cla: &xds_endpoint::ClusterLoadAssignment) -> Self {
-        let make_address = match target.target {
-            Target::Dns(_) => EndpointAddress::from_xds_dns_name,
-            Target::KubeService(_) => EndpointAddress::from_xds_socket_addr,
+        let make_address = match target.service {
+            Service::Dns(_) => EndpointAddress::from_xds_dns_name,
+            Service::Kube(_) => EndpointAddress::from_xds_socket_addr,
         };
 
         let mut endpoints = BTreeMap::new();

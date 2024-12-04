@@ -29,17 +29,20 @@ def retry_sample(args):
         "Retry Test - 502's have retries configured and will succeed, 501s do not"
     )
 
-    http_server: junction.config.Target = {
+    http_server: junction.config.Service = {
+        "type": "kube",
         "name": "jct-http-server",
         "namespace": "default",
     }
-    http_server_feature_1: junction.config.Target = {
+    http_server_feature_1: junction.config.Service = {
+        "type": "kube",
         "name": "jct-http-server-feature-1",
         "namespace": "default",
     }
     routes: List[junction.config.Route] = [
         {
-            "vhost": http_server,
+            "id": "retry-sample",
+            "hostnames": ["jct-http-server.default.svc.cluster.local"],
             "rules": [
                 {
                     "matches": [
@@ -87,17 +90,20 @@ def retry_sample(args):
 def path_match_sample(args):
     print_header("Header Match - 50% of /feature-1/index sent to a different backend")
 
-    http_server: junction.config.Target = {
+    http_server: junction.config.Service = {
+        "type": "kube",
         "name": "jct-http-server",
         "namespace": "default",
     }
-    http_server_feature_1: junction.config.Target = {
+    http_server_feature_1: junction.config.Service = {
+        "type": "kube",
         "name": "jct-http-server-feature-1",
         "namespace": "default",
     }
     routes: List[junction.config.Route] = [
         {
-            "vhost": http_server,
+            "id": "retry-sample",
+            "hostnames": ["jct-http-server.default.svc.cluster.local"],
             "rules": [
                 {
                     "matches": [{"path": {"value": "/feature-1/index"}}],
@@ -154,14 +160,14 @@ def ring_hash_sample(args):
     print_header(
         "RingHash - header USER is hashed so requests with fixed value go to one backend server"
     )
-    http_server: junction.config.Target = {
-        "name": "jct-http-server",
-        "namespace": "default",
-        "port": 8008,
-    }
     backends: List[junction.config.Backend] = [
         {
-            "id": http_server,
+            "id": {
+                "type": "kube",
+                "name": "jct-http-server",
+                "namespace": "default",
+                "port": 8008,
+            },
             "lb": {
                 "type": "RingHash",
                 "minRingSize": 1024,
@@ -195,13 +201,15 @@ def timeouts_sample(args):
         "Timeouts - timeout is 50ms, so if the server takes longer, request should throw"
     )
 
-    http_server: junction.config.Target = {
+    http_server: junction.config.Service = {
+        "type": "kube",
         "name": "jct-http-server",
         "namespace": "default",
     }
     routes: List[junction.config.Route] = [
         {
-            "vhost": http_server,
+            "id": "timeouts-sample",
+            "hostnames": ["jct-http-server.default.svc.cluster.local"],
             "rules": [
                 {
                     "backends": [
@@ -240,13 +248,15 @@ def urllib3_sample(args):
         "urllib3 - We repeat the timeouts sample, using urllib3 directly instead"
     )
 
-    http_server: junction.config.Target = {
+    http_server: junction.config.Service = {
+        "type": "kube",
         "name": "jct-http-server",
         "namespace": "default",
     }
     default_routes: List[junction.config.Route] = [
         {
-            "vhost": http_server,
+            "id": "urllib3-sample",
+            "hostnames": ["jct-http-server.default.svc.cluster.local"],
             "rules": [
                 {
                     "backends": [
