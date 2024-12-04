@@ -1,139 +1,13 @@
 //! HTTP [Route] configuration. [Route]s dynamically congfigure things you might
 //! put directly in client code like timeouts and retries, failure detection, or
 //! picking a different backend based on request data.
-//!
-//! # Routes and URLs
-//!
-//! [Route]s are uniquely identified by a [VirtualHost], which is the
-//! combination of a [Target] and an optional port. Every [VirtualHost] has a
-//! DNS hostname and port. When making an HTTP request a Route is selected by
-//! using the hostname and port the request URL as the [name of a
-//! VirtualHost][VirtualHost::name] and finding a matching route.
-//!
-//! Once a [Route] has been selected, each [rule][RouteRule] is applied to an
-//! entire request to find an appropriate match. See the next section for a
-//! high-level description of matching, and the documentation of
-//! [matches][RouteRule::matches] and [RouteMatch] for more detail.
-//!
-//! # Route Rules
-//!
-//! A [Route] contains zero or more [rules][RouteRule] that describe how to
-//! match a request. Each rule is made of up a set of
-//! [matches][RouteRule::matches], a set of [backends][RouteRule::backends] to
-//! send the request to once a match has been found, and policy on how to handle
-//! retries and failures. For example, the following `Route` uses a Kubernetes
-//! Service as a VirtualHost, matches all traffic to it, and splits it evenly
-//! between a DNS and a Service backend, while applying a simple retry policy:
-//!
-//! ```
-//! # use junction_api::*;
-//! # use junction_api::http::*;
-//! // an example route
-//! let route = Route {
-//!     vhost: Target::kube_service("prod", "example-svc").unwrap().into_vhost(None),
-//!     tags: Default::default(),
-//!     rules: vec![
-//!         RouteRule {
-//!             retry: Some(RouteRetry {
-//!                 codes: vec![500, 503],
-//!                 attempts: Some(3),
-//!                 backoff: Some(Duration::from_millis(500)),
-//!             }),
-//!             backends: vec![
-//!                 WeightedBackend {
-//!                     weight: 1,
-//!                     backend: Target::dns("prod.old-thing.internal")
-//!                         .unwrap()
-//!                         .into_backend(1234),
-//!                 },
-//!                 WeightedBackend {
-//!                     weight: 1,
-//!                     backend: Target::kube_service("prod", "new-thing")
-//!                         .unwrap()
-//!                         .into_backend(8891),
-//!                 },
-//!             ],
-//!             ..Default::default()
-//!         }
-//!     ],
-//! };
-//! ```
-//!
-//! See the [RouteRule] documentation for all of your configuration options,
-//! and [RouteMatch] for different ways to match an incoming request.
-//!
-//! # Matching
-//!
-//! A `RouteRule`s is applied to an outgoing request if any of it's
-//! [matches][RouteRule::matches] matches a request. For example, a rule with
-//! the following matches:
-//!
-//! ```
-//! # use junction_api::*;
-//! # use junction_api::http::*;
-//! let matches = vec![
-//!     RouteMatch {
-//!         path: Some(PathMatch::Exact { value: "/foo".to_string() }),
-//!         headers: vec![
-//!             HeaderMatch::Exact { name: "version".to_string(), value: "v2".to_string() },
-//!         ],
-//!         ..Default::default()
-//!     },
-//!     RouteMatch {
-//!         path: Some(PathMatch::Prefix { value: "/v2/foo".to_string() }),
-//!         ..Default::default()
-//!     },
-//! ];
-//! ```
-//!
-//! would match a request with path `/v2/foo` OR a request with path `/foo` and
-//! the `version: v2` header set. Any request to `/foo` without that header set
-//! would not match.
-//!
-//! # Passthrough Routes
-//!
-//! A [RouteRule] with no backends is called a "passthrough rule". Instead of
-//! dead-ending traffic, it uses the Route's [VirtualHost] as a traffic target,
-//! convering it into a [BackendId] on the fly, using the port of the incoming
-//! request if the [VirtualHost] has no port specified. (see
-//! [VirtualHost::into_backend]).
-//!
-//! For example, given the following route will apply a retry policy to all
-//! requests to `http://example.internal` and use the request port to find
-//! a backend.
-//!
-//! ```
-//! # use junction_api::*;
-//! # use junction_api::http::*;
-//! let route = Route {
-//!     vhost: Target::dns("example.internal").unwrap().into_vhost(None),
-//!     tags: Default::default(),
-//!     rules: vec![
-//!         RouteRule {
-//!             retry: Some(RouteRetry {
-//!                 codes: vec![500, 503],
-//!                 attempts: Some(3),
-//!                 ..Default::default()
-//!             }),
-//!             ..Default::default()
-//!         }
-//!     ],
-//! };
-//! ```
-//!
-//! A request to `http://example.internal:8801` would get sent to a
-//! [backend][BackendId] with the port `8801` and a request to
-//! `http://example.internal:443` would get sent to a backend with port `:443`.
-//!
-//! A route with no rules is a more general case of a passthrough route; it's
-//! equivalent to specifying a single [RouteRule] with no backends that always
-//! matches.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, str::FromStr};
 
 use crate::{
+    backend::BackendId,
     shared::{Duration, Fraction, Regex},
-    BackendId, Hostname, Name, Target, VirtualHost,
+    Hostname, Name, Service,
 };
 use serde::{Deserialize, Serialize};
 
@@ -153,19 +27,138 @@ pub mod tags {
     pub const GENERATED_BY: &str = "junctionlabs.io/generated-by";
 }
 
+/// A matcher for URL hostnames.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(try_from = "String", into = "String")]
+pub enum HostnameMatch {
+    /// Matches any valid subdomain of this hostname.
+    ///
+    /// ```rust
+    /// # use junction_api::http::HostnameMatch;
+    /// # use std::str::FromStr;
+    ///
+    /// let matcher = HostnameMatch::from_str("*.foo.example").unwrap();
+    ///
+    /// assert!(matcher.matches_str("bar.foo.example"));
+    ///
+    /// assert!(!matcher.matches_str("foo.example"));
+    /// assert!(!matcher.matches_str("barfoo.example"));
+    /// ```
+    Subdomain(Hostname),
+
+    /// An exact match for a hostname.
+    Exact(Hostname),
+}
+
+impl HostnameMatch {
+    /// Returns true if hostname is matched by this matcher.
+    pub fn matches(&self, hostname: &Hostname) -> bool {
+        self.matches_str_validated(hostname)
+    }
+
+    /// Returns true if the string s is a valid hostname and matches this pattern.
+    pub fn matches_str(&self, s: &str) -> bool {
+        if Hostname::validate(s.as_bytes()).is_err() {
+            return false;
+        }
+        self.matches_str_validated(s)
+    }
+
+    fn matches_str_validated(&self, s: &str) -> bool {
+        match self {
+            HostnameMatch::Subdomain(d) => {
+                let (subdomain, domain) = s.split_at(s.len() - d.len());
+                domain == &d[..] && subdomain.ends_with('.')
+            }
+            HostnameMatch::Exact(e) => s == e.as_ref(),
+        }
+    }
+}
+
+#[cfg(feature = "typeinfo")]
+impl junction_typeinfo::TypeInfo for HostnameMatch {
+    fn kind() -> junction_typeinfo::Kind {
+        junction_typeinfo::Kind::String
+    }
+}
+
+impl From<Hostname> for HostnameMatch {
+    fn from(hostname: Hostname) -> Self {
+        Self::Exact(hostname)
+    }
+}
+
+impl std::fmt::Display for HostnameMatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HostnameMatch::Subdomain(hostname) => write!(f, "*.{hostname}"),
+            HostnameMatch::Exact(hostname) => f.write_str(hostname),
+        }
+    }
+}
+
+impl FromStr for HostnameMatch {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.strip_prefix("*.") {
+            Some(hostname) => Self::Subdomain(Hostname::from_str(hostname)?),
+            None => Self::Exact(Hostname::from_str(s)?),
+        })
+    }
+}
+
+// implemented so we can use serde(try_from = "String")
+impl TryFrom<String> for HostnameMatch {
+    type Error = crate::Error;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Ok(match s.strip_prefix("*.") {
+            // if there's a prefix match, use FromStr. copying and tossing
+            // the allocated String is probably just as fine as removing the
+            // first two chars and doing a memcopy.
+            Some(hostname) => Self::Subdomain(Hostname::from_str(hostname)?),
+            // if this is an exact match, use Hostname::try_from which
+            // can move the value into the Hostname
+            None => Self::Exact(Hostname::try_from(s)?),
+        })
+    }
+}
+// implemented so we can use serde(into = "String")
+impl From<HostnameMatch> for String {
+    fn from(value: HostnameMatch) -> Self {
+        match value {
+            HostnameMatch::Subdomain(_) => value.to_string(),
+            HostnameMatch::Exact(inner) => inner.0.to_string(),
+        }
+    }
+}
+
 /// A Route is a policy that describes how a request to a specific virtual
 /// host should be routed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Route {
-    /// A virtual hostname that uniquely identifies this route.
-    pub vhost: VirtualHost,
+    /// A globally unique identifier for this Route.
+    ///
+    /// Route IDs must be valid RFC 1035 DNS label names - they must start with
+    /// a lowercase ascii character, and can only contain lowercase ascii
+    /// alphanumeric characters and the `-` character.
+    pub id: Name,
 
     /// A list of arbitrary tags that can be added to a Route.
     #[serde(default)]
     // TODO: limit this a-la kube annotation keys/values.
     pub tags: BTreeMap<String, String>,
+
+    /// The hostnames that match this Route.
+    #[serde(default)]
+    pub hostnames: Vec<HostnameMatch>,
+
+    /// The ports that match this Route.
+    #[serde(default)]
+    pub ports: Vec<u16>,
 
     /// The rules that determine whether a request matches and where traffic
     /// should be routed.
@@ -175,18 +168,23 @@ pub struct Route {
 
 impl Route {
     /// Create a trivial route that passes all traffic for a target directly to
-    /// the same backend target.
-    ///
-    /// If this RouteTarget has no port specified, `80` will be used for the
-    /// backend.
-    pub fn passthrough_route(target: VirtualHost) -> Route {
+    /// the given Service. The request port will be used to identify a
+    /// specific backend at request time.
+    pub fn passthrough_route(id: Name, service: Service) -> Route {
         Route {
-            vhost: target,
+            id,
+            hostnames: vec![service.hostname().into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
                     path: Some(PathMatch::empty_prefix()),
                     ..Default::default()
+                }],
+                backends: vec![BackendRef {
+                    service,
+                    port: None,
+                    weight: 1,
                 }],
                 ..Default::default()
             }],
@@ -238,11 +236,10 @@ pub struct RouteRule {
 
     /// Where the traffic should route if this rule matches.
     ///
-    /// If no backends are specified, traffic is sent to the VirtualHost this
-    /// route was defined with, using the request's port to fill in any
-    /// defaults.
+    /// If no backends are specified, this route becomes a black hole for
+    /// traffic and all matching requests return an error.
     #[serde(default)]
-    pub backends: Vec<WeightedBackend>,
+    pub backends: Vec<BackendRef>,
 }
 
 /// Defines timeouts that can be configured for a HTTP Route.
@@ -667,7 +664,7 @@ pub struct RequestMirrorFilter {
     /// requests will be mirrored.
     pub fraction: Option<Fraction>,
 
-    pub backend: Target,
+    pub backend: Service,
 }
 
 /// Configure client retry policy.
@@ -695,14 +692,25 @@ const fn default_weight() -> u32 {
     1
 }
 
-/// The combination of a backend and a weight.
-//
 // TODO: gateway API also allows filters here under an extended support
 // condition we need to decide whether this is one where its simpler just to
 // drop it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct WeightedBackend {
+pub struct BackendRef {
+    /// The Serivce to route to when traffic matches. This Service will always
+    /// be combined with a `port` to uniquely identify the
+    /// [Backend][crate::backend::Backend] traffic should be routed to.
+    #[serde(flatten)]
+    pub service: Service,
+
+    /// The port to route traffic to, used in combination with
+    /// [service][Self::service] to identify the
+    /// [Backend][crate::backend::Backend] to route traffic to.
+    ///
+    /// If omitted, the port of the incoming request is used to route traffic.
+    pub port: Option<u16>,
+
     /// The relative weight of this backend relative to any other backends in
     /// [the list][RouteRule::backends].
     ///
@@ -712,14 +720,64 @@ pub struct WeightedBackend {
     /// backend with `0` weight is an error.
     #[serde(default = "default_weight")]
     pub weight: u32,
+}
 
-    /// The [Backend][crate::backend::Backend] to route to.
-    #[serde(flatten)]
-    pub backend: BackendId,
+impl BackendRef {
+    #[doc(hidden)]
+    pub fn into_backend_id(&self, default_port: u16) -> BackendId {
+        let port = self.port.unwrap_or(default_port);
+
+        BackendId {
+            service: self.service.clone(),
+            port,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn as_backend_id(&self) -> Option<BackendId> {
+        let port = self.port?;
+
+        Some(BackendId {
+            service: self.service.clone(),
+            port,
+        })
+    }
+
+    #[cfg(feature = "xds")]
+    pub(crate) fn name(&self) -> String {
+        let mut buf = String::new();
+        self.write_name(&mut buf).unwrap();
+        buf
+    }
+
+    #[cfg(feature = "xds")]
+    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.service.write_name(w)?;
+        if let Some(port) = self.port {
+            write!(w, ":{port}")?;
+        }
+
+        Ok(())
+    }
+}
+
+impl FromStr for BackendRef {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (name, port) = super::parse_port(s)?;
+        let backend = Service::from_str(name)?;
+
+        Ok(Self {
+            service: backend,
+            port,
+            weight: default_weight(),
+        })
+    }
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use std::str::FromStr;
 
     use serde::de::DeserializeOwned;
@@ -729,11 +787,58 @@ mod tests {
     use crate::{
         http::{HeaderMatch, RouteRule},
         shared::Regex,
-        Target,
+        Service,
     };
 
     #[test]
-    fn test_header_matcher() {
+    fn test_hostname_match() {
+        let exact_matcher = HostnameMatch::from_str("foo.bar").unwrap();
+        let subdomain_matcher = HostnameMatch::from_str("*.foo.bar").unwrap();
+
+        for invalid_hostname in [
+            "",
+            "*",
+            ".*",
+            ".",
+            "!@#@!#!@",
+            "foo....bar",
+            ".foo.bar",
+            "...foo.bar",
+        ] {
+            assert!(!exact_matcher.matches_str(invalid_hostname));
+            assert!(!subdomain_matcher.matches_str(invalid_hostname));
+        }
+
+        for not_matching in ["blahfoo.bar", "bfoo.bar", "bar.foo"] {
+            assert!(!exact_matcher.matches_str(not_matching));
+            assert!(!subdomain_matcher.matches_str(not_matching));
+        }
+
+        assert!(exact_matcher.matches_str("foo.bar"));
+        assert!(!subdomain_matcher.matches_str("foo.bar"));
+
+        assert!(!exact_matcher.matches_str("blah.foo.bar"));
+        assert!(subdomain_matcher.matches_str("blah.foo.bar"));
+        assert!(subdomain_matcher.matches_str("b.foo.bar"));
+    }
+
+    #[test]
+    fn test_hostname_match_json() {
+        let json_value = json!(["foo.bar.baz", "*.foo.bar.baz",]);
+        let matchers = vec![
+            HostnameMatch::Exact(Hostname::from_static("foo.bar.baz")),
+            HostnameMatch::Subdomain(Hostname::from_static("foo.bar.baz")),
+        ];
+
+        assert_eq!(
+            serde_json::from_value::<Vec<HostnameMatch>>(json_value.clone()).unwrap(),
+            matchers,
+        );
+        assert_eq!(serde_json::to_value(&matchers).unwrap(), json_value,);
+    }
+
+    #[test]
+    fn test_header_matcher_json() {
         let test_json = json!([
             { "name":"bar", "type" : "RegularExpression", "value": ".*foo"},
             { "name":"bar", "value": "a literal"},
@@ -759,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_retry_policy() {
+    fn test_retry_policy_json() {
         let test_json = json!({
             "codes":[ 1, 2 ],
             "attempts": 3,
@@ -772,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_route_rule() {
+    fn test_route_rule_json() {
         let test_json = json!({
             "matches":[
                 {
@@ -798,7 +903,13 @@ mod tests {
                 }
             }],
             "backends":[
-                { "weight": 1, "name": "timeout-svc", "namespace": "foo", "port": 80 }
+                {
+                    "type": "kube",
+                    "name": "timeout-svc",
+                    "namespace": "foo",
+                    "port": 80,
+                    "weight": 1,
+                }
             ],
             "timeouts": {
                 "request": 1.0,
@@ -810,32 +921,37 @@ mod tests {
     }
 
     #[test]
-    fn test_route_roundtrip() {
+    fn test_route_json() {
         assert_deserialize(
             json!({
-                "vhost": { "name": "foo", "namespace": "bar" },
+                "id": "sweet-potato",
+                "hostnames": ["foo.bar.svc.cluster.local"],
                 "rules": [
                     {
-                        "backends": [ { "name": "foo", "namespace": "bar", "port": 80 } ],
+                        "backends": [
+                            {
+                                "type": "kube",
+                                "name": "foo",
+                                "namespace": "bar",
+                                "port": 80,
+                            }
+                        ],
                     }
                 ]
             }),
             Route {
-                vhost: VirtualHost {
-                    target: Target::kube_service("bar", "foo").unwrap(),
-                    port: None,
-                },
+                id: Name::from_static("sweet-potato"),
+                hostnames: vec![Hostname::from_static("foo.bar.svc.cluster.local").into()],
+                ports: vec![],
                 tags: Default::default(),
                 rules: vec![RouteRule {
                     matches: vec![],
                     filters: vec![],
                     timeouts: None,
                     retry: None,
-                    backends: vec![WeightedBackend {
-                        backend: BackendId {
-                            target: Target::kube_service("bar", "foo").unwrap(),
-                            port: 80,
-                        },
+                    backends: vec![BackendRef {
+                        service: Service::kube("bar", "foo").unwrap(),
+                        port: Some(80),
                         weight: 1,
                     }],
                 }],
@@ -844,9 +960,9 @@ mod tests {
     }
 
     #[test]
-    fn test_route_missing_vhost() {
+    fn test_route_json_missing_fields() {
         assert_deserialize_err::<Route>(json!({
-            "soemthing_else": ["foo.bar"],
+            "uhhhh": ["foo.bar"],
             "rules": [
                 {
                     "matches": [],

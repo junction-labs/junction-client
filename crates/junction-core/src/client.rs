@@ -2,78 +2,44 @@ use crate::{
     endpoints::EndpointIter, load_balancer::BackendLb, xds::AdsClient, ConfigCache, Endpoint,
     Error, StaticConfig,
 };
-use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
+use futures::FutureExt;
 use junction_api::{
-    backend::Backend,
+    backend::{Backend, BackendId},
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
-    BackendId, Target, VirtualHost,
 };
 use rand::distributions::WeightedError;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// A view into an HTTP Request before any rewrites or modifications have been
-/// made. It includes the potential [VirtualHost]s that this request may match.
+/// An outgoing HTTP Request, before any rewrites or modifications have been
+/// made.
 ///
-/// Requests are a collection of references and are intended to be cheap to
-/// clone.
+/// Requests are a collection of references and are cheap to clone.
 #[derive(Debug, Clone)]
 pub struct HttpRequest<'a> {
     /// The HTTP Method of the request.
-    pub method: &'a http::Method,
+    method: &'a http::Method,
 
     /// The request URL, before any rewrites or modifications have been made.
-    pub url: &'a crate::Url,
+    url: &'a crate::Url,
 
     /// The request headers, before
-    pub headers: &'a http::HeaderMap,
-
-    // NOTE: This is an Arc because it seems nice to keep HttpRequest Send and
-    // Sync. There's the added cost of bumping an atomic every time we clone but
-    // in the grand scheme of making an HTTP call, this does not seem like it
-    // is worth caring about.
-    vhosts: Arc<[VirtualHost]>,
+    headers: &'a http::HeaderMap,
 }
 
 impl<'a> HttpRequest<'a> {
-    /// The `VirtualHost`s that this request may match.
-    pub fn vhosts(&self) -> &[VirtualHost] {
-        &self.vhosts
-    }
-
     /// Create a request from individual parts.
     pub fn from_parts(
         method: &'a http::Method,
         url: &'a crate::Url,
         headers: &'a http::HeaderMap,
     ) -> crate::Result<Self> {
-        let vhosts = Arc::from(vhosts_for_url(url)?);
-
         Ok(Self {
             method,
             url,
             headers,
-            vhosts,
         })
     }
-}
-
-/// Generate the list of Targets that this URL maps to, taking into account the
-/// URL's `port` and any search path rules. The list of targets will be returned
-/// in the most-to-least specific order.
-///
-/// The URL's explicitly listed port or the default port for the URL's scheme
-/// will also be used to first specify a port-specific target before falling
-/// back to a port-less target.
-pub(crate) fn vhosts_for_url(url: &crate::Url) -> crate::Result<Vec<VirtualHost>> {
-    let target =
-        Target::from_str(url.hostname()).map_err(|e| Error::into_invalid_url(e.to_string()))?;
-
-    Ok(vec![
-        target.clone().into_vhost(Some(url.default_port())),
-        target.into_vhost(None),
-    ])
 }
 
 /// The strategy for udpating Routes, Backends, and Endpoints while resolving.
@@ -147,11 +113,11 @@ impl Config {
 }
 
 impl ConfigCache for Config {
-    async fn get_route(&self, target: &VirtualHost) -> Option<Arc<Route>> {
+    async fn get_route<S: AsRef<str>>(&self, host: S) -> Option<Arc<Route>> {
         match &self {
-            Config::Static(s) => s.get_route(target).await,
-            Config::DynamicEndpoints(s, _) => s.get_route(target).await,
-            Config::Dynamic(d) => d.ads_client.get_route(target).await,
+            Config::Static(s) => s.get_route(host).await,
+            Config::DynamicEndpoints(s, _) => s.get_route(host).await,
+            Config::Dynamic(d) => d.ads_client.get_route(host).await,
         }
     }
 
@@ -260,6 +226,9 @@ impl Client {
     pub fn with_static_endpoints(self, routes: Vec<Route>, backends: Vec<Backend>) -> Client {
         let static_config = Arc::new(StaticConfig::with_inferred(routes, backends));
 
+        // FIXME: this needs a way to subscribe to DNS endpoints or specify endpoints
+        // somehow?
+
         let config = Config::Static(static_config);
         Client { config, ..self }
     }
@@ -292,9 +261,7 @@ impl Client {
     /// when resolving endpoints.
     pub fn dump_routes(&self) -> Vec<Arc<Route>> {
         match &self.config {
-            Config::Static(c) | Config::DynamicEndpoints(c, _) => {
-                c.routes.values().cloned().collect()
-            }
+            Config::Static(c) | Config::DynamicEndpoints(c, _) => c.routes.clone(),
             Config::Dynamic(d) => d.ads_client.iter_routes().collect(),
         }
     }
@@ -325,10 +292,9 @@ impl Client {
         config_mode: ResolveMode,
         request: HttpRequest<'_>,
     ) -> crate::Result<ResolvedRoute> {
-        // only subscribe to vhosts in fully dynamic mode
         if let (ResolveMode::Dynamic, Config::Dynamic(d)) = (config_mode, &self.config) {
             d.ads_client
-                .subscribe_to_vhosts(request.vhosts().iter().cloned())
+                .subscribe_to_hosts([request.url.authority().to_string()])
                 // FIXME: shouldn't be a panic, should be async
                 .expect("ads client overloaded, this is a bug in Junction");
         }
@@ -344,7 +310,7 @@ impl Client {
     /// use, prefer [Client::resolve_http].
     pub async fn resolve_endpoint(
         &self,
-        config_mode: ResolveMode,
+        resolve_mode: ResolveMode,
         resolved: ResolvedRoute,
         request: HttpRequest<'_>,
     ) -> crate::Result<Vec<Endpoint>> {
@@ -354,7 +320,8 @@ impl Client {
         // TODO: should there be a way to subscribe to endpoints here as well?
         // TODO: should we just get rid of the subscribe here and move it into
         //       the get_routes/get_backends/get_endpoints calls???
-        if let (ResolveMode::Dynamic, Config::DynamicEndpoints(_, d)) = (config_mode, &self.config)
+        if let (ResolveMode::Dynamic, Config::Dynamic(d) | Config::DynamicEndpoints(_, d)) =
+            (resolve_mode, &self.config)
         {
             d.ads_client
                 .subscribe_to_backends([resolved.backend.clone()])
@@ -413,9 +380,8 @@ pub struct ResolvedRoute {
     /// The resolved route.
     pub route: Arc<Route>,
 
-    /// The index of the rule that matched the request. This will be missing if
-    /// the matched route was the empty route, which trivially matches all
-    /// requests to its [VirtualHost].
+    /// The index of the rule that matched the request.
+    //TODO: doesn't need to be optional? remove it for the request trace anyway
     pub rule: Option<usize>,
 
     /// The backend selected as part of route resolution.
@@ -429,25 +395,10 @@ pub(crate) async fn resolve_routes(
     use rand::seq::SliceRandom;
 
     // look up the route, grabbing the first route that returns from cache.
-    let matching_route = match get_any(cache, request.vhosts()).await {
+    let matching_route = match cache.get_route(request.url.authority()).await {
         Some(route) => route,
-        None => return Err(Error::no_route_matched(request.vhosts().to_vec())),
+        None => return Err(Error::no_route_matched(request.url.authority().to_string())),
     };
-
-    // if this is the trivial route, match it immediately and return
-    if matching_route.rules.is_empty() {
-        let backend = matching_route
-            .vhost
-            .with_default_port(request.url.default_port())
-            .into_backend()
-            .unwrap();
-
-        return Ok(ResolvedRoute {
-            route: matching_route,
-            rule: None,
-            backend,
-        });
-    }
 
     // if we got here, we have resolved to a list of routes
     let Some((matching_rule_idx, matching_rule)) = find_matching_rule(
@@ -456,48 +407,38 @@ pub(crate) async fn resolve_routes(
         request.url,
         request.headers,
     ) else {
-        return Err(Error::no_rule_matched(matching_route.vhost.clone()));
+        return Err(Error::no_rule_matched(matching_route.id.clone()));
     };
 
     // pick a target at random from the list, respecting weights.
-    //
-    // if the list of backends is empty, allow falling through to the Route's
-    // vhost by using either the vhost port or the request port.
     let weighted_backend = &crate::rand::with_thread_rng(|rng| {
         matching_rule.backends.choose_weighted(rng, |wc| wc.weight)
     });
-    let backend = match weighted_backend {
-        Ok(wb) => wb.backend.clone(),
-        Err(WeightedError::NoItem) => matching_route
-            .vhost
-            .with_default_port(request.url.default_port())
-            .into_backend()
-            .unwrap(),
+
+    let backend_ref = match weighted_backend {
+        Ok(backend_ref) => backend_ref,
+        Err(WeightedError::NoItem) => {
+            return Err(Error::invalid_route(
+                "route has no backends",
+                matching_route.id.clone(),
+                matching_rule_idx,
+            ))
+        }
         Err(_) => {
             return Err(Error::invalid_route(
                 "backends weights are invalid: total weights must be greater than zero",
-                matching_route.vhost.clone(),
+                matching_route.id.clone(),
                 matching_rule_idx,
             ))
         }
     };
+
+    let backend = backend_ref.into_backend_id(request.url.default_port());
     Ok(ResolvedRoute {
         route: matching_route.clone(),
         rule: Some(matching_rule_idx),
         backend,
     })
-}
-
-async fn get_any(cache: &impl ConfigCache, targets: &[VirtualHost]) -> Option<Arc<Route>> {
-    let mut futs: FuturesUnordered<_> = targets.iter().map(|t| cache.get_route(t)).collect();
-
-    while let Some(lookup) = futs.next().await {
-        if let Some(route) = lookup {
-            return Some(route);
-        }
-    }
-
-    None
 }
 
 async fn resolve_endpoint(
@@ -507,7 +448,7 @@ async fn resolve_endpoint(
 ) -> crate::Result<Vec<Endpoint>> {
     let Some(backend) = cache.get_backend(&resolved.backend).await else {
         return Err(Error::no_backend(
-            resolved.route.vhost.clone(),
+            resolved.route.id.clone(),
             resolved.rule,
             resolved.backend,
         ));
@@ -515,7 +456,7 @@ async fn resolve_endpoint(
 
     let Some(endpoints) = cache.get_endpoints(&resolved.backend).await else {
         return Err(Error::no_reachable_endpoints(
-            resolved.route.vhost.clone(),
+            resolved.route.id.clone(),
             backend.config.id.clone(),
         ));
     };
@@ -525,7 +466,7 @@ async fn resolve_endpoint(
         .load_balance(request.url, request.headers, &endpoints);
     let Some(endpoint) = endpoint else {
         return Err(Error::no_reachable_endpoints(
-            resolved.route.vhost.clone(),
+            resolved.route.id.clone(),
             resolved.backend,
         ));
     };
@@ -634,7 +575,7 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
 #[cfg(test)]
 mod test {
     use crate::Url;
-    use junction_api::{http::WeightedBackend, Regex};
+    use junction_api::{http::BackendRef, Hostname, Name, Regex, Service};
     use std::str::FromStr;
 
     use super::*;
@@ -656,26 +597,51 @@ mod test {
             .unwrap()
     }
 
+    #[track_caller]
+    fn assert_resolve_err(cache: &impl ConfigCache, request: HttpRequest<'_>) -> crate::Error {
+        resolve_routes(cache, request)
+            .now_or_never()
+            .unwrap()
+            .unwrap_err()
+    }
+
     #[test]
     fn test_resolve_passthrough_route() {
-        let target = Target::dns("example.com").unwrap();
+        let svc = Service::dns("example.com").unwrap();
+
         let routes = StaticConfig::new(
-            vec![Route::passthrough_route(target.clone().into_vhost(None))],
+            vec![Route::passthrough_route(
+                Name::from_static("example"),
+                svc.clone(),
+            )],
             vec![],
         );
 
+        // check with no port
         let url = Url::from_str("http://example.com/test-path").unwrap();
         let headers = http::HeaderMap::default();
         let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
 
         let resolved = assert_resolve_routes(&routes, request);
-        assert_eq!(resolved.backend, target.into_backend(80));
+        assert_eq!(resolved.backend, svc.as_backend_id(80));
+
+        // check with explicit ports
+        for port in [443, 8008] {
+            let url = Url::from_str(&format!("http://example.com:{port}/test-path")).unwrap();
+            let headers = http::HeaderMap::default();
+            let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
+
+            let resolved = assert_resolve_routes(&routes, request);
+            assert_eq!(resolved.backend, svc.as_backend_id(port));
+        }
     }
 
     #[test]
     fn test_resolve_route_no_rules() {
         let route = Route {
-            vhost: Target::dns("example.com").unwrap().into_vhost(None),
+            id: Name::from_static("no-rules"),
+            hostnames: vec![Hostname::from_static("example.com").into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![],
         };
@@ -686,18 +652,19 @@ mod test {
         let headers = http::HeaderMap::default();
         let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
 
-        let resolved = assert_resolve_routes(&routes, request);
-        assert_eq!(resolved.rule, None);
-        assert_eq!(
-            resolved.backend,
-            Target::dns("example.com").unwrap().into_backend(3214)
-        )
+        let err = assert_resolve_err(&routes, request);
+        assert!(err
+            .to_string()
+            .contains("no routing rules matched the request"));
+        assert!(!err.is_temporary());
     }
 
     #[test]
     fn test_resolve_route_no_backends() {
         let route = Route {
-            vhost: Target::dns("example.com").unwrap().into_vhost(None),
+            id: Name::from_static("no-backends"),
+            hostnames: vec![Hostname::from_static("example.com").into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
@@ -718,26 +685,21 @@ mod test {
             let headers = &http::HeaderMap::default();
             let request = HttpRequest::from_parts(method, url, headers).unwrap();
 
-            let resolved = assert_resolve_routes(&routes, request);
-
-            assert_eq!(
-                resolved.backend,
-                Target::dns("example.com").unwrap().into_backend(port)
-            )
+            let err = assert_resolve_err(&routes, request);
+            assert_eq!(err.to_string(), "invalid route configuration");
+            assert!(!err.is_temporary());
         }
     }
 
     #[test]
-    fn test_resolve_path_route() {
-        let backend_one = Target::kube_service("web", "svc1")
-            .unwrap()
-            .into_backend(8910);
-        let backend_two = Target::kube_service("web", "svc2")
-            .unwrap()
-            .into_backend(8919);
+    fn test_resolve_path_match() {
+        let backend_one = Service::kube("web", "svc1").unwrap();
+        let backend_two = Service::kube("web", "svc2").unwrap();
 
         let route = Route {
-            vhost: Target::dns("example.com").unwrap().into_vhost(None),
+            id: Name::from_static("path-match"),
+            hostnames: vec![Hostname::from_static("example.com").into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -747,16 +709,18 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: backend_one.clone(),
+                        service: backend_one.clone(),
+                        port: Some(8910),
                     }],
                     ..Default::default()
                 },
                 RouteRule {
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: backend_two.clone(),
+                        service: backend_two.clone(),
+                        port: Some(8919),
                     }],
                     ..Default::default()
                 },
@@ -772,7 +736,7 @@ mod test {
 
         // should match the fallthrough rule
         assert_eq!(resolved.rule, Some(1));
-        assert_eq!(resolved.backend, backend_two);
+        assert_eq!(resolved.backend, backend_two.as_backend_id(8919));
 
         let url = Url::from_str("http://example.com/users/123").unwrap();
         let headers = &http::HeaderMap::default();
@@ -780,7 +744,7 @@ mod test {
         let resolved = assert_resolve_routes(&routes, request);
 
         // should match the first rule, with the path match
-        assert_eq!(resolved.backend, backend_one);
+        assert_eq!(resolved.backend, backend_one.as_backend_id(8910));
         assert!(!resolved.route.rules[resolved.rule.unwrap()]
             .matches
             .is_empty());
@@ -792,20 +756,18 @@ mod test {
         let resolved = assert_resolve_routes(&routes, request);
         // should match the first rule, with the path match
         assert_eq!(resolved.rule, Some(0));
-        assert_eq!(resolved.backend, backend_one);
+        assert_eq!(resolved.backend, backend_one.as_backend_id(8910));
     }
 
     #[test]
-    fn test_resolve_query_route() {
-        let backend_one = Target::kube_service("web", "svc1")
-            .unwrap()
-            .into_backend(8910);
-        let backend_two = Target::kube_service("web", "svc2")
-            .unwrap()
-            .into_backend(8919);
+    fn test_resolve_query_match() {
+        let backend_one = Service::kube("web", "svc1").unwrap();
+        let backend_two = Service::kube("web", "svc2").unwrap();
 
         let route = Route {
-            vhost: Target::dns("example.com").unwrap().into_vhost(None),
+            id: Name::from_static("query-match"),
+            hostnames: vec![Hostname::from_static("example.com").into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -822,16 +784,18 @@ mod test {
                         ],
                         ..Default::default()
                     }],
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: backend_one.clone(),
+                        service: backend_one.clone(),
+                        port: Some(8910),
                     }],
                     ..Default::default()
                 },
                 RouteRule {
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: backend_two.clone(),
+                        service: backend_two.clone(),
+                        port: Some(8919),
                     }],
                     ..Default::default()
                 },
@@ -857,7 +821,7 @@ mod test {
             let resolved = assert_resolve_routes(&routes, request);
             // should match the fallthrough rule
             assert_eq!(resolved.rule, Some(1));
-            assert_eq!(resolved.backend, backend_two);
+            assert_eq!(resolved.backend, backend_two.as_backend_id(8919));
         }
 
         let will_match = [
@@ -875,7 +839,7 @@ mod test {
             // should match one of the query matches
             assert_eq!(
                 (resolved.rule, &resolved.backend),
-                (Some(0), &backend_one),
+                (Some(0), &backend_one.as_backend_id(8910)),
                 "should match the first rule: {url}"
             );
         }

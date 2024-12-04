@@ -1,8 +1,8 @@
 use http::HeaderValue;
 use junction_api::{
     backend::{Backend, LbPolicy},
-    http::{HeaderMatch, Route, RouteMatch, RouteRule, WeightedBackend},
-    Regex, Target,
+    http::{BackendRef, HeaderMatch, Route, RouteMatch, RouteRule},
+    Name, Regex, Service,
 };
 use junction_core::Client;
 use std::{env, str::FromStr, time::Duration};
@@ -29,11 +29,13 @@ async fn main() {
     // is running
     tokio::spawn(client.clone().csds_server(8009));
 
-    let nginx = Target::kube_service("default", "nginx").unwrap();
-    let nginx_staging = Target::kube_service("default", "nginx-staging").unwrap();
+    let nginx = Service::kube("default", "nginx").unwrap();
+    let nginx_staging = Service::kube("default", "nginx-staging").unwrap();
 
     let routes = vec![Route {
-        vhost: nginx.clone().into_vhost(None),
+        id: Name::from_static("nginx"),
+        hostnames: vec![nginx.hostname().into()],
+        ports: vec![],
         tags: Default::default(),
         rules: vec![
             RouteRule {
@@ -44,15 +46,17 @@ async fn main() {
                     }],
                     ..Default::default()
                 }],
-                backends: vec![WeightedBackend {
-                    backend: nginx_staging.clone().into_backend(80),
+                backends: vec![BackendRef {
+                    service: nginx_staging.clone(),
+                    port: Some(80),
                     weight: 1,
                 }],
                 ..Default::default()
             },
             RouteRule {
-                backends: vec![WeightedBackend {
-                    backend: nginx.clone().into_backend(80),
+                backends: vec![BackendRef {
+                    service: nginx.clone(),
+                    port: Some(80),
                     weight: 1,
                 }],
                 ..Default::default()
@@ -61,11 +65,11 @@ async fn main() {
     }];
     let backends = vec![
         Backend {
-            id: nginx.into_backend(80),
+            id: nginx.as_backend_id(80),
             lb: LbPolicy::Unspecified,
         },
         Backend {
-            id: nginx_staging.into_backend(80),
+            id: nginx_staging.as_backend_id(80),
             lb: LbPolicy::Unspecified,
         },
     ];

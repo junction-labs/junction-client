@@ -33,7 +33,7 @@ use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::TryStreamExt;
-use junction_api::{http::Route, BackendId, Hostname, Target, VirtualHost};
+use junction_api::{backend::BackendId, http::Route, Hostname, Service};
 use std::{collections::BTreeSet, future::Future, io::ErrorKind, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -77,8 +77,8 @@ pub struct XdsConfig {
 
 #[derive(Debug)]
 enum SubscriptionUpdate {
-    AddVirtualHosts(Vec<VirtualHost>),
-    RemoveVirtualHosts(Vec<VirtualHost>),
+    AddHosts(Vec<String>),
+    RemoveHosts(Vec<String>),
     AddBackends(Vec<BackendId>),
     RemoveBackends(Vec<BackendId>),
 }
@@ -151,13 +151,13 @@ impl AdsClient {
         Ok((client, task))
     }
 
-    pub(super) fn subscribe_to_vhosts(
+    pub(super) fn subscribe_to_hosts(
         &self,
-        vhosts: impl IntoIterator<Item = VirtualHost>,
+        hosts: impl IntoIterator<Item = String>,
     ) -> Result<(), ()> {
-        let vhosts = vhosts.into_iter().collect();
+        let hosts = hosts.into_iter().collect();
         self.subs
-            .try_send(SubscriptionUpdate::AddVirtualHosts(vhosts))
+            .try_send(SubscriptionUpdate::AddHosts(hosts))
             .map_err(|_| ())?;
 
         Ok(())
@@ -165,13 +165,13 @@ impl AdsClient {
 
     // TODO: call this on client dropping defaults
     #[allow(unused)]
-    pub(super) fn unsubscribe_from_vhosts(
+    pub(super) fn unsubscribe_from_hosts(
         &self,
-        vhosts: impl IntoIterator<Item = VirtualHost>,
+        hosts: impl IntoIterator<Item = String>,
     ) -> Result<(), ()> {
-        let vhosts = vhosts.into_iter().collect();
+        let hosts = hosts.into_iter().collect();
         self.subs
-            .try_send(SubscriptionUpdate::RemoveVirtualHosts(vhosts))
+            .try_send(SubscriptionUpdate::RemoveHosts(hosts))
             .map_err(|_| ())?;
 
         Ok(())
@@ -224,26 +224,23 @@ impl AdsClient {
 }
 
 impl ConfigCache for AdsClient {
-    async fn get_route(
-        &self,
-        target: &junction_api::VirtualHost,
-    ) -> Option<std::sync::Arc<junction_api::http::Route>> {
-        self.cache.get_route(target).await
+    async fn get_route<S: AsRef<str>>(&self, host: S) -> Option<Arc<Route>> {
+        self.cache.get_route(host).await
     }
 
     async fn get_backend(
         &self,
-        target: &junction_api::BackendId,
+        target: &junction_api::backend::BackendId,
     ) -> Option<std::sync::Arc<crate::BackendLb>> {
         self.cache.get_backend(target).await
     }
 
     async fn get_endpoints(
         &self,
-        backend: &junction_api::BackendId,
+        backend: &junction_api::backend::BackendId,
     ) -> Option<std::sync::Arc<crate::load_balancer::EndpointGroup>> {
-        match &backend.target {
-            junction_api::Target::Dns(dns) => {
+        match &backend.service {
+            junction_api::Service::Dns(dns) => {
                 self.dns
                     .get_endpoints_await(&dns.hostname, backend.port)
                     .await
@@ -551,6 +548,13 @@ struct DnsUpdates {
     sync: bool,
 }
 
+#[cfg(test)]
+impl DnsUpdates {
+    fn is_noop(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty() && !self.sync
+    }
+}
+
 impl<'a> AdsConnection<'a> {
     fn new(node: xds_core::Node, cache: &'a mut Cache) -> (Self, Vec<DiscoveryRequest>) {
         let conn = Self {
@@ -580,9 +584,9 @@ impl AdsConnection<'_> {
     // inputs
 
     fn handle_subscription_update(&mut self, reg: SubscriptionUpdate) -> Vec<DiscoveryRequest> {
-        fn target_dns_name(target: &Target) -> Option<Hostname> {
+        fn target_dns_name(target: &Service) -> Option<Hostname> {
             match target {
-                Target::Dns(dns) => Some(dns.hostname.clone()),
+                Service::Dns(dns) => Some(dns.hostname.clone()),
                 _ => None,
             }
         }
@@ -590,22 +594,22 @@ impl AdsConnection<'_> {
         let rtype;
         let mut changed = false;
         match reg {
-            SubscriptionUpdate::AddVirtualHosts(vhosts) => {
+            SubscriptionUpdate::AddHosts(hosts) => {
                 rtype = ResourceType::Listener;
-                for vhost in vhosts {
-                    changed |= self.cache.subscribe(rtype, &vhost.name());
+                for host in hosts {
+                    changed |= self.cache.subscribe(rtype, host.as_str());
                 }
             }
-            SubscriptionUpdate::RemoveVirtualHosts(vhosts) => {
+            SubscriptionUpdate::RemoveHosts(hosts) => {
                 rtype = ResourceType::Listener;
-                for vhost in vhosts {
-                    changed |= self.cache.delete(rtype, &vhost.name());
+                for host in hosts {
+                    changed |= self.cache.delete(rtype, host.as_str());
                 }
             }
             SubscriptionUpdate::AddBackends(backends) => {
                 rtype = ResourceType::Cluster;
                 for backend in backends {
-                    if let Some(dns_name) = target_dns_name(&backend.target) {
+                    if let Some(dns_name) = target_dns_name(&backend.service) {
                         self.dns_subscribes.insert((dns_name, backend.port));
                     }
                     changed |= self.cache.subscribe(rtype, &backend.name())
@@ -614,7 +618,7 @@ impl AdsConnection<'_> {
             SubscriptionUpdate::RemoveBackends(backends) => {
                 rtype = ResourceType::Listener;
                 for backend in backends {
-                    if let Some(dns_name) = target_dns_name(&backend.target) {
+                    if let Some(dns_name) = target_dns_name(&backend.service) {
                         self.dns_unsubscribes.insert((dns_name, backend.port));
                     }
                     changed |= self.cache.delete(rtype, &backend.name())
@@ -842,7 +846,7 @@ mod test_ads_conn {
         cache.insert(
             "123".into(),
             ResourceVec::Listener(vec![xds_test::listener!(
-                "nginx.default.svc.cluster.local" => [xds_test::vhost!(
+                "nginx.default.svc.cluster.local", "nginx" => [xds_test::vhost!(
                     "default",
                     ["nginx.default.svc.cluster.local"],
                     [xds_test::route!(default "nginx.default.svc.cluster.local:80"),],
@@ -900,32 +904,35 @@ mod test_ads_conn {
         let mut cache = Cache::default();
         let (mut conn, _) = new_conn(&mut cache);
 
-        let request = conn.handle_subscription_update(SubscriptionUpdate::AddVirtualHosts(vec![
-            Target::dns("website.internal").unwrap().into_vhost(None),
-            Target::kube_service("default", "nginx")
+        let request = conn.handle_subscription_update(SubscriptionUpdate::AddHosts(vec![
+            Service::dns("website.internal")
                 .unwrap()
-                .into_vhost(None),
+                .as_backend_id(80)
+                .name(),
+            Service::kube("default", "nginx")
+                .unwrap()
+                .as_backend_id(443)
+                .name(),
         ]));
 
         // dns shouldn't update for routes
         let updates = conn.dns_updates();
-        assert!(
-            updates.add.is_empty() && updates.remove.is_empty() && !updates.sync,
-            "dns should not update"
-        );
+        assert!(updates.is_noop(), "dns should not update");
         assert_eq!(
             request,
             vec![xds_test::req!(
                 t = ResourceType::Listener,
-                rs = vec!["website.internal", "nginx.default.svc.cluster.local",]
+                rs = vec!["website.internal:80", "nginx.default.svc.cluster.local:443",]
             ),],
         );
 
         let request = conn.handle_subscription_update(SubscriptionUpdate::AddBackends(vec![
-            Target::dns("website.internal").unwrap().into_backend(4567),
-            Target::kube_service("default", "nginx")
+            Service::dns("website.internal")
                 .unwrap()
-                .into_backend(8080),
+                .as_backend_id(4567),
+            Service::kube("default", "nginx")
+                .unwrap()
+                .as_backend_id(8080),
         ]));
         assert_eq!(
             request,
@@ -955,21 +962,20 @@ mod test_ads_conn {
         let mut cache = Cache::default();
         let (mut conn, _) = new_conn(&mut cache);
 
-        let requests = conn.handle_subscription_update(SubscriptionUpdate::AddVirtualHosts(vec![
-            Target::kube_service("default", "nginx")
-                .unwrap()
-                .into_vhost(None),
-        ]));
+        let requests =
+            conn.handle_subscription_update(SubscriptionUpdate::AddHosts(vec![Service::kube(
+                "default", "nginx",
+            )
+            .unwrap()
+            .as_backend_id(8080)
+            .name()]));
         let updates = conn.dns_updates();
-        assert!(
-            updates.add.is_empty() && updates.remove.is_empty() && !updates.sync,
-            "should be no DNS changes",
-        );
+        assert!(updates.is_noop(), "should be no DNS changes");
         assert_eq!(
             requests,
             vec![xds_test::req!(
                 t = ResourceType::Listener,
-                rs = vec!["nginx.default.svc.cluster.local"]
+                rs = vec!["nginx.default.svc.cluster.local:8080"]
             )],
         );
 
@@ -977,7 +983,7 @@ mod test_ads_conn {
             "v1",
             "n1",
             vec![xds_test::listener!(
-                "nginx.default.svc.cluster.local" => [xds_test::vhost!(
+                "nginx.default.svc.cluster.local:8080", "inline-route" => [xds_test::vhost!(
                     "default",
                     ["nginx.default.svc.cluster.local"],
                     [xds_test::route!(default "nginx.internal:80"),],
@@ -995,7 +1001,7 @@ mod test_ads_conn {
                     ResourceType::Listener,
                     "v1",
                     "n1",
-                    vec!["nginx.default.svc.cluster.local"]
+                    vec!["nginx.default.svc.cluster.local:8080"]
                 ),
                 // request the cluster that it targets. will have no version or nonce
                 xds_test::discovery_request(
@@ -1014,21 +1020,98 @@ mod test_ads_conn {
     }
 
     #[test]
+    fn test_ads_race_no_inline() {
+        let mut cache = Cache::default();
+        let (mut conn, _) = new_conn(&mut cache);
+
+        // subscribe to a listener, generate an LDS request for it
+        let requests =
+            conn.handle_subscription_update(SubscriptionUpdate::AddHosts(vec![Service::kube(
+                "default", "nginx",
+            )
+            .unwrap()
+            .as_backend_id(80)
+            .name()]));
+
+        assert_eq!(
+            requests,
+            vec![xds_test::req!(
+                t = ResourceType::Listener,
+                rs = vec!["nginx.default.svc.cluster.local:80"]
+            )],
+        );
+
+        // the ads response includes a single route config. expect an ACK and an
+        // RDS request now.
+        let requests = conn.handle_ads_message(xds_test::discovery_response(
+            "v1",
+            "n1",
+            vec![xds_test::listener!(
+                "nginx.default.svc.cluster.local:80",
+                "nginx"
+            )],
+        ));
+        assert_eq!(
+            requests,
+            vec![
+                xds_test::req!(
+                    t = ResourceType::Listener,
+                    v = "v1",
+                    n = "n1",
+                    rs = vec!["nginx.default.svc.cluster.local:80"]
+                ),
+                xds_test::req!(t = ResourceType::RouteConfiguration, rs = vec!["nginx"]),
+            ]
+        );
+
+        // the RDS response returns a route with a single EDS cluster
+        let requests = conn.handle_ads_message(xds_test::discovery_response(
+            "v1",
+            "n2",
+            vec![xds_test::route_config!(
+                "nginx",
+                [xds_test::vhost!(
+                    "vhost",
+                    ["nginx.default.svc.cluster.local:80"],
+                    [xds_test::route!(default "nginx.default.svc.cluster.local:80")]
+                )]
+            )],
+        ));
+        assert_eq!(
+            requests,
+            vec![
+                xds_test::req!(
+                    t = ResourceType::RouteConfiguration,
+                    v = "v1",
+                    n = "n2",
+                    rs = vec!["nginx"]
+                ),
+                xds_test::req!(
+                    t = ResourceType::Cluster,
+                    rs = vec!["nginx.default.svc.cluster.local:80"]
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn test_ads_race() {
         let mut cache = Cache::default();
         let (mut conn, _) = new_conn(&mut cache);
 
         // subscribe to a listener, generate an XDS subscription for it
-        let requests = conn.handle_subscription_update(SubscriptionUpdate::AddVirtualHosts(vec![
-            Target::kube_service("default", "nginx")
-                .unwrap()
-                .into_vhost(None),
-        ]));
+        let requests =
+            conn.handle_subscription_update(SubscriptionUpdate::AddHosts(vec![Service::kube(
+                "default", "nginx",
+            )
+            .unwrap()
+            .as_backend_id(80)
+            .name()]));
         assert_eq!(
             requests,
             vec![xds_test::req!(
                 t = ResourceType::Listener,
-                rs = vec!["nginx.default.svc.cluster.local"]
+                rs = vec!["nginx.default.svc.cluster.local:80"]
             )],
         );
 
@@ -1037,7 +1120,7 @@ mod test_ads_conn {
             "v1",
             "n1",
             vec![xds_test::listener!(
-                "nginx.default.svc.cluster.local" => [xds_test::vhost!(
+                "nginx.default.svc.cluster.local:80", "inline-route" => [xds_test::vhost!(
                     "default",
                     ["nginx.default.svc.cluster.local"],
                     [
@@ -1058,7 +1141,7 @@ mod test_ads_conn {
                     t = ResourceType::Listener,
                     v = "v1",
                     n = "n1",
-                    rs = vec!["nginx.default.svc.cluster.local"]
+                    rs = vec!["nginx.default.svc.cluster.local:80"]
                 ),
                 xds_test::req!(
                     t = ResourceType::Cluster,
@@ -1094,7 +1177,7 @@ mod test_ads_conn {
                     v = "v1",
                     n = "n1",
                     rs = vec![
-                        "nginx.default.svc.cluster.local",
+                        "nginx.default.svc.cluster.local:80",
                         "nginx.internal.lb.jct:80"
                     ],
                 ),
@@ -1132,7 +1215,7 @@ mod test_ads_conn {
                     v = "v1",
                     n = "n1",
                     rs = vec![
-                        "nginx.default.svc.cluster.local",
+                        "nginx.default.svc.cluster.local:80",
                         "nginx.internal.lb.jct:80",
                         "nginx-staging.internal.lb.jct:80",
                     ],

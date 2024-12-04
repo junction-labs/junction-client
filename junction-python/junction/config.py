@@ -8,14 +8,14 @@ Duration = str | int | float
 """A duration expressed as a total number of seconds. Durations should never be negative."""
 
 
-class TargetDns(typing.TypedDict):
+class ServiceDns(typing.TypedDict):
     type: typing.Literal["Dns"]
     hostname: str
     """A valid RFC1123 DNS domain name."""
 
 
-class TargetKubeService(typing.TypedDict):
-    type: typing.Literal["KubeService"]
+class ServiceKube(typing.TypedDict):
+    type: typing.Literal["Kube"]
     name: str
     """The name of the Kubernetes Service to target."""
 
@@ -24,48 +24,7 @@ class TargetKubeService(typing.TypedDict):
     specified, and won't be inferred from context."""
 
 
-Target = TargetDns | TargetKubeService
-
-
-class VirtualHost(typing.TypedDict):
-    """A virtual hostname. `VirtualHosts` represent the primary layer of
-    indirection in Junction. Traffic sent to a `VirtualHost` is routed to an
-    appropriate backend based on the content of the request.
-
-    VirtualHosts uniquely map to the Authority section of a URL."""
-
-    hostname: str
-    """A valid RFC1123 DNS domain name."""
-
-    name: str
-    """The name of the Kubernetes Service to target."""
-
-    namespace: str
-    """The namespace of the Kubernetes service to target. This must be explicitly
-    specified, and won't be inferred from context."""
-
-    type: typing.Literal["Dns"] | typing.Literal["KubeService"]
-    port: int
-    """The port this virtual hostname should apply to. If no port is specified,
-    traffic is allowed on any port."""
-
-
-class BackendId(typing.TypedDict):
-    """A target and port together uniquely represent a [Backend][crate::backend::Backend]."""
-
-    hostname: str
-    """A valid RFC1123 DNS domain name."""
-
-    name: str
-    """The name of the Kubernetes Service to target."""
-
-    namespace: str
-    """The namespace of the Kubernetes service to target. This must be explicitly
-    specified, and won't be inferred from context."""
-
-    type: typing.Literal["Dns"] | typing.Literal["KubeService"]
-    port: int
-    """The port backend traffic is sent on."""
+Service = ServiceDns | ServiceKube
 
 
 class Fraction(typing.TypedDict):
@@ -75,18 +34,7 @@ class Fraction(typing.TypedDict):
     denominator: int
 
 
-class WeightedBackend(typing.TypedDict):
-    """The combination of a backend and a weight."""
-
-    weight: int
-    """The relative weight of this backend relative to any other backends in
-    [the list][RouteRule::backends].
-
-    If not specified, defaults to `1`.
-
-    An individual backend may have a weight of `0`, but specifying every
-    backend with `0` weight is an error."""
-
+class BackendRef(typing.TypedDict):
     hostname: str
     """A valid RFC1123 DNS domain name."""
 
@@ -97,9 +45,22 @@ class WeightedBackend(typing.TypedDict):
     """The namespace of the Kubernetes service to target. This must be explicitly
     specified, and won't be inferred from context."""
 
-    type: typing.Literal["Dns"] | typing.Literal["KubeService"]
+    type: typing.Literal["Dns"] | typing.Literal["Kube"]
     port: int
-    """The port backend traffic is sent on."""
+    """The port to route traffic to, used in combination with
+    [service][Self::service] to identify the
+    [Backend][crate::backend::Backend] to route traffic to.
+
+    If omitted, the port of the incoming request is used to route traffic."""
+
+    weight: int
+    """The relative weight of this backend relative to any other backends in
+    [the list][RouteRule::backends].
+
+    If not specified, defaults to `1`.
+
+    An individual backend may have a weight of `0`, but specifying every
+    backend with `0` weight is an error."""
 
 
 class RouteTimeouts(typing.TypedDict):
@@ -239,27 +200,56 @@ class RouteRule(typing.TypedDict):
     retry: RouteRetry
     """How to retry requests. If not specified, requests are not retried."""
 
-    backends: typing.List[WeightedBackend]
+    backends: typing.List[BackendRef]
     """Where the traffic should route if this rule matches.
 
-    If no backends are specified, traffic is sent to the VirtualHost this
-    route was defined with, using the request's port to fill in any
-    defaults."""
+    If no backends are specified, this route becomes a black hole for
+    traffic and all matching requests return an error."""
 
 
 class Route(typing.TypedDict):
     """A Route is a policy that describes how a request to a specific virtual
     host should be routed."""
 
-    vhost: VirtualHost
-    """A virtual hostname that uniquely identifies this route."""
+    id: str
+    """A globally unique identifier for this Route.
+
+    Route IDs must be valid RFC 1035 DNS label names - they must start with
+    a lowercase ascii character, and can only contain lowercase ascii
+    alphanumeric characters and the `-` character."""
 
     tags: typing.Dict[str, str]
     """A list of arbitrary tags that can be added to a Route."""
 
+    hostnames: typing.List[str]
+    """The hostnames that match this Route."""
+
+    ports: typing.List[int]
+    """The ports that match this Route."""
+
     rules: typing.List[RouteRule]
     """The rules that determine whether a request matches and where traffic
     should be routed."""
+
+
+class BackendId(typing.TypedDict):
+    """A Backend is uniquely identifiable by a combination of Service and port.
+
+    [Backend][crate::backend::Backend]."""
+
+    hostname: str
+    """A valid RFC1123 DNS domain name."""
+
+    name: str
+    """The name of the Kubernetes Service to target."""
+
+    namespace: str
+    """The namespace of the Kubernetes service to target. This must be explicitly
+    specified, and won't be inferred from context."""
+
+    type: typing.Literal["Dns"] | typing.Literal["Kube"]
+    port: int
+    """The port backend traffic is sent on."""
 
 
 class SessionAffinityHashParam(typing.TypedDict):
@@ -311,12 +301,12 @@ LbPolicy = LbPolicyRoundRobin | LbPolicyRingHash | LbPolicyUnspecified
 class Backend(typing.TypedDict):
     """A Backend is a logical target for network traffic.
 
-    A backend configures how all traffic for it's `target` is handled. Any
-    traffic routed to this backend will use its load balancing policy to evenly
-    spread traffic across all available endpoints."""
+    A backend configures how all traffic for its `target` is handled. Any
+    traffic routed to this backend will use the configured load balancing policy
+    to spread traffic across available endpoints."""
 
     id: BackendId
-    """A unique description of what this backend is."""
+    """A unique identifier for this backend."""
 
     lb: LbPolicy
     """How traffic to this target should be load balanced."""

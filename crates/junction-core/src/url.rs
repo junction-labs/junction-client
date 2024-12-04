@@ -1,6 +1,4 @@
-use std::str::FromStr;
-
-use http::uri::{Authority, PathAndQuery, Scheme};
+use std::{borrow::Cow, str::FromStr};
 
 use crate::Error;
 
@@ -23,9 +21,9 @@ use crate::Error;
 /// `Url`.
 #[derive(Clone, Debug)]
 pub struct Url {
-    scheme: Scheme,
-    authority: Authority,
-    path_and_query: PathAndQuery,
+    scheme: http::uri::Scheme,
+    authority: http::uri::Authority,
+    path_and_query: http::uri::PathAndQuery,
 }
 
 impl std::fmt::Display for Url {
@@ -46,7 +44,6 @@ impl std::fmt::Display for Url {
     }
 }
 
-// FIXME: use some of the Bytes machinery to avoid copying input uris
 impl Url {
     pub fn new(uri: http::Uri) -> crate::Result<Self> {
         let uri = uri.into_parts();
@@ -67,7 +64,7 @@ impl Url {
         };
         let path_and_query = uri
             .path_and_query
-            .unwrap_or_else(|| PathAndQuery::from_static("/"));
+            .unwrap_or_else(|| http::uri::PathAndQuery::from_static("/"));
 
         Ok(Self {
             scheme,
@@ -90,10 +87,6 @@ impl FromStr for Url {
 impl Url {
     pub fn scheme(&self) -> &str {
         self.scheme.as_str()
-    }
-
-    pub fn authority(&self) -> &str {
-        self.authority.as_str()
     }
 
     pub fn hostname(&self) -> &str {
@@ -123,5 +116,16 @@ impl Url {
 
     pub fn request_uri(&self) -> &str {
         self.path_and_query.as_str()
+    }
+
+    pub(crate) fn authority(&self) -> Cow<'_, str> {
+        match self.authority.port() {
+            Some(_) => Cow::Borrowed(self.authority.as_str()),
+            None => Cow::Owned(format!(
+                "{host}:{port}",
+                host = self.authority.as_str(),
+                port = self.default_port()
+            )),
+        }
     }
 }
