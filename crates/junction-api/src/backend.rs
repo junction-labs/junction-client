@@ -1,21 +1,98 @@
 //! Backends are the logical target of network traffic. They have an identity and
 //! a load-balancing policy. See [Backend] to get started.
 
-use crate::BackendId;
+use crate::{Error, Service};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "typeinfo")]
 use junction_typeinfo::TypeInfo;
 
+/// A Backend is uniquely identifiable by a combination of Service and port.
+///
+/// [Backend][crate::backend::Backend].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct BackendId {
+    /// The logical traffic target that this backend configures.
+    #[serde(flatten)]
+    pub service: Service,
+
+    /// The port backend traffic is sent on.
+    pub port: u16,
+}
+
+impl std::fmt::Display for BackendId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.write_name(f)
+    }
+}
+
+impl std::str::FromStr for BackendId {
+    type Err = Error;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        let (name, port) = super::parse_port(name)?;
+        let port =
+            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
+        let service = Service::from_str(name)?;
+
+        Ok(Self { service, port })
+    }
+}
+
+impl BackendId {
+    /// The cannonical name of this ID. This is an alias for the
+    /// [Display][std::fmt::Display] representation of this ID.
+    pub fn name(&self) -> String {
+        let mut buf = String::new();
+        self.write_name(&mut buf).unwrap();
+        buf
+    }
+
+    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.service.write_name(w)?;
+        write!(w, ":{port}", port = self.port)?;
+
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn lb_config_route_name(&self) -> String {
+        let mut buf = String::new();
+        self.write_lb_config_route_name(&mut buf).unwrap();
+        buf
+    }
+
+    fn write_lb_config_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
+        self.service.write_lb_config_route_name(w)?;
+        write!(w, ":{port}", port = self.port)?;
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn from_lb_config_route_name(name: &str) -> Result<Self, Error> {
+        let (name, port) = super::parse_port(name)?;
+        let port =
+            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
+
+        let target = Service::from_lb_config_route_name(name)?;
+
+        Ok(Self {
+            service: target,
+            port,
+        })
+    }
+}
+
 /// A Backend is a logical target for network traffic.
 ///
-/// A backend configures how all traffic for it's `target` is handled. Any
-/// traffic routed to this backend will use its load balancing policy to evenly
-/// spread traffic across all available endpoints.
+/// A backend configures how all traffic for its `target` is handled. Any
+/// traffic routed to this backend will use the configured load balancing policy
+/// to spread traffic across available endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Backend {
-    /// A unique description of what this backend is.
+    /// A unique identifier for this backend.
     pub id: BackendId,
 
     /// How traffic to this target should be load balanced.
@@ -82,48 +159,6 @@ pub(crate) const fn default_min_ring_size() -> u32 {
     1024
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn parses_lb_policy() {
-        let test_json = json!({
-            "type":"RingHash",
-            "minRingSize": 100
-        });
-        let obj: LbPolicy = serde_json::from_value(test_json.clone()).unwrap();
-
-        assert_eq!(
-            obj,
-            LbPolicy::RingHash(RingHashParams {
-                min_ring_size: 100,
-                hash_params: vec![]
-            })
-        );
-
-        assert_eq!(
-            json!({"type": "RingHash", "min_ring_size": 100}),
-            serde_json::to_value(obj).unwrap(),
-        );
-    }
-
-    #[test]
-    fn test_backend_json_roundtrip() {
-        let test_json = json!({
-            "id": { "name": "foo", "namespace": "bar", "port": 789 },
-            "lb": {
-                "type": "Unspecified",
-            },
-        });
-        let obj: Backend = serde_json::from_value(test_json.clone()).unwrap();
-        let output_json = serde_json::to_value(obj).unwrap();
-        assert_eq!(test_json, output_json);
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
@@ -165,12 +200,48 @@ pub struct SessionAffinity {
 }
 
 #[cfg(test)]
-mod test_session_affinity {
-    use super::*;
+mod test {
     use serde_json::json;
 
+    use super::*;
+
     #[test]
-    fn parses_session_affinity_policy() {
+    fn test_lb_policy_json() {
+        let test_json = json!({
+            "type":"RingHash",
+            "minRingSize": 100
+        });
+        let obj: LbPolicy = serde_json::from_value(test_json.clone()).unwrap();
+
+        assert_eq!(
+            obj,
+            LbPolicy::RingHash(RingHashParams {
+                min_ring_size: 100,
+                hash_params: vec![]
+            })
+        );
+
+        assert_eq!(
+            json!({"type": "RingHash", "min_ring_size": 100}),
+            serde_json::to_value(obj).unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_backend_json() {
+        let test_json = json!({
+            "id": { "type": "kube", "name": "foo", "namespace": "bar", "port": 789 },
+            "lb": {
+                "type": "Unspecified",
+            },
+        });
+        let obj: Backend = serde_json::from_value(test_json.clone()).unwrap();
+        let output_json = serde_json::to_value(obj).unwrap();
+        assert_eq!(test_json, output_json);
+    }
+
+    #[test]
+    fn test_session_affinity_json() {
         let test_json = json!({
             "hash_params": [
                 { "type": "Header", "name": "FOO",  "terminal": true },

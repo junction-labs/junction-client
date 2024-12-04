@@ -5,10 +5,7 @@
 use std::str::FromStr;
 
 use crate::xds::ResourceType;
-use junction_api::{
-    backend::{Backend, LbPolicy},
-    BackendId,
-};
+use junction_api::backend::{Backend, BackendId, LbPolicy};
 use xds_api::pb::{
     envoy::{
         config::{
@@ -31,8 +28,8 @@ macro_rules! listener {
     ($name:expr, $route_name:expr$(,)*) => {{
         crate::xds::test::api_listener_rds($name, $route_name)
     }};
-    ($name:expr => [$($vhost:expr),*$(,)*]$(,)?) => {{
-        crate::xds::test::api_listener_inline_routes($name, vec![
+    ($name:expr, $route_name:expr => [$($vhost:expr),*$(,)*]$(,)?) => {{
+        crate::xds::test::api_listener_inline_routes($name, $route_name, vec![
             $(
                 $vhost,
             )*
@@ -87,7 +84,7 @@ pub(crate) use cla;
 
 macro_rules! route_config {
     ($name:expr, $vhosts:expr) => {{
-        xds_route::RouteConfiguration {
+        xds_api::pb::envoy::config::route::v3::RouteConfiguration {
             name: $name.to_string(),
             virtual_hosts: $vhosts.into_iter().collect(),
             ..Default::default()
@@ -195,13 +192,14 @@ pub fn api_listener_rds(name: &'static str, route_name: &'static str) -> xds_lis
 
 pub fn api_listener_inline_routes(
     name: &'static str,
+    route_name: &'static str,
     virtual_hosts: Vec<xds_route::VirtualHost>,
 ) -> xds_listener::Listener {
     use xds_http::{http_connection_manager::RouteSpecifier, http_filter::ConfigType};
 
     let http_router_filter = Router::default();
     let route_specifier = RouteSpecifier::RouteConfig(xds_route::RouteConfiguration {
-        name: name.to_string(),
+        name: route_name.to_string(),
         virtual_hosts,
         ..Default::default()
     });

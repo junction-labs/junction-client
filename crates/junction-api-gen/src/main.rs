@@ -8,11 +8,9 @@ use junction_typeinfo::TypeInfo as _;
 /// This is not a general purpose tool.
 fn main() {
     let items = vec![
-        junction_api::Target::item(),
-        junction_api::VirtualHost::item(),
-        junction_api::BackendId::item(),
+        junction_api::Service::item(),
         junction_api::Fraction::item(),
-        junction_api::http::WeightedBackend::item(),
+        junction_api::http::BackendRef::item(),
         junction_api::http::RouteTimeouts::item(),
         junction_api::http::RouteRetry::item(),
         junction_api::http::HeaderValue::item(),
@@ -31,6 +29,7 @@ fn main() {
         // junction_api::http::RouteFilter::item(),
         junction_api::http::RouteRule::item(),
         junction_api::http::Route::item(),
+        junction_api::backend::BackendId::item(),
         junction_api::backend::SessionAffinityHashParam::item(),
         junction_api::backend::SessionAffinity::item(),
         junction_api::backend::LbPolicy::item(),

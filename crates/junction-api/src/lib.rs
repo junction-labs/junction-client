@@ -4,39 +4,31 @@
 //! plain Rust strucs, and can be serialized/deserialized with a [serde]
 //! compatible library.
 //!
-//! All of the configuration here should be correct by construction - if you can
-//! create a struct, it's valid Junction configuration. Different
-//! representations of the same configuration are possible, and clients and
-//! control planes may normalize your configuration differently, so when writing
-//! tests for your configuration be aware that it may be normalized while
-//! converting between different formats or data sources.
-//!
 //! # Core Concepts
 //!
-//! ## Targets
+//! ## Service
 //!
-//! The Junction API is built around the idea of a traffic [Target], a a unique
-//! identifier for a place to send traffic. Targets are logical; a Kubernetes
-//! Service target represents the entire service, running [anywhere in a
-//! multi-cluster deployment][ns-position], not an individual Pod or Node or
-//! Service object.
-//!
-//! [ns-position]: https://github.com/kubernetes/community/blob/master/sig-multicluster/namespace-sameness-position-statement.md
+//! The Junction API is built around the idea that you're always routing
+//! requests to a [Service], which is an abstract representation of a place you
+//! might want traffic to go. A [Service] can be anything, but to use one in
+//! Junction you need a way to uniquely specify it. That could be anything from
+//! a DNS name someone else has already set up to a Kubernetes Service in a
+//! cluster you've connected to Junction.
 //!
 //! ## Routes
 //!
 //! An HTTP [Route][crate::http::Route] is the client facing half of Junction,
 //! and contains most of the things you'd traditionally find in a hand-rolled
-//! HTTP client - timeouts, retries, URL rewriting and more.  The [http]
+//! HTTP client - timeouts, retries, URL rewriting and more. Routes match
+//! outgoing requests based on their method, URL, and headers. The [http]
 //! module's documentation goes into detail on how and why to configure a Route.
 //!
 //! ## Backends
 //!
-//! A [Backend][crate::backend::Backend] is the Service oriented half of
-//! Junction configuration. Backends configuration gives you control over the
-//! things you'd normally configure in a reverse proxy or a traditional load
-//! balancer, like load balancing. See the [backend] module's documentation for
-//! more detail.
+//! A [Backend][crate::backend::Backend] is a single port on a Service. Backends
+//! configuration gives you control over the things you'd normally configure in
+//! a reverse proxy or a traditional load balancer. See the [backend] module's
+//! documentation for more detail.
 //!
 //! # Crate Feature Flags
 //!
@@ -52,6 +44,7 @@
 mod error;
 use std::{ops::Deref, str::FromStr};
 
+use backend::BackendId;
 pub use error::Error;
 
 pub mod backend;
@@ -78,6 +71,7 @@ macro_rules! value_or_default {
     };
 }
 
+use smol_str::ToSmolStr;
 #[cfg(feature = "xds")]
 pub(crate) use value_or_default;
 
@@ -258,6 +252,10 @@ impl Hostname {
     }
 
     fn validate(bs: &[u8]) -> Result<(), Error> {
+        if bs.is_empty() {
+            return Err(Error::new_static("Hostname must not be empty"));
+        }
+
         if bs.len() > Self::MAX_LEN {
             return Err(Error::new_static(
                 "Hostname must not be longer than 253 characters",
@@ -310,6 +308,10 @@ impl Name {
     ///
     /// Being a valid name also implies that the slice is valid utf-8.
     fn validate(bs: &[u8]) -> Result<(), Error> {
+        if bs.is_empty() {
+            return Err(Error::new_static("Name must not be empty"));
+        }
+
         if bs.len() > Self::MAX_LEN {
             return Err(Error::new_static(
                 "Name must not be longer than 63 characters",
@@ -337,37 +339,34 @@ impl Name {
     }
 }
 
-/// A traffic target. Traffic targets are abstract, uniquely identifiable places
-/// to route traffic, like a DNS name or a Kubernetes Service.
+/// A uniquely identifiable service that traffic can be routed to.
+///
+/// Services are abstract, and can have different semantics depending on where
+/// and how they're defined.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub enum Target {
+pub enum Service {
     /// A DNS hostname.
     ///
-    /// Traffic sent to a DNS hostname will uses the addresses returned from DNS
-    /// as its final destination. How addresses are fetched and load balanced is
-    /// configured on each [Backend][crate::backend::Backend].
-    #[serde(alias = "dns", alias = "DNS")]
-    Dns(Dns),
+    /// See [DnsService] for details.
+    #[serde(rename = "dns", alias = "DNS")]
+    Dns(DnsService),
 
-    /// The addresses that make up a Kubernetes Service.
+    /// A Kubernetes Service.
     ///
-    /// Any type of Service, except an `ExternalName` Service may be used as a
-    /// traffic target (to represent an `ExternalName` Service, use a [DNS target][Target::Dns])
-    /// and will route traffic directly to Pod IPs as if the service had
-    /// explicitly set `ClusterIP: None`.
-    #[serde(untagged)]
-    KubeService(KubeService),
+    /// See [KubeService] for details.
+    #[serde(rename = "kube", alias = "k8s")]
+    Kube(KubeService),
 }
 
-impl std::fmt::Display for Target {
+impl std::fmt::Display for Service {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.write_name(f)
     }
 }
 
-impl std::str::FromStr for Target {
+impl std::str::FromStr for Service {
     type Err = Error;
 
     fn from_str(name: &str) -> Result<Self, Self::Err> {
@@ -384,47 +383,56 @@ impl std::str::FromStr for Target {
 
                 let name = parts[0].parse()?;
                 let namespace = parts[1].parse()?;
-                Target::KubeService(KubeService { name, namespace })
+                Service::Kube(KubeService { name, namespace })
             }
-            _ => Target::Dns(Dns { hostname }),
+            _ => Service::Dns(DnsService { hostname }),
         };
         Ok(target)
     }
 }
 
-impl Target {
-    const BACKEND_SUBDOMAIN: &'static str = ".lb.jct";
-
+impl Service {
     /// Create a new DNS target. The given name must be a valid RFC 1123 DNS
     /// hostname.
     pub fn dns(name: &str) -> Result<Self, Error> {
         let hostname = Hostname::from_str(name)?;
-        Ok(Target::Dns(Dns { hostname }))
+        Ok(Self::Dns(DnsService { hostname }))
     }
 
     /// Create a new Kubernetes Service target.
     ///
     /// `name` and `hostname` must be valid DNS subdomain labels.
-    pub fn kube_service(namespace: &str, name: &str) -> Result<Self, Error> {
+    pub fn kube(namespace: &str, name: &str) -> Result<Self, Error> {
         let namespace = Name::from_str(namespace)?;
         let name = Name::from_str(name)?;
 
-        Ok(Target::KubeService(KubeService { name, namespace }))
+        Ok(Self::Kube(KubeService { name, namespace }))
     }
 
-    /// Convert this target into a [BackendId] with the specified port.
-    pub fn into_backend(self, port: u16) -> BackendId {
-        BackendId { target: self, port }
+    /// Clone and convert this backend into a [BackendId] with the specified port.
+    pub fn as_backend_id(&self, port: u16) -> BackendId {
+        BackendId {
+            service: self.clone(),
+            port,
+        }
     }
 
-    /// Convert this target into a [VirtualHost] with an optional port.
-    pub fn into_vhost(self, port: Option<u16>) -> VirtualHost {
-        VirtualHost { target: self, port }
+    /// The canonical hostname for this backend.
+    pub fn hostname(&self) -> Hostname {
+        match self {
+            Service::Dns(dns) => dns.hostname.clone(),
+            _ => {
+                // safety: a name should never be an invalid hostname
+                let name = self.name().to_smolstr();
+                Hostname(name)
+            }
+        }
     }
 
-    /// The canonical name of this Target.
+    /// The canonical name of this backend.
     ///
-    /// This is an alias for the [Display][std::fmt::Display] representation.
+    /// Returns the same name as [hostname][Self::hostname] but as a raw
+    /// [String] instead of a [Hostname].
     pub fn name(&self) -> String {
         let mut buf = String::new();
         self.write_name(&mut buf).unwrap();
@@ -433,10 +441,10 @@ impl Target {
 
     fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
         match self {
-            Target::Dns(dns) => {
+            Service::Dns(dns) => {
                 w.write_str(&dns.hostname)?;
             }
-            Target::KubeService(svc) => {
+            Service::Kube(svc) => {
                 write!(
                     w,
                     "{name}.{namespace}{subdomain}",
@@ -450,6 +458,8 @@ impl Target {
         Ok(())
     }
 
+    const BACKEND_SUBDOMAIN: &'static str = ".lb.jct";
+
     #[doc(hidden)]
     pub fn lb_config_route_name(&self) -> String {
         let mut buf = String::new();
@@ -459,17 +469,17 @@ impl Target {
 
     fn write_lb_config_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
         match self {
-            Target::Dns(dns) => {
-                write!(w, "{}{}", dns.hostname, Target::BACKEND_SUBDOMAIN)?;
+            Service::Dns(dns) => {
+                write!(w, "{}{}", dns.hostname, Service::BACKEND_SUBDOMAIN)?;
             }
-            Target::KubeService(svc) => {
+            Service::Kube(svc) => {
                 write!(
                     w,
                     "{name}.{namespace}{svc}{backend}",
                     name = svc.name,
                     namespace = svc.namespace,
                     svc = KubeService::SUBDOMAIN,
-                    backend = Target::BACKEND_SUBDOMAIN,
+                    backend = Service::BACKEND_SUBDOMAIN,
                 )?;
             }
         }
@@ -481,7 +491,7 @@ impl Target {
     pub fn from_lb_config_route_name(name: &str) -> Result<Self, Error> {
         let hostname = Hostname::from_str(name)?;
 
-        let Some(hostname) = hostname.strip_suffix(Target::BACKEND_SUBDOMAIN) else {
+        let Some(hostname) = hostname.strip_suffix(Service::BACKEND_SUBDOMAIN) else {
             return Err(Error::new_static("expected a Junction backend name"));
         };
 
@@ -491,7 +501,12 @@ impl Target {
 
 /// A Kubernetes Service to target with traffic.
 ///
-/// See [Target::KubeService].
+/// This Service doesn't have to exist in any particular Kubernetes cluster -
+/// Junction assumes that all connected Kubernetes clusters have adopted
+/// [namespace-sameness] instead of asking you to distinguish between individual
+/// clusters as they come and go.
+///
+/// [namespace-sameness]: https://github.com/kubernetes/community/blob/master/sig-multicluster/namespace-sameness-position-statement.md
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct KubeService {
@@ -509,187 +524,20 @@ impl KubeService {
 
 /// A DNS name to target with traffic.
 ///
-/// See [Target::Dns].
+/// While the whole point of Junction is to avoid DNS in the first place,
+/// sometimes you have to route traffic to an external service or something that
+/// can't (or shouldn't) be connected directly to this instance of Junction. In
+/// those cases, it's useful to treat a DNS name like a slowly changing pool of
+/// addresses and to route traffic to them appropriately.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct Dns {
+pub struct DnsService {
     /// A valid RFC1123 DNS domain name.
     pub hostname: Hostname,
 }
 
-/// A virtual hostname. `VirtualHosts` represent the primary layer of
-/// indirection in Junction. Traffic sent to a `VirtualHost` is routed to an
-/// appropriate backend based on the content of the request.
-///
-/// VirtualHosts uniquely map to the Authority section of a URL.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct VirtualHost {
-    /// The logical target for this traffic.
-    #[serde(flatten)]
-    pub target: Target,
-
-    /// The port this virtual hostname should apply to. If no port is specified,
-    /// traffic is allowed on any port.
-    pub port: Option<u16>,
-}
-
-impl std::fmt::Display for VirtualHost {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.write_name(f)
-    }
-}
-
-impl std::str::FromStr for VirtualHost {
-    type Err = Error;
-
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        let (name, port) = parse_port(name)?;
-        let target = Target::from_str(name)?;
-        Ok(Self { target, port })
-    }
-}
-
-impl VirtualHost {
-    /// Return a clone of this target with its port set to `port`.
-    pub fn with_port(&self, port: u16) -> Self {
-        Self {
-            target: self.target.clone(),
-            port: Some(port),
-        }
-    }
-
-    /// Return a clone of this virtual host with no port set.
-    pub fn without_port(&self) -> Self {
-        Self {
-            target: self.target.clone(),
-            port: None,
-        }
-    }
-
-    /// Return a clone of this VirtualHost with its port set to `default_port`
-    /// if it doesn't already have a port set.
-    pub fn with_default_port(&self, default_port: u16) -> Self {
-        Self {
-            target: self.target.clone(),
-            port: Some(self.port.unwrap_or(default_port)),
-        }
-    }
-
-    /// Clone this VirtualHost and convert it to a [BackendId].
-    ///
-    /// Returns `None` if this VirtualHost has no port set.
-    pub fn into_backend(self) -> Option<BackendId> {
-        self.port.map(|port| BackendId {
-            target: self.target,
-            port,
-        })
-    }
-
-    /// The canonical name of this virtual host.
-    ///
-    /// This is an alias for the [Display][std::fmt::Display] representation of
-    /// this VirtualHost.
-    pub fn name(&self) -> String {
-        let mut buf = String::new();
-        self.write_name(&mut buf).unwrap();
-        buf
-    }
-
-    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
-        self.target.write_name(w)?;
-
-        if let Some(port) = self.port {
-            write!(w, ":{port}")?;
-        }
-
-        Ok(())
-    }
-}
-
-/// A target and port together uniquely represent a [Backend][crate::backend::Backend].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct BackendId {
-    /// The logical traffic target that this backend configures.
-    #[serde(flatten)]
-    pub target: Target,
-
-    /// The port backend traffic is sent on.
-    pub port: u16,
-}
-
-impl std::fmt::Display for BackendId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.write_name(f)
-    }
-}
-
-impl std::str::FromStr for BackendId {
-    type Err = Error;
-
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        let (name, port) = parse_port(name)?;
-
-        let port =
-            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
-        let target = Target::from_str(name)?;
-
-        Ok(Self { target, port })
-    }
-}
-
-impl BackendId {
-    /// Convert this id into a [VirtualHost] with the same route target and port.
-    pub fn into_vhost(self) -> VirtualHost {
-        VirtualHost {
-            target: self.target,
-            port: Some(self.port),
-        }
-    }
-
-    /// The cannonical name of this ID. This is an alias for the
-    /// [Display][std::fmt::Display] representation of this ID.
-    pub fn name(&self) -> String {
-        let mut buf = String::new();
-        self.write_name(&mut buf).unwrap();
-        buf
-    }
-
-    fn write_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
-        self.target.write_name(w)?;
-        write!(w, ":{port}", port = self.port)?;
-
-        Ok(())
-    }
-
-    #[doc(hidden)]
-    pub fn lb_config_route_name(&self) -> String {
-        let mut buf = String::new();
-        self.write_lb_config_route_name(&mut buf).unwrap();
-        buf
-    }
-
-    fn write_lb_config_route_name(&self, w: &mut impl std::fmt::Write) -> std::fmt::Result {
-        self.target.write_lb_config_route_name(w)?;
-        write!(w, ":{port}", port = self.port)?;
-        Ok(())
-    }
-
-    #[doc(hidden)]
-    pub fn from_lb_config_route_name(name: &str) -> Result<Self, Error> {
-        let (name, port) = parse_port(name)?;
-        let port =
-            port.ok_or_else(|| Error::new_static("expected a fully qualified name with a port"))?;
-
-        let target = Target::from_lb_config_route_name(name)?;
-
-        Ok(Self { target, port })
-    }
-}
-
 #[inline]
-fn parse_port(s: &str) -> Result<(&str, Option<u16>), Error> {
+pub(crate) fn parse_port(s: &str) -> Result<(&str, Option<u16>), Error> {
     let (name, port) = match s.split_once(':') {
         Some((name, port)) => (name, Some(port)),
         None => (s, None),
@@ -710,16 +558,16 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_parses_json() {
+    fn test_service_serde() {
         let target = serde_json::json!({
-            "type": "service",
             "name": "foo",
             "namespace": "potato",
+            "type": "kube",
         });
 
         assert_eq!(
-            serde_json::from_value::<Target>(target).unwrap(),
-            Target::kube_service("potato", "foo").unwrap(),
+            serde_json::from_value::<Service>(target).unwrap(),
+            Service::kube("potato", "foo").unwrap(),
         );
 
         let target = serde_json::json!({
@@ -728,134 +576,48 @@ mod test {
         });
 
         assert_eq!(
-            serde_json::from_value::<Target>(target).unwrap(),
-            Target::dns("example.com").unwrap(),
+            serde_json::from_value::<Service>(target).unwrap(),
+            Service::dns("example.com").unwrap(),
         );
     }
 
     #[test]
-    fn test_route_target_name() {
-        assert_route_name(
-            VirtualHost {
-                target: Target::KubeService(KubeService {
-                    name: Name::from_static("potato"),
-                    namespace: Name::from_static("production"),
-                }),
-                port: None,
-            },
-            "potato.production.svc.cluster.local",
-        );
-
-        assert_route_name(
-            VirtualHost {
-                target: Target::Dns(Dns {
-                    hostname: Hostname::from_static("cool-stuff.example.com"),
-                }),
-                port: None,
-            },
-            "cool-stuff.example.com",
-        );
-
-        assert_route_name(
-            VirtualHost {
-                target: Target::KubeService(KubeService {
-                    name: Name::from_static("potato"),
-                    namespace: Name::from_static("production"),
-                }),
-                port: Some(123),
-            },
-            "potato.production.svc.cluster.local:123",
-        );
-
-        assert_route_name(
-            VirtualHost {
-                target: Target::Dns(Dns {
-                    hostname: Hostname::from_static("cool-stuff.example.com"),
-                }),
-                port: Some(123),
-            },
-            "cool-stuff.example.com:123",
-        );
-    }
-
-    #[track_caller]
-    fn assert_route_name(target: VirtualHost, str: &'static str) {
-        assert_eq!(&target.name(), str);
-        let parsed = VirtualHost::from_str(str).unwrap();
-        assert_eq!(parsed, target);
-    }
-
-    #[test]
-    fn test_backend_target_name() {
-        assert_backend_name(
-            BackendId {
-                target: Target::KubeService(KubeService {
-                    name: Name::from_static("potato"),
-                    namespace: Name::from_static("production"),
-                }),
-                port: 123,
-            },
-            "potato.production.svc.cluster.local:123",
-        );
-
-        assert_backend_name(
-            BackendId {
-                target: Target::Dns(Dns {
-                    hostname: Hostname::from_static("cool-stuff.example.com"),
-                }),
-                port: 123,
-            },
-            "cool-stuff.example.com:123",
-        );
-
-        assert!(BackendId::from_str("potato.production.svc.cluster.local").is_err());
-        assert!(BackendId::from_str("cool-stuff.example.com",).is_err());
-    }
-
-    #[track_caller]
-    fn assert_backend_name(target: BackendId, str: &'static str) {
-        assert_eq!(&target.name(), str);
-        let parsed = BackendId::from_str(str).unwrap();
-        assert_eq!(parsed, target);
-    }
-
-    #[test]
-    fn test_target_name() {
+    fn test_service_name() {
         assert_name(
-            Target::kube_service("production", "potato").unwrap(),
+            Service::kube("production", "potato").unwrap(),
             "potato.production.svc.cluster.local",
         );
 
         assert_name(
-            Target::dns("cool-stuff.example.com").unwrap(),
+            Service::dns("cool-stuff.example.com").unwrap(),
             "cool-stuff.example.com",
         );
     }
 
     #[track_caller]
-    fn assert_name(target: Target, str: &'static str) {
+    fn assert_name(target: Service, str: &'static str) {
         assert_eq!(&target.name(), str);
-        let parsed = Target::from_str(str).unwrap();
+        let parsed = Service::from_str(str).unwrap();
         assert_eq!(parsed, target);
     }
 
     #[test]
     fn test_target_lb_config_name() {
         assert_lb_config_name(
-            Target::kube_service("production", "potato").unwrap(),
+            Service::kube("production", "potato").unwrap(),
             "potato.production.svc.cluster.local.lb.jct",
         );
 
         assert_lb_config_name(
-            Target::dns("cool-stuff.example.com").unwrap(),
+            Service::dns("cool-stuff.example.com").unwrap(),
             "cool-stuff.example.com.lb.jct",
         );
     }
 
     #[track_caller]
-    fn assert_lb_config_name(target: Target, str: &'static str) {
+    fn assert_lb_config_name(target: Service, str: &'static str) {
         assert_eq!(&target.lb_config_route_name(), str);
-        let parsed = Target::from_lb_config_route_name(str).unwrap();
+        let parsed = Service::from_lb_config_route_name(str).unwrap();
         assert_eq!(parsed, target);
     }
 
@@ -913,7 +675,7 @@ mod test {
         alphabet: &[char],
         max_len: usize,
     ) -> String {
-        let len: usize = u.choose_index(max_len).unwrap();
+        let len: usize = u.choose_index(max_len - 1).unwrap() + 1;
         let mut input = String::new();
 
         if len > 0 {

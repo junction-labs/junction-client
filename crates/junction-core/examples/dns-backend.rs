@@ -1,10 +1,9 @@
-use std::{collections::BTreeMap, env, time::Duration};
+use std::{env, time::Duration};
 
 use http::Method;
 use junction_api::{
     backend::{Backend, LbPolicy},
-    http::Route,
-    Target,
+    Service,
 };
 use junction_core::Client;
 use tracing_subscriber::EnvFilter;
@@ -26,25 +25,22 @@ async fn main() {
     .await
     .unwrap();
 
-    let httpbin = Target::dns("httpbin.org").unwrap();
+    let httpbin = Service::dns("httpbin.org").unwrap();
 
-    let routes = vec![Route {
-        vhost: httpbin.clone().into_vhost(None),
-        tags: BTreeMap::new(),
-        rules: vec![],
-    }];
     let backends = vec![
         Backend {
-            id: httpbin.clone().into_backend(80),
+            id: httpbin.as_backend_id(80),
             lb: LbPolicy::RoundRobin,
         },
         Backend {
-            id: httpbin.clone().into_backend(443),
+            id: httpbin.as_backend_id(443),
             lb: LbPolicy::RoundRobin,
         },
     ];
 
-    let mut client = client.with_static_config(routes, backends);
+    let mut client = client.with_static_config(vec![], backends);
+
+    eprintln!("{:?}", client.dump_routes());
 
     let http_url: junction_core::Url = "http://httpbin.org".parse().unwrap();
     let https_url: junction_core::Url = "https://httpbin.org".parse().unwrap();

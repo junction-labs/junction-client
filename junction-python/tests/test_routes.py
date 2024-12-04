@@ -5,19 +5,22 @@ import pytest
 
 
 @pytest.fixture
-def nginx() -> junction.config.Target:
-    return {"namespace": "default", "name": "nginx"}
+def nginx() -> junction.config.Service:
+    return {"type": "kube", "namespace": "default", "name": "nginx"}
 
 
 @pytest.fixture
-def nginx_staging() -> junction.config.Target:
-    return {"namespace": "default", "name": "nginx-staging"}
+def nginx_staging() -> junction.config.Service:
+    return {"type": "kube", "namespace": "default", "name": "nginx-staging"}
 
 
-def test_check_basic_route(nginx):
+def test_check_basic_route_url_port(nginx):
     route: config.Route = {
-        "vhost": nginx,
-        "rules": [{"backends": [{**nginx, "port": 80}]}],
+        "id": "test-route",
+        "hostnames": [
+            f"{nginx["name"]}.{nginx["namespace"]}.svc.cluster.local",
+        ],
+        "rules": [{"backends": [nginx]}],
     }
 
     (_, _, matched_backend) = junction.check_route(
@@ -30,9 +33,12 @@ def test_check_basic_route(nginx):
     assert matched_backend == {**nginx, "port": 80}
 
 
-def test_check_basic_route_url_port(nginx):
+def test_check_basic_route_backend_port(nginx):
     route: config.Route = {
-        "vhost": nginx,
+        "id": "test-route",
+        "hostnames": [
+            f"{nginx["name"]}.{nginx["namespace"]}.svc.cluster.local",
+        ],
         "rules": [{"backends": [{**nginx, "port": 8888}]}],
     }
 
@@ -46,18 +52,51 @@ def test_check_basic_route_url_port(nginx):
     assert matched_backend == {**nginx, "port": 8888}
 
 
-def test_check_basic_route_with_port(nginx):
+def test_hostname_match(nginx):
     route: config.Route = {
-        "vhost": {**nginx, "port": 1234},
+        "id": "test-route",
+        "hostnames": ["nginx.default.svc.cluster.local"],
+        "rules": [
+            {
+                "backends": [{**nginx, "port": 80}],
+            },
+        ],
+    }
+
+    with pytest.raises(RuntimeError, match="no route matched"):
+        junction.check_route(
+            [route],
+            "GET",
+            "http://something-else.default.svc.cluster.local",
+            {},
+        )
+
+
+def test_check_basic_route_ports_match(nginx):
+    route: config.Route = {
+        "id": "test-route",
+        "hostnames": [
+            f"{nginx["name"]}.{nginx["namespace"]}.svc.cluster.local",
+        ],
+        "ports": [1234],
         "rules": [{"backends": [{**nginx, "port": 1234}]}],
     }
 
-    # explicitly specifying a different port should work
-    with pytest.raises(RuntimeError, match="no routing info is available"):
+    # explicitly specifying a different port should not work
+    with pytest.raises(RuntimeError, match="no route matched"):
         (_, _, matched_backend) = junction.check_route(
             [route],
             "GET",
             "http://nginx.default.svc.cluster.local:5678",
+            {},
+        )
+
+    # using the default http/https port should not work
+    with pytest.raises(RuntimeError, match="no route matched"):
+        (_, _, matched_backend) = junction.check_route(
+            [route],
+            "GET",
+            "https://nginx.default.svc.cluster.local",
             {},
         )
 
@@ -72,22 +111,23 @@ def test_check_basic_route_with_port(nginx):
 
 
 def test_check_empty_route(nginx):
-    route: config.Route = {"vhost": nginx}
+    route: config.Route = {"id": "empty-route"}
 
-    (matching_route, matching_rule_idx, backend) = junction.check_route(
-        [route],
-        "GET",
-        "http://nginx.default.svc.cluster.local:1234",
-        {},
-    )
-
-    assert matching_rule_idx is None
-    assert {**nginx, "port": 1234} == backend
+    with pytest.raises(RuntimeError, match="no route matched"):
+        _ = junction.check_route(
+            [route],
+            "GET",
+            "http://nginx.default.svc.cluster.local:1234",
+            {},
+        )
 
 
 def test_check_empty_rules(nginx, nginx_staging):
     route: config.Route = {
-        "vhost": nginx,
+        "id": "test-route",
+        "hostnames": [
+            f"{nginx["name"]}.{nginx["namespace"]}.svc.cluster.local",
+        ],
         "rules": [
             # /users hits staging
             {
@@ -95,23 +135,17 @@ def test_check_empty_rules(nginx, nginx_staging):
                 "backends": [{**nginx_staging, "port": 8910}],
             },
             # default to nginx
-            {
-                "retry": {
-                    "attempts": 3,
-                }
-            },
+            {},
         ],
     }
 
-    (_, matching_rule_idx, backend) = junction.check_route(
-        [route],
-        "GET",
-        "http://nginx.default.svc.cluster.local:1234",
-        {},
-    )
-
-    assert matching_rule_idx == 1
-    assert {**nginx, "port": 1234} == backend
+    with pytest.raises(RuntimeError, match="invalid route"):
+        _ = junction.check_route(
+            [route],
+            "GET",
+            "http://nginx.default.svc.cluster.local:1234",
+            {},
+        )
 
     (_, matching_rule_idx, backend) = junction.check_route(
         [route],
@@ -119,7 +153,6 @@ def test_check_empty_rules(nginx, nginx_staging):
         "http://nginx.default.svc.cluster.local:1234/users",
         {},
     )
-
     assert matching_rule_idx == 0
     assert {**nginx_staging, "port": 8910} == backend
 
@@ -133,13 +166,13 @@ def test_check_retry_and_timeouts(nginx):
     timeouts: config.RouteTimeouts = {
         "request": 0.1,
     }
-
-    route: config.Route = {
-        "vhost": nginx,
-        "rules": [
+    route = config.Route(
+        id="test-route",
+        hostnames=["*.default.svc.cluster.local"],
+        rules=[
             {"backends": [{**nginx, "port": 80}], "retry": retry, "timeouts": timeouts}
         ],
-    }
+    )
 
     (matching_route, matching_rule_idx, _) = junction.check_route(
         [route],
@@ -152,11 +185,12 @@ def test_check_retry_and_timeouts(nginx):
     assert retry == matching_route["rules"][matching_rule_idx]["retry"]
 
 
-def test_check_redirect_route(nginx, nginx_staging):
-    route: config.Route = {
-        "vhost": nginx,
-        "rules": [{"backends": [{**nginx_staging, "port": 80}]}],
-    }
+def test_check_redirect_route(nginx_staging):
+    route = config.Route(
+        id="test-route",
+        hostnames=["*.default.svc.cluster.local"],
+        rules=[{"backends": [{**nginx_staging, "port": 80}]}],
+    )
 
     (_, _, matched_backend) = junction.check_route(
         [route],
@@ -166,51 +200,6 @@ def test_check_redirect_route(nginx, nginx_staging):
     )
 
     assert matched_backend == {**nginx_staging, "port": 80}
-
-
-def test_no_fallthrough(nginx, nginx_staging):
-    route: config.Route = {
-        "vhost": nginx,
-        "rules": [
-            {
-                "backends": [{**nginx_staging, "port": 80}],
-                "matches": [{"headers": [{"name": "x-env", "value": "staging"}]}],
-            },
-            {
-                "backends": [{**nginx, "port": 80}],
-                "matches": [{"headers": [{"name": "x-env", "value": "prod"}]}],
-            },
-        ],
-    }
-
-    with pytest.raises(RuntimeError, match="no routing info is available"):
-        junction.check_route(
-            [route],
-            "GET",
-            "http://something-else.default.svc.cluster.local",
-            {},
-        )
-
-
-def test_no_target(nginx, nginx_staging):
-    route: config.Route = {
-        "vhost": nginx,
-        "rules": [
-            {
-                "backends": [{**nginx_staging, "port": 80}],
-                "matches": [{"headers": [{"name": "x-env", "value": "staging"}]}],
-            },
-            {"backends": [{**nginx, "port": 80}]},
-        ],
-    }
-
-    with pytest.raises(RuntimeError, match="no routing info is available"):
-        junction.check_route(
-            [route],
-            "GET",
-            "http://something-else.default.svc.cluster.local",
-            {},
-        )
 
 
 @pytest.mark.parametrize(
@@ -223,7 +212,8 @@ def test_no_target(nginx, nginx_staging):
 )
 def test_check_headers_matches_default(headers, nginx, nginx_staging):
     route: config.Route = {
-        "vhost": nginx,
+        "id": "test-route",
+        "hostnames": ["nginx.default.svc.cluster.local"],
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],
@@ -247,7 +237,8 @@ def test_check_headers_matches_default(headers, nginx, nginx_staging):
 
 def test_check_headers_match(nginx, nginx_staging):
     route: config.Route = {
-        "vhost": nginx,
+        "id": "test-route",
+        "hostnames": ["nginx.default.svc.cluster.local"],
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],
@@ -273,7 +264,8 @@ def test_check_headers_match(nginx, nginx_staging):
 
 def test_check_path_matches_default(nginx, nginx_staging):
     route: config.Route = {
-        "vhost": nginx,
+        "id": "test-route",
+        "hostnames": ["nginx.default.svc.cluster.local"],
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],
@@ -298,7 +290,8 @@ def test_check_path_matches_default(nginx, nginx_staging):
 
 def test_check_path_matches(nginx, nginx_staging):
     route: config.Route = {
-        "vhost": nginx,
+        "id": "test-route",
+        "hostnames": ["nginx.default.svc.cluster.local"],
         "rules": [
             {
                 "backends": [{**nginx_staging, "port": 80}],
