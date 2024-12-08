@@ -7,11 +7,11 @@ use std::{
 use crate::{
     error::{Error, ErrorContext},
     http::{
-        HeaderMatch, Method, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRetry, RouteRule,
-        RouteTimeouts, WeightedBackend,
+        BackendRef, HeaderMatch, Method, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRetry,
+        RouteRule, RouteTimeouts,
     },
     shared::{Duration, Regex},
-    BackendId, VirtualHost,
+    Name,
 };
 use xds_api::pb::{
     envoy::{
@@ -42,56 +42,91 @@ impl From<&Route> for xds_route::RouteConfiguration {
 
 impl Route {
     pub fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, Error> {
-        let route_vhost = VirtualHost::from_str(&xds.name).with_field("name")?;
+        let id = Name::from_str(&xds.name).with_field("name")?;
         let tags = tags_from_xds(&xds.metadata)?;
 
+        let [vhost] = &xds.virtual_hosts[..] else {
+            return Err(Error::new_static(
+                "RouteConfiguration must have exactly one VirtualHost",
+            ));
+        };
+
+        let mut hostnames = Vec::new();
+        let mut ports = Vec::new();
+        for (i, domain) in vhost.domains.iter().enumerate() {
+            let (name, port) = crate::parse_port(domain).with_field_index("domains", i)?;
+
+            let name = crate::http::HostnameMatch::from_str(name)
+                .with_field_index("domains", i)
+                .with_field_index("virtual_hosts", 0)?;
+
+            hostnames.push(name);
+            if let Some(port) = port {
+                ports.push(port);
+            }
+        }
+        hostnames.sort();
+        hostnames.dedup();
+        ports.sort();
+        ports.dedup();
+
         let mut rules = vec![];
-        for (idx, vhost) in xds.virtual_hosts.iter().enumerate() {
-            let actions_and_matches = vhost.routes.iter().enumerate().map(|(route_idx, route)| {
+        let actions_and_matches =
+            vhost.routes.iter().enumerate().map(|(route_idx, route)| {
                 (route.action.as_ref(), (route_idx, route.r#match.as_ref()))
             });
 
-            for (action, matches) in group_by(actions_and_matches) {
-                // safety: group_by shouldn't be able to emit an empty group
-                let action_idx = matches
-                    .first()
-                    .map(|(idx, _)| *idx)
-                    .expect("missing route index");
+        for (action, matches) in group_by(actions_and_matches) {
+            // safety: group_by shouldn't be able to emit an empty group
+            let action_idx = matches
+                .first()
+                .map(|(idx, _)| *idx)
+                .expect("missing route index");
 
-                let Some(action) = &action else {
-                    return Err(Error::new_static("route has no route action"))
-                        .with_field_index("routes", action_idx)
-                        .with_field_index("virtual_hosts", idx);
-                };
+            let Some(action) = &action else {
+                return Err(Error::new_static("route has no route action"))
+                    .with_field_index("routes", action_idx)
+                    .with_field_index("virtual_hosts", 0);
+            };
 
-                rules.push(
-                    RouteRule::from_xds_action_matches(&route_vhost, action, &matches)
-                        .with_field_index("virtual_hosts", idx)?,
-                );
-            }
+            rules.push(
+                RouteRule::from_xds_action_matches(action, &matches)
+                    .with_field_index("virtual_hosts", 0)?,
+            );
         }
 
         Ok(Route {
-            vhost: route_vhost,
+            id,
+            hostnames,
+            ports,
             tags,
             rules,
         })
     }
 
     pub fn to_xds(&self) -> xds_route::RouteConfiguration {
-        let routes = self
-            .rules
-            .iter()
-            .flat_map(|rule| rule.to_xds(&self.vhost))
-            .collect();
-        let metadata = tags_to_xds(&self.tags);
+        let routes = self.rules.iter().flat_map(|rule| rule.to_xds()).collect();
+
+        let mut domains = Vec::with_capacity(self.hostnames.len() * self.ports.len().min(1));
+        for hostname in &self.hostnames {
+            if self.ports.is_empty() {
+                domains.push(hostname.to_string());
+            } else {
+                for port in &self.ports {
+                    domains.push(format!("{hostname}:{port}"));
+                }
+            }
+        }
+
         let virtual_hosts = vec![xds_route::VirtualHost {
-            domains: vec!["*".to_string()],
+            domains,
             routes,
             ..Default::default()
         }];
 
-        let name = self.vhost.name();
+        let name = self.id.to_string();
+        let metadata = tags_to_xds(&self.tags);
+
         xds_route::RouteConfiguration {
             name,
             metadata,
@@ -153,7 +188,6 @@ fn tags_from_xds(metadata: &Option<xds_core::Metadata>) -> Result<BTreeMap<Strin
 
 impl RouteRule {
     fn from_xds_action_matches(
-        route_vhost: &VirtualHost,
         action: &xds_route::route::Action,
         route_matches: &[(usize, Option<&xds_route::RouteMatch>)],
     ) -> Result<Self, Error> {
@@ -167,16 +201,31 @@ impl RouteRule {
             }
         }
 
+        // grab the index of the first xds Route to use in errors below. we're
+        // assuming that there will always be a non-empty vec of route_matches
+        // here.
+        //
+        // TOOD: can we have this panic in debug builds and return 0 in release?
+        let first_route_idx = route_matches
+            .first()
+            .map(|(idx, _)| *idx)
+            .expect("no matches included with action. this is a bug in Junction");
+
         let action = match action {
             xds_route::route::Action::Route(action) => action,
-            _ => return Err(Error::new_static("unsupported route action").with_field("action")),
+            _ => {
+                return Err(Error::new_static("unsupported route action").with_field("action"))
+                    .with_field_index("route", first_route_idx)
+            }
         };
 
         let timeouts = RouteTimeouts::from_xds(action)?;
         let retry = action.retry_policy.as_ref().map(RouteRetry::from_xds);
         // cluster_specifier is a oneof field, so let WeightedTarget specify the
-        // field names in errors.
-        let backends = WeightedBackend::from_xds(route_vhost, action.cluster_specifier.as_ref())?;
+        // field names in errors. we still need to get the index to the
+        let backends = BackendRef::from_xds(action.cluster_specifier.as_ref())
+            .with_field("action")
+            .with_field_index("route", first_route_idx)?;
 
         Ok(RouteRule {
             matches,
@@ -187,7 +236,7 @@ impl RouteRule {
         })
     }
 
-    pub fn to_xds(&self, route_vhost: &VirtualHost) -> Vec<xds_route::Route> {
+    pub fn to_xds(&self) -> Vec<xds_route::Route> {
         // retry policy
         let mut retry_policy = self.retry.as_ref().map(RouteRetry::to_xds);
 
@@ -208,12 +257,7 @@ impl RouteRule {
                 .per_try_timeout = Some(per_try_timeout);
         }
 
-        // convert backends to clusters
-        //
-        // TODO: when we allow backends to be omitted and inferred from the
-        // RouteTarget, this will have to be converted into an actual
-        // RouteAction instead of None.
-        let cluster_specifier = WeightedBackend::to_xds(route_vhost, &self.backends);
+        let cluster_specifier = BackendRef::to_xds(&self.backends);
 
         // tie it all together into a route action that we can use for each match
         let route_action = xds_route::route::Action::Route(xds_route::RouteAction {
@@ -617,28 +661,22 @@ where
     }
 }
 
-impl WeightedBackend {
-    pub(crate) fn to_xds(
-        route_vhost: &VirtualHost,
-        targets: &[Self],
-    ) -> Option<xds_route::route_action::ClusterSpecifier> {
-        match targets {
-            [] => Some(xds_route::route_action::ClusterSpecifier::Cluster(
-                route_vhost.name(),
-            )),
-            [wt] => Some(xds_route::route_action::ClusterSpecifier::Cluster(
-                wt.backend.name(),
+impl BackendRef {
+    pub(crate) fn to_xds(wbs: &[Self]) -> Option<xds_route::route_action::ClusterSpecifier> {
+        match wbs {
+            [] => None,
+            [backend] => Some(xds_route::route_action::ClusterSpecifier::Cluster(
+                backend.name(),
             )),
             targets => {
                 let clusters = targets
                     .iter()
-                    .map(|wt| xds_route::weighted_cluster::ClusterWeight {
-                        name: wt.backend.name(),
-                        weight: Some(wt.weight.into()),
+                    .map(|wb| xds_route::weighted_cluster::ClusterWeight {
+                        name: wb.name(),
+                        weight: Some(wb.weight.into()),
                         ..Default::default()
                     })
                     .collect();
-
                 Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(
                     xds_route::WeightedCluster {
                         clusters,
@@ -650,35 +688,23 @@ impl WeightedBackend {
     }
 
     pub(crate) fn from_xds(
-        route_vhost: &VirtualHost,
         xds: Option<&xds_route::route_action::ClusterSpecifier>,
     ) -> Result<Vec<Self>, Error> {
         match xds {
             Some(xds_route::route_action::ClusterSpecifier::Cluster(name)) => {
-                // try to parse the Cluster name as a BackendId with a port.
-                //
-                // if that fails, try to parse it as a vhost (without a port)
-                // and compare it to the RouteConfiguration's vhost. if it's the
-                // same, we're okay to return no backends.
-                let backend_err = match BackendId::from_str(name).with_field("cluster") {
-                    Ok(backend) => return Ok(vec![Self { backend, weight: 1 }]),
-                    Err(e) => e,
-                };
-                match VirtualHost::from_str(name) {
-                    Ok(vhost) if &vhost == route_vhost => Ok(vec![]),
-                    _ => Err(backend_err),
-                }
+                BackendRef::from_str(name)
+                    .map(|br| vec![br])
+                    .with_field("cluster")
             }
             Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(
                 weighted_clusters,
             )) => {
                 let clusters = weighted_clusters.clusters.iter().enumerate().map(|(i, w)| {
-                    let target = BackendId::from_str(&w.name).with_field_index("name", i)?;
+                    let backend_ref = BackendRef::from_str(&w.name).with_field_index("name", i)?;
                     let weight = crate::value_or_default!(w.weight, 1);
-
                     Ok(Self {
-                        backend: target,
                         weight,
+                        ..backend_ref
                     })
                 });
 
@@ -687,16 +713,15 @@ impl WeightedBackend {
                     .with_fields("weighted_clusters", "clusters")
             }
             Some(_) => Err(Error::new_static("unsupporetd cluster specifier")),
-            None => Err(Error::new_static("missing cluster specifier")),
+            None => Ok(Vec::new()),
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::Target;
-
     use super::*;
+    use crate::{http::HostnameMatch, Hostname, Service};
 
     #[test]
     fn test_group_by() {
@@ -726,21 +751,18 @@ mod test {
 
     #[test]
     fn test_simple_route() {
-        let web = Target::kube_service("prod", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
 
         let original = Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
+            id: Name::from_static("my-route"),
+            hostnames: vec![web.hostname().into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![RouteRule {
-                backends: vec![WeightedBackend {
+                backends: vec![BackendRef {
                     weight: 1,
-                    backend: BackendId {
-                        target: web.clone(),
-                        port: 80,
-                    },
+                    service: web.clone(),
+                    port: None,
                 }],
                 ..Default::default()
             }],
@@ -748,22 +770,19 @@ mod test {
 
         let round_tripped = Route::from_xds(&original.to_xds()).unwrap();
         let expected = Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
+            id: Name::from_static("my-route"),
+            hostnames: vec![web.hostname().into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
                     path: Some(PathMatch::empty_prefix()),
                     ..Default::default()
                 }],
-                backends: vec![WeightedBackend {
+                backends: vec![BackendRef {
                     weight: 1,
-                    backend: BackendId {
-                        target: web.clone(),
-                        port: 80,
-                    },
+                    service: web.clone(),
+                    port: None,
                 }],
                 ..Default::default()
             }],
@@ -772,44 +791,86 @@ mod test {
     }
 
     #[test]
-    fn test_passthrough_route() {
-        let web = Target::kube_service("prod", "web").unwrap();
+    fn test_wildcard_hostname() {
+        let web = Service::kube("prod", "web").unwrap();
 
         let original = Route {
-            vhost: web.clone().into_vhost(None),
-            tags: Default::default(),
-            rules: vec![RouteRule {
-                ..Default::default()
-            }],
-        };
-
-        let round_tripped = Route::from_xds(&original.to_xds()).unwrap();
-        let expected = Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
+            id: Name::from_static("my-route"),
+            hostnames: vec![
+                HostnameMatch::from_str("*.prod.web.svc.cluster.local").unwrap(),
+                HostnameMatch::from_str("*.staging.web.svc.cluster.local").unwrap(),
+            ],
+            ports: vec![80, 443],
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
                     path: Some(PathMatch::empty_prefix()),
                     ..Default::default()
                 }],
+                backends: vec![BackendRef {
+                    weight: 1,
+                    service: web.clone(),
+                    port: None,
+                }],
                 ..Default::default()
             }],
         };
-        assert_eq!(round_tripped, expected)
+
+        let round_tripped = Route::from_xds(&original.to_xds()).unwrap();
+        assert_eq!(round_tripped, original)
+    }
+
+    #[test]
+    fn test_route_no_rules() {
+        let original = Route {
+            id: Name::from_static("no-rules"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
+            tags: Default::default(),
+            rules: vec![],
+        };
+
+        let round_tripped = Route::from_xds(&original.to_xds()).unwrap();
+        assert_eq!(round_tripped, original)
+    }
+
+    #[test]
+    fn test_route_rule_no_backend() {
+        let original = Route {
+            id: Name::from_static("no-backends"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
+            tags: Default::default(),
+            rules: vec![RouteRule::default()],
+        };
+        let normalized = Route {
+            id: Name::from_static("no-backends"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
+            tags: Default::default(),
+            rules: vec![RouteRule {
+                matches: vec![RouteMatch {
+                    path: Some(PathMatch::Prefix {
+                        value: "".to_string(),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+
+        let round_tripped = Route::from_xds(&original.to_xds()).unwrap();
+        assert_eq!(round_tripped, normalized)
     }
 
     #[test]
     fn test_metadata_roundtrip() {
-        let web = Target::kube_service("prod", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
 
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
+            id: Name::from_static("metadata"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
             tags: BTreeMap::from_iter([("foo".to_string(), "bar".to_string())]),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
@@ -818,12 +879,10 @@ mod test {
                     }),
                     ..Default::default()
                 }],
-                backends: vec![WeightedBackend {
+                backends: vec![BackendRef {
                     weight: 1,
-                    backend: BackendId {
-                        target: web.clone(),
-                        port: 8778,
-                    },
+                    service: web.clone(),
+                    port: Some(8778),
                 }],
                 ..Default::default()
             }],
@@ -832,15 +891,14 @@ mod test {
 
     #[test]
     fn test_multiple_rules_roundtrip() {
-        let web = Target::kube_service("prod", "web").unwrap();
-        let staging = Target::kube_service("staging", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
+        let staging = Service::kube("staging", "web").unwrap();
 
         // should roundtrip with different targets
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
+            id: Name::from_static("multiple-targets"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -851,19 +909,15 @@ mod test {
                         ..Default::default()
                     }],
                     backends: vec![
-                        WeightedBackend {
+                        BackendRef {
                             weight: 3,
-                            backend: BackendId {
-                                target: staging.clone(),
-                                port: 80,
-                            },
+                            service: staging.clone(),
+                            port: Some(80),
                         },
-                        WeightedBackend {
+                        BackendRef {
                             weight: 1,
-                            backend: BackendId {
-                                target: web.clone(),
-                                port: 80,
-                            },
+                            service: web.clone(),
+                            port: Some(80),
                         },
                     ],
                     ..Default::default()
@@ -875,12 +929,10 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: BackendId {
-                            target: web.clone(),
-                            port: 80,
-                        },
+                        service: web.clone(),
+                        port: Some(80),
                     }],
                     ..Default::default()
                 },
@@ -889,10 +941,9 @@ mod test {
 
         // should roundtrip with the same backends but different timeouts
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
+            id: Name::from_static("same-target-multiple-timeouts"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -902,12 +953,10 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: BackendId {
-                            target: web.clone(),
-                            port: 80,
-                        },
+                        service: web.clone(),
+                        port: None,
                     }],
                     ..Default::default()
                 },
@@ -922,12 +971,10 @@ mod test {
                         request: Some(Duration::from_secs(123)),
                         backend_request: None,
                     }),
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: BackendId {
-                            target: web.clone(),
-                            port: 80,
-                        },
+                        service: web.clone(),
+                        port: None,
                     }],
                     ..Default::default()
                 },
@@ -936,10 +983,9 @@ mod test {
 
         // should roundtrip with the same backends but different retries
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
+            id: Name::from_static("same-target-multiple-retries"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -954,12 +1000,10 @@ mod test {
                         attempts: Some(123),
                         backoff: Some(Duration::from_secs(1)),
                     }),
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: BackendId {
-                            target: web.clone(),
-                            port: 80,
-                        },
+                        service: web.clone(),
+                        port: None,
                     }],
                     ..Default::default()
                 },
@@ -970,12 +1014,10 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: BackendId {
-                            target: web.clone(),
-                            port: 80,
-                        },
+                        service: web.clone(),
+                        port: None,
                     }],
                     ..Default::default()
                 },
@@ -985,14 +1027,13 @@ mod test {
 
     #[test]
     fn test_condense_rules() {
-        let web = Target::kube_service("prod", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
 
         // should not roundtrip as two identical targets
         let original = Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
+            id: Name::from_static("will-be-condensed"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![
                 RouteRule {
@@ -1002,12 +1043,10 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: BackendId {
-                            target: web.clone(),
-                            port: 80,
-                        },
+                        service: web.clone(),
+                        port: Some(80),
                     }],
                     ..Default::default()
                 },
@@ -1018,12 +1057,10 @@ mod test {
                         }),
                         ..Default::default()
                     }],
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: BackendId {
-                            target: web.clone(),
-                            port: 80,
-                        },
+                        service: web.clone(),
+                        port: Some(80),
                     }],
                     ..Default::default()
                 },
@@ -1035,10 +1072,9 @@ mod test {
         assert_eq!(
             converted,
             Route {
-                vhost: VirtualHost {
-                    target: web.clone(),
-                    port: None,
-                },
+                id: Name::from_static("will-be-condensed"),
+                hostnames: vec![Hostname::from_static("web.internal").into()],
+                ports: vec![],
                 tags: Default::default(),
                 rules: vec![RouteRule {
                     matches: vec![
@@ -1055,12 +1091,10 @@ mod test {
                             ..Default::default()
                         }
                     ],
-                    backends: vec![WeightedBackend {
+                    backends: vec![BackendRef {
                         weight: 1,
-                        backend: BackendId {
-                            target: web.clone(),
-                            port: 80,
-                        },
+                        service: web.clone(),
+                        port: Some(80),
                     }],
                     ..Default::default()
                 },],
@@ -1070,13 +1104,12 @@ mod test {
 
     #[test]
     fn test_multiple_matches_roundtrip() {
-        let web = Target::kube_service("prod", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
 
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
+            id: Name::from_static("multiple-matches"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
             tags: Default::default(),
             rules: vec![RouteRule {
                 matches: vec![
@@ -1100,12 +1133,10 @@ mod test {
                         ..Default::default()
                     },
                 ],
-                backends: vec![WeightedBackend {
+                backends: vec![BackendRef {
                     weight: 1,
-                    backend: BackendId {
-                        target: web.clone(),
-                        port: 80,
-                    },
+                    service: web.clone(),
+                    port: Some(80),
                 }],
                 ..Default::default()
             }],
@@ -1114,14 +1145,19 @@ mod test {
 
     #[test]
     fn test_full_route_match_roundtrips() {
-        let web = Target::kube_service("prod", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
 
         assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
-            vhost: VirtualHost {
-                target: web.clone(),
-                port: None,
-            },
-            tags: Default::default(),
+            id: Name::from_static("full-send"),
+            hostnames: vec![
+                HostnameMatch::from_str("*.web.internal").unwrap(),
+                Hostname::from_static("potato.tomato").into(),
+                Hostname::from_static("web.internal").into(),
+            ],
+            ports: vec![80, 443, 8080],
+            tags: [("foo".to_string(), "bar".to_string())]
+                .into_iter()
+                .collect(),
             rules: vec![RouteRule {
                 matches: vec![RouteMatch {
                     path: Some(PathMatch::Prefix {
@@ -1143,13 +1179,18 @@ mod test {
                     ],
                     method: Some("CONNECT".to_string()),
                 }],
-                backends: vec![WeightedBackend {
-                    weight: 1,
-                    backend: BackendId {
-                        target: web.clone(),
-                        port: 80,
+                backends: vec![
+                    BackendRef {
+                        weight: 1,
+                        service: web.clone(),
+                        port: Some(8080),
                     },
-                }],
+                    BackendRef {
+                        weight: 0,
+                        service: web.clone(),
+                        port: None,
+                    },
+                ],
                 ..Default::default()
             }],
         });

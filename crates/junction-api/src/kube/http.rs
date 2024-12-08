@@ -1,40 +1,89 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::str::FromStr;
 
-use gateway_api::apis::experimental::httproutes::{
-    HTTPRoute, HTTPRouteParentRefs, HTTPRouteRules, HTTPRouteRulesBackendRefs,
-    HTTPRouteRulesMatches, HTTPRouteRulesMatchesHeaders, HTTPRouteRulesMatchesHeadersType,
-    HTTPRouteRulesMatchesMethod, HTTPRouteRulesMatchesPath, HTTPRouteRulesMatchesPathType,
-    HTTPRouteRulesMatchesQueryParams, HTTPRouteRulesMatchesQueryParamsType, HTTPRouteRulesRetry,
-    HTTPRouteRulesTimeouts, HTTPRouteSpec,
-};
+use gateway_api::apis::experimental::httproutes as gateway_http;
 use kube::api::ObjectMeta;
-use kube::ResourceExt;
+use kube::{Resource, ResourceExt};
 
 use crate::error::{Error, ErrorContext};
+use crate::http::{
+    BackendRef, HeaderMatch, HostnameMatch, PathMatch, QueryParamMatch, Route, RouteMatch,
+    RouteRetry, RouteRule, RouteTimeouts,
+};
 use crate::shared::Regex;
-use crate::{Duration, Name, Target};
+use crate::{Duration, Name, Service};
 
-// TODO: this originally was written as a bunch of TryFrom implementations, but
-// that makes organization in here very tough and go-to-definition hard. try
-// re-writing those impls as to_kube(..) and from_kube(..) methods.
+macro_rules! option_from_gateway {
+    ($t:ty, $field:expr, $field_name:literal) => {
+        $field
+            .as_ref()
+            .map(|v| <$t>::from_gateway(v).with_field($field_name))
+            .transpose()
+    };
+}
 
-impl crate::http::Route {
-    /// Convert an [HTTPRouteSpec] into a [Route][crate::http::Route].
-    #[inline]
-    pub fn from_gateway_httproute(httproute: &HTTPRoute) -> Result<crate::http::Route, Error> {
-        httproute.try_into()
+macro_rules! vec_from_gateway {
+    ($t:ty, $opt_vec:expr, $field_name:literal) => {
+        $opt_vec
+            .iter()
+            .flatten()
+            .enumerate()
+            .map(|(i, e)| <$t>::from_gateway(e).with_field_index($field_name, i))
+            .collect::<Result<Vec<_>, _>>()
+    };
+}
+
+macro_rules! option_to_gateway {
+    ($field:expr) => {
+        $field.as_ref().map(|e| e.to_gateway())
+    };
+}
+
+macro_rules! vec_to_gateway {
+    ($vec:expr) => {
+        $vec.iter().map(|e| e.to_gateway()).collect()
+    };
+    ($vec:expr, err_field = $field_name:literal) => {
+        $vec.iter()
+            .enumerate()
+            .map(|(i, e)| e.to_gateway().with_field_index($field_name, i))
+            .collect::<Result<Vec<_>, Error>>()
+    };
+}
+
+impl Route {
+    /// Convert a Gateway API [HTTPRoute][gateway_http::HTTPRoute] into a Junction [Route].
+    pub fn from_gateway_httproute(httproute: &gateway_http::HTTPRoute) -> Result<Route, Error> {
+        let id = Name::from_str(httproute.meta().name.as_ref().unwrap()).unwrap();
+        let (hostnames, ports) =
+            from_parent_refs(httproute.spec.parent_refs.as_deref().unwrap_or_default())?;
+        let tags = read_tags(httproute.annotations());
+        let rules =
+            vec_from_gateway!(RouteRule, httproute.spec.rules, "rules").with_field("spec")?;
+
+        Ok(Self {
+            id,
+            hostnames,
+            ports,
+            tags,
+            rules,
+        })
     }
 
-    /// Convert this [Route][crate::http::Route] into a Gateway API [HTTPRoute]
-    /// with it's `name` and `namespace` metadata set and
-    /// [tags][crate::http::Route::tags] converted to annotations.
-    pub fn to_gateway_httproute(&self, namespace: &str, name: &str) -> Result<HTTPRoute, Error> {
-        let spec = self.try_into()?;
-        let mut route = HTTPRoute {
+    /// Convert this Route to a Gateway API [HTTPRoute][gateway_http::HTTPRoute].
+    pub fn to_gateway_httproute(&self, namespace: &str) -> Result<gateway_http::HTTPRoute, Error> {
+        let parent_refs = Some(to_parent_refs(&self.hostnames, &self.ports)?);
+
+        let spec = gateway_http::HTTPRouteSpec {
+            hostnames: None,
+            parent_refs,
+            rules: Some(vec_to_gateway!(self.rules, err_field = "rules")?),
+        };
+
+        let mut route = gateway_http::HTTPRoute {
             metadata: ObjectMeta {
                 namespace: Some(namespace.to_string()),
-                name: Some(name.to_string()),
+                name: Some(self.id.to_string()),
                 ..Default::default()
             },
             spec,
@@ -44,6 +93,140 @@ impl crate::http::Route {
 
         Ok(route)
     }
+}
+
+fn from_parent_refs(
+    parent_refs: &[gateway_http::HTTPRouteParentRefs],
+) -> Result<(Vec<HostnameMatch>, Vec<u16>), Error> {
+    let mut hostnames_and_ports: BTreeMap<_, HashSet<u16>> = BTreeMap::new();
+
+    for parent_ref in parent_refs {
+        let group = parent_ref
+            .group
+            .as_deref()
+            .unwrap_or("gateway.networking.k8s.io");
+        let kind = parent_ref.kind.as_deref().unwrap_or("");
+
+        let hostname = match (group, kind) {
+            ("junctionlabs.io", "DNS") => HostnameMatch::from_str(&parent_ref.name)?,
+            ("", "Service") => {
+                // NOTE: kube doesn't require the namespace and will infer a
+                // default. we require it at the moment.
+                let namespace = parent_ref
+                    .namespace
+                    .as_deref()
+                    .ok_or_else(|| Error::new_static("missing namespace"))
+                    .with_field("namespace")?;
+
+                // generate the kube service Hostname and convert it to a match
+                crate::Service::kube(namespace, &parent_ref.name)?
+                    .hostname()
+                    .into()
+            }
+            (group, kind) => {
+                return Err(Error::new(format!(
+                    "unsupported backend ref: {group}/{kind}"
+                )))
+            }
+        };
+
+        let port_list = hostnames_and_ports.entry(hostname).or_default();
+        if let &Some(port) = &parent_ref.port {
+            let port: u16 = port
+                .try_into()
+                .map_err(|_| Error::new_static("invalid u16"))?;
+            port_list.insert(port);
+        }
+    }
+
+    if !all_same(hostnames_and_ports.values()) {
+        return Err(Error::new_static(
+            "parentRefs do not all have the same list of ports",
+        ));
+    }
+
+    // grab the first port set and turn it into a vec. we've already validated
+    // that all the port sets are the same, so only the first one matters.
+    let ports = hostnames_and_ports
+        .values()
+        .next()
+        .cloned()
+        .unwrap_or_default();
+    let mut ports: Vec<_> = ports.into_iter().collect();
+    ports.sort();
+
+    // grab the hostnames and peel out.
+    let mut hostnames: Vec<_> = hostnames_and_ports.into_keys().collect();
+    hostnames.sort();
+
+    Ok((hostnames, ports))
+}
+
+fn all_same<T: Eq>(iter: impl Iterator<Item = T>) -> bool {
+    let mut prev = None;
+    for item in iter {
+        match prev.take() {
+            Some(prev) if prev != item => return false,
+            _ => (),
+        }
+
+        prev = Some(item)
+    }
+
+    true
+}
+
+fn to_parent_refs(
+    hostnames: &[HostnameMatch],
+    ports: &[u16],
+) -> Result<Vec<gateway_http::HTTPRouteParentRefs>, Error> {
+    let mut parent_refs = Vec::with_capacity(hostnames.len() * ports.len());
+
+    for hostname in hostnames {
+        let parent_ref = hostname_match_to_parentref(hostname)?;
+
+        for &port in ports {
+            let mut parent_ref = parent_ref.clone();
+            parent_ref.port = Some(port as i32);
+            parent_refs.push(parent_ref);
+        }
+
+        if ports.is_empty() {
+            parent_refs.push(parent_ref);
+        }
+    }
+
+    Ok(parent_refs)
+}
+
+fn hostname_match_to_parentref(
+    hostname_match: &HostnameMatch,
+) -> Result<gateway_http::HTTPRouteParentRefs, Error> {
+    let (svc, name, namespace) = match hostname_match {
+        // subdomains are always treated as DNS parentRefs. this doesn't use
+        // name_and_namespace so that the wildcard makes it into the name.
+        HostnameMatch::Subdomain(hostname) => {
+            let svc = Service::Dns(crate::DnsService {
+                hostname: hostname.clone(),
+            });
+            let name = hostname_match.to_string();
+            (svc, name, None)
+        }
+        HostnameMatch::Exact(hostname) => {
+            let svc = Service::from_str(hostname)?;
+            let (name, namespace) = name_and_namespace(&svc);
+            (svc, name, namespace)
+        }
+    };
+
+    let (group, kind) = group_kind(&svc);
+    Ok(gateway_http::HTTPRouteParentRefs {
+        group: Some(group.to_string()),
+        kind: Some(kind.to_string()),
+        name,
+        namespace,
+        ..Default::default()
+    })
 }
 
 fn write_tags(annotations: &mut BTreeMap<String, String>, tags: &BTreeMap<String, String>) {
@@ -65,224 +248,6 @@ fn read_tags(annotations: &BTreeMap<String, String>) -> BTreeMap<String, String>
     tags
 }
 
-macro_rules! option_from_gateway {
-    ($field:expr) => {
-        $field.as_ref().map(|v| v.try_into()).transpose()
-    };
-}
-
-macro_rules! vec_from_gateway {
-    ($opt_vec:expr) => {
-        $opt_vec
-            .iter()
-            .flatten()
-            .enumerate()
-            .map(|(i, e)| e.try_into().with_index(i))
-            .collect::<Result<Vec<_>, _>>()
-    };
-}
-
-macro_rules! option_to_gateway {
-    ($field:expr) => {
-        $field.as_ref().map(|e| e.try_into()).transpose()
-    };
-}
-
-macro_rules! vec_to_gateway {
-    ($vec:expr) => {
-        $vec.iter()
-            .enumerate()
-            .map(|(i, e)| e.try_into().with_index(i))
-            .collect::<Result<Vec<_>, _>>()
-    };
-}
-
-// kube -> crate
-
-impl TryFrom<&HTTPRoute> for crate::http::Route {
-    type Error = Error;
-
-    fn try_from(route: &HTTPRoute) -> Result<Self, Error> {
-        use crate::VirtualHost;
-
-        // build a target from the parent ref. forbid having more than one parent ref.
-        //
-        // TOOD: we could allow converting one HTTPRoute into more than one Route
-        let vhost = match route.spec.parent_refs.as_deref() {
-            Some([parent_ref]) => VirtualHost::try_from(parent_ref).with_index(0),
-            Some(_) => Err(Error::new_static(
-                "HTTPRoute can't have more than one parent ref",
-            )),
-            None => Err(Error::new_static("HTTPRoute must have a parent ref")),
-        };
-
-        let vhost = vhost.with_fields("spec", "parentRefs")?;
-        let tags = read_tags(route.annotations());
-        let rules = vec_from_gateway!(route.spec.rules).with_fields("spec", "rules")?;
-
-        Ok(Self { vhost, tags, rules })
-    }
-}
-
-impl TryFrom<&HTTPRouteRules> for crate::http::RouteRule {
-    type Error = Error;
-    fn try_from(rule: &HTTPRouteRules) -> Result<Self, Error> {
-        let matches = vec_from_gateway!(rule.matches).with_field("matches")?;
-        let timeouts = option_from_gateway!(rule.timeouts).with_field("timeouts")?;
-        let backends = vec_from_gateway!(rule.backend_refs).with_field("backends")?;
-        // FIXME: filters are ignored because they're not implemented yet
-        let filters = vec![];
-        let retry = option_from_gateway!(rule.retry).with_field("retry")?;
-
-        Ok(crate::http::RouteRule {
-            matches,
-            filters,
-            timeouts,
-            retry,
-            backends,
-        })
-    }
-}
-
-impl TryFrom<&HTTPRouteRulesTimeouts> for crate::http::RouteTimeouts {
-    type Error = Error;
-    fn try_from(timeouts: &HTTPRouteRulesTimeouts) -> Result<Self, Error> {
-        let request = parse_duration(&timeouts.request).with_field("request")?;
-        let backend_request =
-            parse_duration(&timeouts.backend_request).with_field("backendRequest")?;
-
-        Ok(crate::http::RouteTimeouts {
-            request,
-            backend_request,
-        })
-    }
-}
-
-impl TryFrom<&HTTPRouteRulesRetry> for crate::http::RouteRetry {
-    type Error = Error;
-
-    fn try_from(retry: &HTTPRouteRulesRetry) -> Result<Self, Self::Error> {
-        let mut codes = Vec::with_capacity(retry.codes.as_ref().map_or(0, |c| c.len()));
-        for (i, &code) in retry.codes.iter().flatten().enumerate() {
-            let code: u32 = code
-                .try_into()
-                .map_err(|_| Error::new_static("invalid response code"))
-                .with_field_index("codes", i)?;
-            codes.push(code);
-        }
-
-        let attempts = retry
-            .attempts
-            .map(|i| i.try_into())
-            .transpose()
-            .map_err(|_| Error::new_static("invalid u32"))
-            .with_field("attempts")?;
-
-        let backoff = parse_duration(&retry.backoff)?;
-
-        Ok(crate::http::RouteRetry {
-            codes,
-            attempts,
-            backoff,
-        })
-    }
-}
-
-impl TryFrom<&HTTPRouteRulesMatches> for crate::http::RouteMatch {
-    type Error = Error;
-    fn try_from(matches: &HTTPRouteRulesMatches) -> Result<Self, Error> {
-        let method = matches
-            .method
-            .as_ref()
-            .map(method_from_gateway)
-            .transpose()
-            .with_field("method")?;
-
-        Ok(crate::http::RouteMatch {
-            path: option_from_gateway!(matches.path).with_field("path")?,
-            headers: vec_from_gateway!(matches.headers).with_field("headers")?,
-            query_params: vec_from_gateway!(matches.query_params).with_field("queryParams")?,
-            method,
-        })
-    }
-}
-
-impl TryFrom<&HTTPRouteRulesMatchesPath> for crate::http::PathMatch {
-    type Error = Error;
-    fn try_from(matches_path: &HTTPRouteRulesMatchesPath) -> Result<Self, Error> {
-        use crate::http::PathMatch;
-
-        let Some(value) = &matches_path.value else {
-            return Err(Error::new_static("missing value"));
-        };
-
-        match matches_path.r#type {
-            Some(HTTPRouteRulesMatchesPathType::Exact) => Ok(PathMatch::Exact {
-                value: value.clone(),
-            }),
-            Some(HTTPRouteRulesMatchesPathType::PathPrefix) => Ok(PathMatch::Prefix {
-                value: value.clone(),
-            }),
-            Some(HTTPRouteRulesMatchesPathType::RegularExpression) => {
-                let value = Regex::from_str(value)
-                    .map_err(|e| Error::new(format!("invalid regex: {e}")).with_field("value"))?;
-                Ok(PathMatch::RegularExpression { value })
-            }
-            None => Err(Error::new_static("missing type")),
-        }
-    }
-}
-
-impl TryFrom<&HTTPRouteRulesMatchesHeaders> for crate::http::HeaderMatch {
-    type Error = Error;
-    fn try_from(matches_headers: &HTTPRouteRulesMatchesHeaders) -> Result<Self, Error> {
-        use crate::http::HeaderMatch;
-
-        let name = &matches_headers.name;
-        let value = &matches_headers.value;
-        match matches_headers.r#type {
-            Some(HTTPRouteRulesMatchesHeadersType::Exact) => Ok(HeaderMatch::Exact {
-                name: name.clone(),
-                value: value.clone(),
-            }),
-            Some(HTTPRouteRulesMatchesHeadersType::RegularExpression) => {
-                let value = Regex::from_str(value)
-                    .map_err(|e| Error::new(format!("invalid regex: {e}")).with_field("value"))?;
-                Ok(HeaderMatch::RegularExpression {
-                    name: name.clone(),
-                    value,
-                })
-            }
-            None => Err(Error::new_static("missing type")),
-        }
-    }
-}
-
-impl TryFrom<&HTTPRouteRulesMatchesQueryParams> for crate::http::QueryParamMatch {
-    type Error = Error;
-    fn try_from(matches_query: &HTTPRouteRulesMatchesQueryParams) -> Result<Self, Error> {
-        use crate::http::QueryParamMatch;
-
-        let name = &matches_query.name;
-        let value = &matches_query.value;
-        match matches_query.r#type {
-            Some(HTTPRouteRulesMatchesQueryParamsType::Exact) => Ok(QueryParamMatch::Exact {
-                name: name.clone(),
-                value: value.clone(),
-            }),
-            Some(HTTPRouteRulesMatchesQueryParamsType::RegularExpression) => {
-                let value = Regex::from_str(value)
-                    .map_err(|e| Error::new(format!("invalid regex: {e}")).with_field("value"))?;
-                Ok(QueryParamMatch::RegularExpression {
-                    name: name.clone(),
-                    value,
-                })
-            }
-            None => Err(Error::new_static("missing type")),
-        }
-    }
-}
-
 fn port_from_gateway(port: &Option<i32>) -> Result<Option<u16>, Error> {
     (*port)
         .map(|p| {
@@ -292,102 +257,20 @@ fn port_from_gateway(port: &Option<i32>) -> Result<Option<u16>, Error> {
         .transpose()
 }
 
-impl TryFrom<&HTTPRouteParentRefs> for crate::VirtualHost {
-    type Error = Error;
-    fn try_from(parent_ref: &HTTPRouteParentRefs) -> Result<Self, Error> {
-        let group = parent_ref
-            .group
-            .as_deref()
-            .unwrap_or("gateway.networking.k8s.io");
-
-        match (group, parent_ref.kind.as_deref()) {
-            ("junctionlabs.io", Some("DNS")) => {
-                let target = Target::dns(&parent_ref.name).with_field("name")?;
-                let port = port_from_gateway(&parent_ref.port).with_field("port")?;
-                Ok(crate::VirtualHost { target, port })
-            }
-            ("", Some("Service")) => {
-                // NOTE: kube doesn't require the namespace, but we do for now.
-                let namespace = parent_ref
-                    .namespace
-                    .as_deref()
-                    .ok_or_else(|| Error::new_static("missing namespace"))
-                    .and_then(Name::from_str)
-                    .with_field("namespace")?;
-                let port = port_from_gateway(&parent_ref.port).with_field("port")?;
-
-                let target =
-                    Target::kube_service(&namespace, &parent_ref.name).with_field("name")?;
-
-                Ok(crate::VirtualHost { target, port })
-            }
-            (group, Some(kind)) => Err(Error::new(format!(
-                "unsupported parent ref: {group}/{kind}"
-            ))),
-            _ => Err(Error::new("missing Kind".to_string())),
-        }
-    }
-}
-
-impl TryFrom<&HTTPRouteRulesBackendRefs> for crate::http::WeightedBackend {
-    type Error = Error;
-    fn try_from(backend_ref: &HTTPRouteRulesBackendRefs) -> Result<Self, Error> {
-        let group = backend_ref.group.as_deref().unwrap_or("");
-        let kind = backend_ref.kind.as_deref().unwrap_or("Service");
-        let weight = backend_ref
-            .weight
-            .unwrap_or(1)
-            .try_into()
-            .map_err(|_| Error::new_static("negative weight"))
-            .with_field("weight")?;
-
-        let port = port_from_gateway(&backend_ref.port)
-            .and_then(|p| p.ok_or(Error::new_static("backendRef port is required")))
-            .with_field("port")?;
-
-        let target = match (group, kind) {
-            ("junctionlabs.io", "DNS") => Target::dns(&backend_ref.name).with_field("name")?,
-            ("", "Service") => {
-                // NOTE: kube doesn't require the namespace, but we do for now.
-                let namespace = backend_ref
-                    .namespace
-                    .as_deref()
-                    .ok_or_else(|| Error::new_static("missing namespace"))
-                    .and_then(Name::from_str)
-                    .with_field("namespace")?;
-
-                Target::kube_service(&namespace, &backend_ref.name)?
-            }
-            (group, kind) => {
-                return Err(Error::new(format!(
-                    "unsupported backend ref: {group}/{kind}"
-                )))
-            }
-        };
-
-        Ok(crate::http::WeightedBackend {
-            weight,
-            backend: crate::BackendId { target, port },
-        })
-    }
-}
-
-// liminal space, spooky
-
 macro_rules! method_matches {
     ( $($method:ident => $str:expr,)* $(,)*) => {
-        fn method_from_gateway(match_method: &HTTPRouteRulesMatchesMethod) -> Result<crate::http::Method, Error> {
+        fn method_from_gateway(match_method: &gateway_http::HTTPRouteRulesMatchesMethod) -> Result<crate::http::Method, Error> {
             match match_method {
                 $(
-                    HTTPRouteRulesMatchesMethod::$method => Ok($str.to_string()),
+                    gateway_http::HTTPRouteRulesMatchesMethod::$method => Ok($str.to_string()),
                 )*
             }
         }
 
-        fn method_to_gateway(method: &crate::http::Method) -> Result<HTTPRouteRulesMatchesMethod, Error> {
+        fn method_to_gateway(method: &crate::http::Method) -> Result<gateway_http::HTTPRouteRulesMatchesMethod, Error> {
             match method.as_str() {
                 $(
-                    $str => Ok(HTTPRouteRulesMatchesMethod::$method),
+                    $str => Ok(gateway_http::HTTPRouteRulesMatchesMethod::$method),
                 )*
                 _ => Err(Error::new(format!("unrecognized HTTP method: {}", method)))
             }
@@ -407,226 +290,361 @@ method_matches! {
     Patch => "PATCH",
 }
 
-// crate -> kube
-
-impl TryFrom<&crate::http::Route> for HTTPRouteSpec {
-    type Error = Error;
-
-    fn try_from(route: &crate::http::Route) -> Result<HTTPRouteSpec, Error> {
-        let parent_ref = (&route.vhost).try_into().with_field("target")?;
-
-        Ok(HTTPRouteSpec {
-            hostnames: None,
-            parent_refs: Some(vec![parent_ref]),
-            rules: Some(vec_to_gateway!(route.rules).with_field("rules")?),
-        })
-    }
-}
-
-impl TryFrom<&crate::http::RouteRule> for HTTPRouteRules {
-    type Error = Error;
-
-    fn try_from(route_rule: &crate::http::RouteRule) -> Result<HTTPRouteRules, Error> {
-        Ok(HTTPRouteRules {
-            backend_refs: Some(vec_to_gateway!(route_rule.backends).with_field("backends")?),
+impl RouteRule {
+    fn to_gateway(&self) -> Result<gateway_http::HTTPRouteRules, Error> {
+        Ok(gateway_http::HTTPRouteRules {
+            backend_refs: Some(vec_to_gateway!(self.backends, err_field = "backends")?),
             filters: None,
-            matches: Some(vec_to_gateway!(route_rule.matches).with_field("matches")?),
+            matches: Some(vec_to_gateway!(self.matches, err_field = "matches")?),
             name: None,
-            retry: option_to_gateway!(route_rule.retry).with_field("retry")?,
+            retry: option_to_gateway!(self.retry)
+                .transpose()
+                .with_field("retry")?,
             session_persistence: None,
-            timeouts: option_to_gateway!(route_rule.timeouts).with_field("timeouts")?,
+            timeouts: option_to_gateway!(self.timeouts)
+                .transpose()
+                .with_field("timeouts")?,
+        })
+    }
+
+    fn from_gateway(rule: &gateway_http::HTTPRouteRules) -> Result<Self, Error> {
+        let matches = vec_from_gateway!(RouteMatch, rule.matches, "matches")?;
+        let timeouts = option_from_gateway!(RouteTimeouts, rule.timeouts, "timeouts")?;
+        let backends = vec_from_gateway!(BackendRef, rule.backend_refs, "backends")?;
+        let retry = option_from_gateway!(RouteRetry, rule.retry, "retry")?;
+
+        // FIXME: filters are ignored because they're not implemented yet
+        let filters = vec![];
+
+        Ok(RouteRule {
+            matches,
+            filters,
+            timeouts,
+            retry,
+            backends,
         })
     }
 }
 
-impl TryFrom<&crate::http::RouteTimeouts> for HTTPRouteRulesTimeouts {
-    type Error = Error;
-
-    fn try_from(timeouts: &crate::http::RouteTimeouts) -> Result<HTTPRouteRulesTimeouts, Error> {
-        let request = timeouts.request.map(serialize_duration).transpose()?;
-        let backend_request = timeouts
-            .backend_request
-            .map(serialize_duration)
-            .transpose()?;
-
-        Ok(HTTPRouteRulesTimeouts {
+impl RouteTimeouts {
+    fn to_gateway(&self) -> Result<gateway_http::HTTPRouteRulesTimeouts, Error> {
+        let request = self.request.map(serialize_duration).transpose()?;
+        let backend_request = self.backend_request.map(serialize_duration).transpose()?;
+        Ok(gateway_http::HTTPRouteRulesTimeouts {
             backend_request,
             request,
         })
     }
+
+    fn from_gateway(timeouts: &gateway_http::HTTPRouteRulesTimeouts) -> Result<Self, Error> {
+        let request = parse_duration(&timeouts.request).with_field("request")?;
+        let backend_request =
+            parse_duration(&timeouts.backend_request).with_field("backendRequest")?;
+
+        Ok(RouteTimeouts {
+            request,
+            backend_request,
+        })
+    }
 }
 
-impl TryFrom<&crate::http::RouteRetry> for HTTPRouteRulesRetry {
-    type Error = Error;
-
-    fn try_from(retry: &crate::http::RouteRetry) -> Result<Self, Self::Error> {
-        let attempts = retry.attempts.map(|n| n as i64);
-        let backoff = retry.backoff.map(serialize_duration).transpose()?;
-        let codes = if retry.codes.is_empty() {
+impl RouteRetry {
+    fn to_gateway(&self) -> Result<gateway_http::HTTPRouteRulesRetry, Error> {
+        let attempts = self.attempts.map(|n| n as i64);
+        let backoff = self.backoff.map(serialize_duration).transpose()?;
+        let codes = if self.codes.is_empty() {
             None
         } else {
-            let codes = retry.codes.iter().map(|&code| code as i64).collect();
+            let codes = self.codes.iter().map(|&code| code as i64).collect();
             Some(codes)
         };
 
-        Ok(HTTPRouteRulesRetry {
+        Ok(gateway_http::HTTPRouteRulesRetry {
             attempts,
             backoff,
             codes,
         })
     }
+
+    fn from_gateway(retry: &gateway_http::HTTPRouteRulesRetry) -> Result<Self, Error> {
+        let mut codes = Vec::with_capacity(retry.codes.as_ref().map_or(0, |c| c.len()));
+        for (i, &code) in retry.codes.iter().flatten().enumerate() {
+            let code: u32 = code
+                .try_into()
+                .map_err(|_| Error::new_static("invalid response code"))
+                .with_field_index("codes", i)?;
+            codes.push(code);
+        }
+
+        let attempts = retry
+            .attempts
+            .map(|i| i.try_into())
+            .transpose()
+            .map_err(|_| Error::new_static("invalid u32"))
+            .with_field("attempts")?;
+
+        let backoff = parse_duration(&retry.backoff)?;
+
+        Ok(RouteRetry {
+            codes,
+            attempts,
+            backoff,
+        })
+    }
 }
 
-impl TryFrom<&crate::http::RouteMatch> for HTTPRouteRulesMatches {
-    type Error = Error;
-
-    fn try_from(route_match: &crate::http::RouteMatch) -> Result<HTTPRouteRulesMatches, Error> {
-        let method = route_match
+impl RouteMatch {
+    fn to_gateway(&self) -> Result<gateway_http::HTTPRouteRulesMatches, Error> {
+        let method = self
             .method
             .as_ref()
             .map(method_to_gateway)
             .transpose()
             .with_field("method")?;
 
-        Ok(HTTPRouteRulesMatches {
-            headers: Some(vec_to_gateway!(&route_match.headers).with_field("headers")?),
+        Ok(gateway_http::HTTPRouteRulesMatches {
+            headers: Some(vec_to_gateway!(&self.headers)),
             method,
-            path: option_to_gateway!(&route_match.path).with_field("path")?,
-            query_params: Some(
-                vec_to_gateway!(&route_match.query_params).with_field("query_params")?,
-            ),
+            path: option_to_gateway!(&self.path),
+            query_params: Some(vec_to_gateway!(&self.query_params)),
+        })
+    }
+
+    fn from_gateway(matches: &gateway_http::HTTPRouteRulesMatches) -> Result<Self, Error> {
+        let method = matches
+            .method
+            .as_ref()
+            .map(method_from_gateway)
+            .transpose()
+            .with_field("method")?;
+
+        Ok(RouteMatch {
+            path: option_from_gateway!(PathMatch, matches.path, "path")?,
+            headers: vec_from_gateway!(HeaderMatch, matches.headers, "headers")?,
+            query_params: vec_from_gateway!(QueryParamMatch, matches.query_params, "queryParams")?,
+            method,
         })
     }
 }
 
-impl TryFrom<&crate::http::QueryParamMatch> for HTTPRouteRulesMatchesQueryParams {
-    type Error = Error;
-    fn try_from(
-        query_match: &crate::http::QueryParamMatch,
-    ) -> Result<HTTPRouteRulesMatchesQueryParams, Error> {
-        Ok(match query_match {
-            crate::http::QueryParamMatch::RegularExpression { name, value } => {
-                HTTPRouteRulesMatchesQueryParams {
+impl QueryParamMatch {
+    fn to_gateway(&self) -> gateway_http::HTTPRouteRulesMatchesQueryParams {
+        match self {
+            QueryParamMatch::RegularExpression { name, value } => {
+                gateway_http::HTTPRouteRulesMatchesQueryParams {
                     name: name.clone(),
-                    r#type: Some(HTTPRouteRulesMatchesQueryParamsType::RegularExpression),
+                    r#type: Some(
+                        gateway_http::HTTPRouteRulesMatchesQueryParamsType::RegularExpression,
+                    ),
                     value: value.to_string(),
                 }
             }
-            crate::http::QueryParamMatch::Exact { name, value } => {
-                HTTPRouteRulesMatchesQueryParams {
+            QueryParamMatch::Exact { name, value } => {
+                gateway_http::HTTPRouteRulesMatchesQueryParams {
                     name: name.clone(),
-                    r#type: Some(HTTPRouteRulesMatchesQueryParamsType::Exact),
+                    r#type: Some(gateway_http::HTTPRouteRulesMatchesQueryParamsType::Exact),
                     value: value.clone(),
                 }
             }
-        })
+        }
+    }
+
+    fn from_gateway(
+        matches_query: &gateway_http::HTTPRouteRulesMatchesQueryParams,
+    ) -> Result<Self, Error> {
+        let name = &matches_query.name;
+        let value = &matches_query.value;
+        match matches_query.r#type {
+            Some(gateway_http::HTTPRouteRulesMatchesQueryParamsType::Exact) => {
+                Ok(QueryParamMatch::Exact {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
+            }
+            Some(gateway_http::HTTPRouteRulesMatchesQueryParamsType::RegularExpression) => {
+                let value = Regex::from_str(value)
+                    .map_err(|e| Error::new(format!("invalid regex: {e}")).with_field("value"))?;
+                Ok(QueryParamMatch::RegularExpression {
+                    name: name.clone(),
+                    value,
+                })
+            }
+            None => Err(Error::new_static("missing type")),
+        }
     }
 }
 
-impl TryFrom<&crate::http::PathMatch> for HTTPRouteRulesMatchesPath {
-    type Error = Error;
-
-    fn try_from(path_match: &crate::http::PathMatch) -> Result<HTTPRouteRulesMatchesPath, Error> {
-        let (match_type, value) = match path_match {
-            crate::http::PathMatch::Prefix { value } => {
-                (HTTPRouteRulesMatchesPathType::PathPrefix, value.clone())
-            }
-            crate::http::PathMatch::RegularExpression { value } => (
-                HTTPRouteRulesMatchesPathType::RegularExpression,
+impl PathMatch {
+    fn to_gateway(&self) -> gateway_http::HTTPRouteRulesMatchesPath {
+        let (match_type, value) = match self {
+            PathMatch::Prefix { value } => (
+                gateway_http::HTTPRouteRulesMatchesPathType::PathPrefix,
+                value.clone(),
+            ),
+            PathMatch::RegularExpression { value } => (
+                gateway_http::HTTPRouteRulesMatchesPathType::RegularExpression,
                 value.to_string(),
             ),
-            crate::http::PathMatch::Exact { value } => {
-                (HTTPRouteRulesMatchesPathType::Exact, value.clone())
-            }
+            PathMatch::Exact { value } => (
+                gateway_http::HTTPRouteRulesMatchesPathType::Exact,
+                value.clone(),
+            ),
         };
 
-        Ok(HTTPRouteRulesMatchesPath {
+        gateway_http::HTTPRouteRulesMatchesPath {
             r#type: Some(match_type),
             value: Some(value),
-        })
+        }
+    }
+
+    fn from_gateway(matches_path: &gateway_http::HTTPRouteRulesMatchesPath) -> Result<Self, Error> {
+        let Some(value) = &matches_path.value else {
+            return Err(Error::new_static("missing value"));
+        };
+
+        match matches_path.r#type {
+            Some(gateway_http::HTTPRouteRulesMatchesPathType::Exact) => Ok(PathMatch::Exact {
+                value: value.clone(),
+            }),
+            Some(gateway_http::HTTPRouteRulesMatchesPathType::PathPrefix) => {
+                Ok(PathMatch::Prefix {
+                    value: value.clone(),
+                })
+            }
+            Some(gateway_http::HTTPRouteRulesMatchesPathType::RegularExpression) => {
+                let value = Regex::from_str(value)
+                    .map_err(|e| Error::new(format!("invalid regex: {e}")).with_field("value"))?;
+                Ok(PathMatch::RegularExpression { value })
+            }
+            None => Err(Error::new_static("missing type")),
+        }
     }
 }
 
-impl TryFrom<&crate::http::HeaderMatch> for HTTPRouteRulesMatchesHeaders {
-    type Error = Error;
-
-    fn try_from(
-        header_match: &crate::http::HeaderMatch,
-    ) -> Result<HTTPRouteRulesMatchesHeaders, Error> {
-        Ok(match header_match {
-            crate::http::HeaderMatch::RegularExpression { name, value } => {
-                HTTPRouteRulesMatchesHeaders {
+impl HeaderMatch {
+    fn to_gateway(&self) -> gateway_http::HTTPRouteRulesMatchesHeaders {
+        match self {
+            HeaderMatch::RegularExpression { name, value } => {
+                gateway_http::HTTPRouteRulesMatchesHeaders {
                     name: name.clone(),
-                    r#type: Some(HTTPRouteRulesMatchesHeadersType::RegularExpression),
+                    r#type: Some(gateway_http::HTTPRouteRulesMatchesHeadersType::RegularExpression),
                     value: value.to_string(),
                 }
             }
-            crate::http::HeaderMatch::Exact { name, value } => HTTPRouteRulesMatchesHeaders {
+            HeaderMatch::Exact { name, value } => gateway_http::HTTPRouteRulesMatchesHeaders {
                 name: name.clone(),
-                r#type: Some(HTTPRouteRulesMatchesHeadersType::Exact),
+                r#type: Some(gateway_http::HTTPRouteRulesMatchesHeadersType::Exact),
                 value: value.clone(),
             },
-        })
+        }
+    }
+
+    fn from_gateway(
+        matches_headers: &gateway_http::HTTPRouteRulesMatchesHeaders,
+    ) -> Result<Self, Error> {
+        let name = &matches_headers.name;
+        let value = &matches_headers.value;
+        match matches_headers.r#type {
+            Some(gateway_http::HTTPRouteRulesMatchesHeadersType::Exact) => Ok(HeaderMatch::Exact {
+                name: name.clone(),
+                value: value.clone(),
+            }),
+            Some(gateway_http::HTTPRouteRulesMatchesHeadersType::RegularExpression) => {
+                let value = Regex::from_str(value)
+                    .map_err(|e| Error::new(format!("invalid regex: {e}")).with_field("value"))?;
+                Ok(HeaderMatch::RegularExpression {
+                    name: name.clone(),
+                    value,
+                })
+            }
+            None => Err(Error::new_static("missing type")),
+        }
     }
 }
 
-impl TryFrom<&crate::VirtualHost> for HTTPRouteParentRefs {
-    type Error = Error;
+impl BackendRef {
+    fn from_gateway(backend_ref: &gateway_http::HTTPRouteRulesBackendRefs) -> Result<Self, Error> {
+        let group = backend_ref.group.as_deref().unwrap_or("");
+        let kind = backend_ref.kind.as_deref().unwrap_or("Service");
+        let weight = backend_ref
+            .weight
+            .unwrap_or(1)
+            .try_into()
+            .map_err(|_| Error::new_static("negative weight"))
+            .with_field("weight")?;
 
-    fn try_from(target: &crate::VirtualHost) -> Result<HTTPRouteParentRefs, Error> {
-        let (group, kind) = group_kind(&target.target);
-        let (name, namespace) = name_and_namespace(&target.target);
-        let port = target.port.map(|p| p as i32);
+        let port = port_from_gateway(&backend_ref.port)
+            .and_then(|p| p.ok_or(Error::new_static("backendRef port is required")))
+            .with_field("port")?;
 
-        Ok(HTTPRouteParentRefs {
-            group: Some(group.to_string()),
-            kind: Some(kind.to_string()),
-            name,
-            namespace,
-            port,
-            ..Default::default()
+        let service = match (group, kind) {
+            ("junctionlabs.io", "DNS") => {
+                crate::Service::dns(&backend_ref.name).with_field("name")?
+            }
+            ("", "Service") => {
+                // NOTE: kube doesn't require the namespace, but we do for now.
+                let namespace = backend_ref
+                    .namespace
+                    .as_deref()
+                    .ok_or_else(|| Error::new_static("missing namespace"))
+                    .and_then(Name::from_str)
+                    .with_field("namespace")?;
+
+                crate::Service::kube(&namespace, &backend_ref.name)?
+            }
+            (group, kind) => {
+                return Err(Error::new(format!(
+                    "unsupported backend ref: {group}/{kind}"
+                )))
+            }
+        };
+
+        Ok(BackendRef {
+            service,
+            port: Some(port),
+            weight,
         })
     }
-}
 
-impl TryFrom<&crate::http::WeightedBackend> for HTTPRouteRulesBackendRefs {
-    type Error = Error;
-
-    fn try_from(
-        weighted_target: &crate::http::WeightedBackend,
-    ) -> Result<HTTPRouteRulesBackendRefs, Error> {
-        let (group, kind) = group_kind(&weighted_target.backend.target);
-        let (name, namespace) = name_and_namespace(&weighted_target.backend.target);
+    fn to_gateway(&self) -> Result<gateway_http::HTTPRouteRulesBackendRefs, Error> {
+        let (group, kind) = group_kind(&self.service);
+        let (name, namespace) = name_and_namespace(&self.service);
         let weight = Some(
-            weighted_target
-                .weight
+            self.weight
                 .try_into()
-                .map_err(|_| Error::new_static("weight does not fit into an i32"))?,
+                .map_err(|_| Error::new_static("weight cannot be converted to an i32"))
+                .with_field("weight")?,
         );
+        if self.port.is_none() {
+            return Err(Error::new_static(
+                "backendRefs must have a port set when converting to an HTTPRoute",
+            )
+            .with_field("port"));
+        }
 
-        Ok(HTTPRouteRulesBackendRefs {
+        Ok(gateway_http::HTTPRouteRulesBackendRefs {
             name,
             namespace,
             group: Some(group.to_string()),
             kind: Some(kind.to_string()),
-            port: Some(weighted_target.backend.port as i32),
+            port: self.port.map(|p| p as i32),
             weight,
             ..Default::default()
         })
     }
 }
 
-fn name_and_namespace(target: &Target) -> (String, Option<String>) {
+fn name_and_namespace(target: &Service) -> (String, Option<String>) {
     match target {
-        Target::Dns(dns) => (dns.hostname.to_string(), None),
-        Target::KubeService(svc) => (svc.name.to_string(), Some(svc.namespace.to_string())),
+        Service::Dns(dns) => (dns.hostname.to_string(), None),
+        Service::Kube(svc) => (svc.name.to_string(), Some(svc.namespace.to_string())),
     }
 }
 
-fn group_kind(target: &Target) -> (&'static str, &'static str) {
+fn group_kind(target: &Service) -> (&'static str, &'static str) {
     match target {
-        Target::Dns(_) => ("junctionlabs.io", "DNS"),
-        Target::KubeService(_) => ("", "Service"),
+        Service::Dns(_) => ("junctionlabs.io", "DNS"),
+        Service::Kube(_) => ("", "Service"),
     }
 }
 
@@ -659,159 +677,289 @@ fn serialize_duration(d: Duration) -> Result<String, Error> {
 
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeMap;
+    use serde_json::json;
 
-    use gateway_api::apis::experimental::httproutes::HTTPRoute;
+    use crate::Hostname;
 
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
-    fn test_route_from_yml() {
-        let gateway_yaml = r#"
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: foo-route
-spec:
-  parentRefs:
-  - name: example-gateway
-    namespace: prod
-    group: ""
-    kind: Service
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /login
-    retry:
-      attempts: 3
-      backoff: 1m2s3ms
-    timeouts:
-      request: 4m5s6ms
-    backendRefs:
-    - name: foo-svc
-      namespace: prod
-      port: 8080
-        "#;
-
-        let gateway_route: HTTPRoute = serde_yml::from_str(gateway_yaml).unwrap();
-        let route = crate::http::Route {
-            vhost: Target::kube_service("prod", "example-gateway")
-                .unwrap()
-                .into_vhost(None),
-            tags: Default::default(),
-            rules: vec![crate::http::RouteRule {
-                matches: vec![crate::http::RouteMatch {
-                    path: Some(crate::http::PathMatch::Prefix {
-                        value: "/login".to_string(),
-                    }),
+    fn test_from_gateway_simple_httproute() {
+        assert_from_gateway(
+            json!(
+                {
+                    "apiVersion": "gateway.networking.k8s.io/v1",
+                    "kind": "HTTPRoute",
+                    "metadata": {
+                      "name": "example-route"
+                    },
+                    "spec": {
+                      "parentRefs": [
+                        {"name": "foo-svc", "namespace": "prod", "group": "", "kind": "Service"},
+                      ],
+                      "rules": [
+                        {
+                          "backendRefs": [
+                            {"name": "foo-svc", "namespace": "prod", "port": 8080},
+                          ]
+                        }
+                      ]
+                    }
+                  }
+            ),
+            Route {
+                id: Name::from_static("example-route"),
+                hostnames: vec![Hostname::from_static("foo-svc.prod.svc.cluster.local").into()],
+                ports: vec![],
+                tags: Default::default(),
+                rules: vec![RouteRule {
+                    backends: vec![BackendRef {
+                        weight: 1,
+                        service: Service::kube("prod", "foo-svc").unwrap(),
+                        port: Some(8080),
+                    }],
                     ..Default::default()
                 }],
-                retry: Some(crate::http::RouteRetry {
-                    codes: vec![],
-                    attempts: Some(3),
-                    backoff: Some(Duration::from_secs_f64(62.003)),
-                }),
-                timeouts: Some(crate::http::RouteTimeouts {
-                    request: Some(Duration::from_secs_f64(245.006)),
-                    backend_request: None,
-                }),
-                backends: vec![crate::http::WeightedBackend {
+            },
+        );
+    }
+
+    #[test]
+    fn test_from_gateway_full_httproute() {
+        assert_from_gateway(
+            json!(
+                {
+                    "apiVersion": "gateway.networking.k8s.io/v1",
+                    "kind": "HTTPRoute",
+                    "metadata": {
+                      "name": "example-route"
+                    },
+                    "spec": {
+                      "parentRefs": [
+                        {"name": "foo-svc", "namespace": "prod", "group": "", "kind": "Service", "port": 80},
+                        {"name": "foo-svc", "namespace": "prod", "group": "", "kind": "Service", "port": 443},
+                        {"name": "bar-svc", "namespace": "prod", "group": "", "kind": "Service", "port": 80},
+                        {"name": "bar-svc", "namespace": "prod", "group": "", "kind": "Service", "port": 443},
+                        {"name": "*.s3.internal", "group": "junctionlabs.io", "kind": "DNS", "port": 80},
+                        {"name": "*.s3.internal", "group": "junctionlabs.io", "kind": "DNS", "port": 443 }
+                      ],
+                      "rules": [
+                        {
+                          "matches": [
+                            {
+                              "path": {
+                                "type": "PathPrefix",
+                                "value": "/login"
+                              }
+                            }
+                          ],
+                          "retry": {
+                            "attempts": 3,
+                            "backoff": "1m2s3ms"
+                          },
+                          "timeouts": {
+                            "request": "4m5s6ms"
+                          },
+                          "backendRefs": [
+                            {
+                              "name": "foo-svc",
+                              "namespace": "prod",
+                              "port": 8080
+                            }
+                          ]
+                        },
+                        {
+                          "backendRefs": [
+                            {
+                              "name": "bar-svc",
+                              "namespace": "prod",
+                              "port": 8080
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+            ),
+            Route {
+                id: Name::from_static("example-route"),
+                hostnames: [
+                    "*.s3.internal",
+                    "bar-svc.prod.svc.cluster.local",
+                    "foo-svc.prod.svc.cluster.local",
+                ]
+                .into_iter()
+                .map(|s| HostnameMatch::from_str(s).unwrap())
+                .collect(),
+                ports: vec![80, 443],
+                tags: Default::default(),
+                rules: vec![
+                    RouteRule {
+                        matches: vec![RouteMatch {
+                            path: Some(PathMatch::Prefix {
+                                value: "/login".to_string(),
+                            }),
+                            ..Default::default()
+                        }],
+                        retry: Some(RouteRetry {
+                            codes: vec![],
+                            attempts: Some(3),
+                            backoff: Some(Duration::from_secs_f64(62.003)),
+                        }),
+                        timeouts: Some(RouteTimeouts {
+                            request: Some(Duration::from_secs_f64(245.006)),
+                            backend_request: None,
+                        }),
+                        backends: vec![BackendRef {
+                            weight: 1,
+                            service: Service::kube("prod", "foo-svc").unwrap(),
+                            port: Some(8080),
+                        }],
+                        ..Default::default()
+                    },
+                    RouteRule {
+                        backends: vec![BackendRef {
+                            weight: 1,
+                            service: Service::kube("prod", "bar-svc").unwrap(),
+                            port: Some(8080),
+                        }],
+                        ..Default::default()
+                    },
+                ],
+            },
+        );
+    }
+
+    #[track_caller]
+    fn assert_from_gateway(gateway_spec: serde_json::Value, expected: Route) {
+        let gateway_route: gateway_http::HTTPRoute = serde_json::from_value(gateway_spec).unwrap();
+        assert_eq!(
+            Route::from_gateway_httproute(&gateway_route).unwrap(),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_from_gateway_invalid_parent_refs() {
+        assert_from_gateway_err(json!(
+            {
+                "apiVersion": "gateway.networking.k8s.io/v1",
+                "kind": "HTTPRoute",
+                "metadata": {
+                  "name": "example-route"
+                },
+                "spec": {
+                  "parentRefs": [
+                    // the two services here have different port values
+                    {"name": "foo-svc", "namespace": "prod", "group": "", "kind": "Service", "port": 80},
+                    {"name": "bar-svc", "namespace": "prod", "group": "", "kind": "Service", "port": 443},
+                  ],
+                  "rules": [
+                    {
+                      "backendRefs": [
+                        {"name": "foo-svc", "namespace": "prod", "port": 8080},
+                      ]
+                    }
+                  ]
+                }
+              }
+        ));
+
+        assert_from_gateway_err(json!(
+            {
+                "apiVersion": "gateway.networking.k8s.io/v1",
+                "kind": "HTTPRoute",
+                "metadata": {
+                  "name": "example-route"
+                },
+                "spec": {
+                  "parentRefs": [
+                    // one specifies a port, the other does not. this is illegal by the gateway spec
+                    {"name": "foo-svc", "namespace": "prod", "group": "", "kind": "Service"},
+                    {"name": "bar-svc", "namespace": "prod", "group": "", "kind": "Service", "port": 443},
+                  ],
+                  "rules": [
+                    {
+                      "backendRefs": [
+                        {"name": "foo-svc", "namespace": "prod", "port": 8080},
+                      ]
+                    }
+                  ]
+                }
+              }
+        ));
+    }
+
+    #[track_caller]
+    fn assert_from_gateway_err(gateway_spec: serde_json::Value) {
+        let gateway_route: gateway_http::HTTPRoute = serde_json::from_value(gateway_spec).unwrap();
+        assert!(
+            Route::from_gateway_httproute(&gateway_route).is_err(),
+            "expcted an invalid route, but deserialized ok",
+        )
+    }
+
+    #[test]
+    fn test_roundtrip_simple_route() {
+        assert_roundrip(Route {
+            id: Name::from_static("simple-route"),
+            hostnames: vec!["foo.bar".parse().unwrap()],
+            ports: vec![],
+            tags: Default::default(),
+            rules: vec![RouteRule {
+                backends: vec![BackendRef {
                     weight: 1,
-                    backend: Target::kube_service("prod", "foo-svc")
-                        .unwrap()
-                        .into_backend(8080),
+                    service: Service::kube("default", "foo-svc").unwrap(),
+                    port: Some(8080),
                 }],
                 ..Default::default()
             }],
-        };
-
-        assert_eq!(
-            crate::http::Route::try_from(&gateway_route).unwrap(),
-            route,
-            "should parse from gateway",
-        );
-        assert_eq!(
-            crate::http::Route::try_from(&route.to_gateway_httproute("potato", "tomato").unwrap())
-                .unwrap(),
-            route,
-            "should roundtrip"
-        );
+        });
     }
 
     #[test]
-    fn test_passsthrough_route() {
-        let kube_route = HTTPRoute {
-            metadata: ObjectMeta {
-                namespace: Some("prod".to_string()),
-                name: Some("web".to_string()),
-                ..Default::default()
-            },
-            spec: HTTPRouteSpec {
-                parent_refs: Some(vec![HTTPRouteParentRefs {
-                    group: Some("".to_string()),
-                    kind: Some("Service".to_string()),
-                    namespace: Some("prod".to_string()),
-                    name: "cool-service".to_string(),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            },
-            status: None,
-        };
-
-        assert_eq!(
-            crate::http::Route::from_gateway_httproute(&kube_route).unwrap(),
-            crate::http::Route {
-                vhost: Target::kube_service("prod", "cool-service")
-                    .unwrap()
-                    .into_vhost(None),
-                tags: Default::default(),
-                rules: vec![],
-            }
-        );
-    }
-
-    #[test]
-    fn test_roundtrip() {
-        let route = crate::http::Route {
-            vhost: Target::kube_service("default", "example-gateway")
-                .unwrap()
-                .into_vhost(None),
+    fn test_roundtrip_full_route() {
+        assert_roundrip(Route {
+            id: Name::from_static("full-route"),
+            hostnames: vec!["*.foo.bar".parse().unwrap(), "foo.bar".parse().unwrap()],
+            ports: vec![80, 8080],
             tags: BTreeMap::from_iter([
                 ("foo".to_string(), "bar".to_string()),
                 ("one".to_string(), "seven".to_string()),
             ]),
-            rules: vec![crate::http::RouteRule {
-                matches: vec![crate::http::RouteMatch {
-                    path: Some(crate::http::PathMatch::Prefix {
+            rules: vec![RouteRule {
+                matches: vec![RouteMatch {
+                    path: Some(PathMatch::Prefix {
                         value: "/login".to_string(),
                     }),
                     ..Default::default()
                 }],
-                retry: Some(crate::http::RouteRetry {
+                retry: Some(RouteRetry {
                     codes: vec![500, 503],
                     attempts: Some(3),
                     backoff: Some(Duration::from_secs(2)),
                 }),
-                timeouts: Some(crate::http::RouteTimeouts {
+                timeouts: Some(RouteTimeouts {
                     request: Some(Duration::from_secs(2)),
                     backend_request: Some(Duration::from_secs(1)),
                 }),
-                backends: vec![crate::http::WeightedBackend {
+                backends: vec![BackendRef {
                     weight: 1,
-                    backend: Target::kube_service("default", "foo-svc")
-                        .unwrap()
-                        .into_backend(8080),
+                    service: Service::kube("default", "foo-svc").unwrap(),
+                    port: Some(8080),
                 }],
                 ..Default::default()
             }],
-        };
+        });
+    }
 
+    #[track_caller]
+    fn assert_roundrip(route: Route) {
         assert_eq!(
             route,
-            crate::http::Route::from_gateway_httproute(
-                &route.to_gateway_httproute("potato", "tomato").unwrap(),
+            Route::from_gateway_httproute(
+                &route.to_gateway_httproute("a-namespace-test").unwrap(),
             )
             .unwrap(),
         );

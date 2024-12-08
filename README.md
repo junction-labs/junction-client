@@ -69,13 +69,14 @@ request, and then hands back control to your HTTP library.
 
 In all of our libraries, Junction clients expect to be able to talk to a dynamic
 configuration server. The details of how you specify which config server to talk
-to are specific to each language - we want it to feel natural.
-
-If you don't already have a gRPC-compatible xDS server available, try installing
-[ezbake](https://github.com/junction-labs/ezbake) in your local Kubernetes
-cluster.
+to are specific to each language - we want it to feel natural. For now, the
+easiest control plane to use is
+[ezbake](https://github.com/junction-labs/ezbake), our sample self-hosted
+control plane.
 
 ### Python
+
+#### Making Requests
 
 In Python, Junction is available as a standalone client and as a drop-in replacement
 for `requests.Session` or `urllib3.PoolManager`.
@@ -89,59 +90,61 @@ session = requests.Session()
 resp = session.get("http://my-service.prod.svc.cluster.local")
 ```
 
-To configure your client, pass `default_routes` or `default_backends` to your
-`Session`. For example, to load-balance requests to an `nginx` service in the
-`web` namespace based on the `x-user` header, you can specify:
+Just by creating a client and making requests with a Junction session, you're using
+dynamic discovery and load-balancing.
+
+#### Creating Config
+
+Setting up Junction Routes and Backends is almost as easy as using the client.
+For example, if you wanted to shard a memcached cluster by your internal user-id,
+you'd declare it like this:
 
 ```python
-import junction.requests as requests
-
-# create a new Session with a default load balancing policy for the nginx service
-session = requests.Session(
-    default_backends=[
-        {
-            "target": {"type": "service", "name": "nginx", "namespace": "web"},
-            "lb": {
-                "type": "RingHash",
-                "hash_params": [
-                    {"type": "Header", "name": "x-user"},
-                ],
-            },
-        }
-    ]
-)
-
-# make a request to the nginx service
-session.get("http://nginx.web.svc.cluster.local")
+memcached = {
+    "id": {"type": "kube", "name": "nginx", "namespace": "web"},
+    "lb": {
+        "type": "RingHash",
+        "hash_params": [
+            {"type": "Header", "name": "x-user"},
+        ],
+    },
+}
 ```
 
-Routes can be configured by default as well. To send all requests to `/v2/users` to a different
-version of your application, you could set a default configuration like:
+Junction includes typing information for both Routes and Backends. Because Junction
+fully runs in your client, you can unit test your Routes as you create them with no
+network connection required.
 
 ```python
 import junction.config
 import typing
 
-import junction.requests as requests
+my_service = {"type": "kube", "name": "cool", "namespace": "widgets"}
+my_test_service = {"type": "kube", "name": "cooler", "namespace": "widgets"}
 
-my_service = {"type": "service", "name": "cool", "namespace": "widgets"}
-my_test_service = {"type": "service", "name": "cooler", "namespace": "widgets"}
+# create a retry policy that can be re-used for
+retry_policy: junction.config.RouteRetry = {
+    "attempts": 3,
+    "backoff": 0.5,
+    "codes": [500, 503],
+}
 
 # create a new routing policy.
 #
-# all Junction config comes with python3 type hints, as long as you import junction.config
+# all Junction config comes with python3 typing info
 routes: typing.List[junction.config.Route] = [
     {
-        "target": my_service,
+        "id": "my-route",
+        "hostnames": ["cool.widgets.svc.cluster.local"],
         "rules": [
             {
                 "backends": [my_test_service],
+                "retry": retry_policy,
                 "matches": [{"path": {"value": "/v2/users"}}],
             },
             {
                 "backends": [my_service],
                 "retry": retry_policy,
-                "timeouts": timeouts,
             },
         ],
     },
@@ -159,9 +162,6 @@ assert matched_backend["name"] == "cool"
     routes, "GET", "http://cool.widgets.svc.cluster.local/v2/users", {}
 )
 assert matched_backend["name"] == "cooler"
-
-# use the routes we just tested in our HTTP client
-s = requests.Session(default_routes=routes)
 ```
 
 For a more complete example configuration see the [sample] project. It's a

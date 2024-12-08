@@ -14,7 +14,7 @@ use crate::{
     error::{Error, ErrorContext},
     value_or_default,
     xds::ads_config_source,
-    BackendId, Target,
+    BackendId, Service,
 };
 
 impl Backend {
@@ -29,11 +29,11 @@ impl Backend {
 
         let discovery_type = cluster_discovery_type(cluster);
 
-        match &id.target {
+        match &id.service {
             // if this is supposed to be a DNS cluster, validate that the xDS
             // actually says it's a DNS cluster and that the discovery data
             // matches the name.
-            Target::Dns(dns) => {
+            Service::Dns(dns) => {
                 if discovery_type != Some(DiscoveryType::LogicalDns) {
                     return Err(Error::new_static("mismatched discovery type"))
                         .with_field("cluster_discovery_type");
@@ -52,7 +52,7 @@ impl Backend {
                 }
             }
             // kube clusters should use EDS over ADS, with a cluster_name matching cluster.name
-            Target::KubeService(_) => {
+            Service::Kube(_) => {
                 if discovery_type != Some(DiscoveryType::Eds) {
                     return Err(Error::new_static("mismatched discovery type"))
                         .with_field("cluster_discovery_type");
@@ -88,8 +88,8 @@ impl Backend {
             None => (xds_cluster::cluster::LbPolicy::default(), None),
         };
 
-        let (cluster_discovery_type, eds_cluster_config, load_assignment) = match &self.id.target {
-            Target::Dns(dns) => {
+        let (cluster_discovery_type, eds_cluster_config, load_assignment) = match &self.id.service {
+            Service::Dns(dns) => {
                 let dtype = ClusterDiscoveryType::Type(DiscoveryType::LogicalDns.into());
                 let host_identifier = Some(xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(
                     xds_endpoint::Endpoint {
@@ -110,7 +110,7 @@ impl Backend {
                 });
                 (dtype, None, load_assignment)
             }
-            Target::KubeService(_) => {
+            Service::Kube(_) => {
                 let cluster_discovery_type = ClusterDiscoveryType::Type(DiscoveryType::Eds.into());
                 let eds_cluster_config = Some(EdsClusterConfig {
                     eds_config: Some(crate::xds::ads_config_source()),
@@ -395,10 +395,10 @@ mod test {
 
     #[test]
     fn test_unspecified_lb_roundtrips() {
-        let web = Target::kube_service("prod", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
 
         let backend = Backend {
-            id: web.into_backend(8891),
+            id: web.as_backend_id(8891),
             lb: LbPolicy::Unspecified,
         };
         assert_eq!(backend, Backend::from_xds(&backend.to_xds(), None).unwrap(),);
@@ -407,10 +407,10 @@ mod test {
 
     #[test]
     fn test_round_robin_lb_roundtrips() {
-        let web = Target::kube_service("prod", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
 
         let backend = Backend {
-            id: web.into_backend(7891),
+            id: web.as_backend_id(7891),
             lb: LbPolicy::RoundRobin,
         };
         assert_eq!(backend, Backend::from_xds(&backend.to_xds(), None).unwrap(),);
@@ -419,10 +419,10 @@ mod test {
 
     #[test]
     fn test_ringhash_roundtrip() {
-        let web = Target::kube_service("prod", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
 
         let backend = Backend {
-            id: web.into_backend(6666),
+            id: web.as_backend_id(6666),
             lb: LbPolicy::RingHash(RingHashParams {
                 min_ring_size: 1024,
                 hash_params: vec![
@@ -458,10 +458,10 @@ mod test {
 
     #[test]
     fn test_lb_route_config_roundtrip() {
-        let web = Target::kube_service("prod", "web").unwrap();
+        let web = Service::kube("prod", "web").unwrap();
 
         let backend = Backend {
-            id: web.into_backend(12321),
+            id: web.as_backend_id(12321),
             lb: LbPolicy::RingHash(RingHashParams {
                 min_ring_size: 1024,
                 hash_params: vec![

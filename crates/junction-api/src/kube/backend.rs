@@ -3,9 +3,9 @@ use std::str::FromStr;
 
 use crate::backend::{Backend, LbPolicy};
 use crate::error::{Error, ErrorContext};
-use crate::{Name, Target};
+use crate::{Name, Service};
 
-use k8s_openapi::api::core::v1::{Service, ServicePort, ServiceSpec};
+use k8s_openapi::api::core::v1 as core_v1;
 use kube::api::ObjectMeta;
 use kube::{Resource, ResourceExt};
 
@@ -21,8 +21,8 @@ impl Backend {
     /// This service can be used to patch and overwrite an existing Service
     /// using the `kube` crate or saved as json/yaml and used to patch an
     /// existing service with `kubectl patch`.
-    pub fn to_service_patch(&self) -> Service {
-        let mut svc = Service {
+    pub fn to_service_patch(&self) -> core_v1::Service {
+        let mut svc = core_v1::Service {
             metadata: ObjectMeta {
                 annotations: Some(BTreeMap::new()),
                 ..Default::default()
@@ -36,22 +36,22 @@ impl Backend {
         svc.annotations_mut()
             .insert(lb_annotation.to_string(), lb_json);
 
-        match &self.id.target {
-            Target::Dns(dns) => {
-                svc.spec = Some(ServiceSpec {
+        match &self.id.service {
+            Service::Dns(dns) => {
+                svc.spec = Some(core_v1::ServiceSpec {
                     type_: Some("ExternalName".to_string()),
                     external_name: Some(dns.hostname.to_string()),
                     ..Default::default()
                 })
             }
-            Target::KubeService(service) => {
+            Service::Kube(service) => {
                 let meta = svc.meta_mut();
                 meta.name = Some(service.name.to_string());
                 meta.namespace = Some(service.namespace.to_string());
 
-                svc.spec = Some(ServiceSpec {
+                svc.spec = Some(core_v1::ServiceSpec {
                     type_: Some("ClusterIP".to_string()),
-                    ports: Some(vec![ServicePort {
+                    ports: Some(vec![core_v1::ServicePort {
                         port: self.id.port as i32,
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
@@ -79,7 +79,7 @@ impl Backend {
     ///    backends are generated for ports 80 and 443.
     ///
     /// All other Service types are currently unsupported.
-    pub fn from_service(svc: &Service) -> Result<Vec<Self>, Error> {
+    pub fn from_service(svc: &core_v1::Service) -> Result<Vec<Self>, Error> {
         let (namespace, name) = (
             as_ref_or_else(&svc.meta().namespace, "missing namespace")
                 .with_fields("meta", "name")?,
@@ -96,11 +96,11 @@ impl Backend {
         let mut backends = vec![];
 
         // generate the target from the kube Service type.
-        let (target, svc_ports) = match svc_type {
+        let (service, svc_ports) = match svc_type {
             "ClusterIP" => {
                 let name = Name::from_str(name).with_fields("meta", "name")?;
                 let namespace = Name::from_str(namespace).with_fields("meta", "namespace")?;
-                let target = Target::kube_service(&namespace, &name)?;
+                let service = Service::kube(&namespace, &name)?;
 
                 let svc_ports =
                     as_ref_or_else(&spec.ports, "missing ports").with_fields("spec", "ports")?;
@@ -113,13 +113,13 @@ impl Backend {
                     ports.push(port);
                 }
 
-                (target, ports)
+                (service, ports)
             }
             "ExternalName" => {
                 let external_name = as_ref_or_else(&spec.external_name, "missing externalName")
                     .with_fields("spec", "externalName")?;
 
-                let target = Target::dns(external_name).with_fields("spec", "externalName")?;
+                let service = Service::dns(external_name).with_fields("spec", "externalName")?;
                 let svc_ports = spec.ports.as_deref().unwrap_or_default();
 
                 let mut ports = Vec::with_capacity(svc_ports.len());
@@ -134,7 +134,7 @@ impl Backend {
                     ports.extend([80, 443]);
                 }
 
-                (target, ports)
+                (service, ports)
             }
             svc_type => return Err(Error::new(format!("{svc_type} Services are unsupported"))),
         };
@@ -145,7 +145,7 @@ impl Backend {
                 get_lb_policy(svc.annotations(), &lb_policy_annotation(port))?.unwrap_or_default();
             backends.push(Backend {
                 id: crate::BackendId {
-                    target: target.clone(),
+                    service: service.clone(),
                     port,
                 },
                 lb,
@@ -183,7 +183,7 @@ fn as_ref_or_else<'a, T>(f: &'a Option<T>, message: &'static str) -> Result<&'a 
 
 #[cfg(test)]
 mod test {
-    use k8s_openapi::api::core::v1::{ServicePort, ServiceSpec};
+    use k8s_openapi::api::core::v1 as core_v1;
     use kube::api::ObjectMeta;
 
     use crate::backend::{RingHashParams, SessionAffinityHashParam, SessionAffinityHashParamType};
@@ -206,14 +206,12 @@ mod test {
     #[test]
     fn test_to_service_patch() {
         let backend = Backend {
-            id: Target::kube_service("bar", "foo")
-                .unwrap()
-                .into_backend(1212),
+            id: Service::kube("bar", "foo").unwrap().as_backend_id(1212),
             lb: LbPolicy::RoundRobin,
         };
         assert_eq!(
             backend.to_service_patch(),
-            Service {
+            core_v1::Service {
                 metadata: ObjectMeta {
                     namespace: Some("bar".to_string()),
                     name: Some("foo".to_string()),
@@ -222,9 +220,9 @@ mod test {
                     ),
                     ..Default::default()
                 },
-                spec: Some(ServiceSpec {
+                spec: Some(core_v1::ServiceSpec {
                     type_: CLUSTER_IP.map(str::to_string),
-                    ports: Some(vec![ServicePort {
+                    ports: Some(vec![core_v1::ServicePort {
                         port: 1212,
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
@@ -236,19 +234,19 @@ mod test {
         );
 
         let backend = Backend {
-            id: Target::dns("example.com").unwrap().into_backend(4430),
+            id: Service::dns("example.com").unwrap().as_backend_id(4430),
             lb: LbPolicy::RoundRobin,
         };
         assert_eq!(
             backend.to_service_patch(),
-            Service {
+            core_v1::Service {
                 metadata: ObjectMeta {
                     annotations: Some(
                         annotations! { "junctionlabs.io/backend.lb.4430" => r#"{"type":"RoundRobin"}"# }
                     ),
                     ..Default::default()
                 },
-                spec: Some(ServiceSpec {
+                spec: Some(core_v1::ServiceSpec {
                     type_: Some("ExternalName".to_string()),
                     external_name: Some("example.com".to_string()),
                     ..Default::default()
@@ -261,15 +259,15 @@ mod test {
     #[test]
     fn test_from_clusterip() {
         // should generate a backend for each port
-        let svc = Service {
+        let svc = core_v1::Service {
             metadata: ObjectMeta {
                 namespace: Some("bar".to_string()),
                 name: Some("foo".to_string()),
                 ..Default::default()
             },
-            spec: Some(ServiceSpec {
+            spec: Some(core_v1::ServiceSpec {
                 type_: CLUSTER_IP.map(str::to_string),
-                ports: Some(vec![ServicePort {
+                ports: Some(vec![core_v1::ServicePort {
                     port: 8910,
                     protocol: Some("TCP".to_string()),
                     ..Default::default()
@@ -282,21 +280,19 @@ mod test {
         assert_eq!(
             Backend::from_service(&svc).unwrap(),
             vec![Backend {
-                id: Target::kube_service("bar", "foo")
-                    .unwrap()
-                    .into_backend(8910),
+                id: Service::kube("bar", "foo").unwrap().as_backend_id(8910),
                 lb: LbPolicy::Unspecified,
             },]
         );
 
         // should error with no ports
-        let no_ports = Service {
+        let no_ports = core_v1::Service {
             metadata: ObjectMeta {
                 namespace: Some("bar".to_string()),
                 name: Some("foo".to_string()),
                 ..Default::default()
             },
-            spec: Some(ServiceSpec {
+            spec: Some(core_v1::ServiceSpec {
                 type_: CLUSTER_IP.map(str::to_string),
                 ..Default::default()
             }),
@@ -306,7 +302,7 @@ mod test {
 
         // multiple ports and some LB config, should generate different backends
         // with different LB policies.
-        let svc = Service {
+        let svc = core_v1::Service {
             metadata: ObjectMeta {
                 namespace: Some("bar".to_string()),
                 name: Some("foo".to_string()),
@@ -316,22 +312,22 @@ mod test {
                 }),
                 ..Default::default()
             },
-            spec: Some(ServiceSpec {
+            spec: Some(core_v1::ServiceSpec {
                 type_: CLUSTER_IP.map(str::to_string),
                 ports: Some(vec![
-                    ServicePort {
+                    core_v1::ServicePort {
                         name: Some("http".to_string()),
                         port: 80,
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
                     },
-                    ServicePort {
+                    core_v1::ServicePort {
                         name: Some("https".to_string()),
                         port: 443,
                         protocol: Some("TCP".to_string()),
                         ..Default::default()
                     },
-                    ServicePort {
+                    core_v1::ServicePort {
                         name: Some("health".to_string()),
                         port: 4430,
                         protocol: Some("TCP".to_string()),
@@ -347,13 +343,11 @@ mod test {
             Backend::from_service(&svc).unwrap(),
             vec![
                 Backend {
-                    id: Target::kube_service("bar", "foo").unwrap().into_backend(80),
+                    id: Service::kube("bar", "foo").unwrap().as_backend_id(80),
                     lb: LbPolicy::Unspecified,
                 },
                 Backend {
-                    id: Target::kube_service("bar", "foo")
-                        .unwrap()
-                        .into_backend(443),
+                    id: Service::kube("bar", "foo").unwrap().as_backend_id(443),
                     lb: LbPolicy::RingHash(RingHashParams {
                         min_ring_size: 1024,
                         hash_params: vec![SessionAffinityHashParam {
@@ -365,9 +359,7 @@ mod test {
                     }),
                 },
                 Backend {
-                    id: Target::kube_service("bar", "foo")
-                        .unwrap()
-                        .into_backend(4430),
+                    id: Service::kube("bar", "foo").unwrap().as_backend_id(4430),
                     lb: LbPolicy::RoundRobin,
                 },
             ]
@@ -378,7 +370,7 @@ mod test {
     fn test_from_external_name() {
         // without explicit ports, should generate backends for both 443 and 80.
         // annotations should still get picked up.
-        let svc = Service {
+        let svc = core_v1::Service {
             metadata: ObjectMeta {
                 namespace: Some("bar".to_string()),
                 name: Some("foo".to_string()),
@@ -387,7 +379,7 @@ mod test {
                 }),
                 ..Default::default()
             },
-            spec: Some(ServiceSpec {
+            spec: Some(core_v1::ServiceSpec {
                 type_: EXTERNAL_NAME.map(str::to_string),
                 external_name: Some("www.junctionlabs.io".to_string()),
                 ..Default::default()
@@ -399,20 +391,22 @@ mod test {
             Backend::from_service(&svc).unwrap(),
             vec![
                 Backend {
-                    id: Target::dns("www.junctionlabs.io").unwrap().into_backend(80),
+                    id: Service::dns("www.junctionlabs.io")
+                        .unwrap()
+                        .as_backend_id(80),
                     lb: LbPolicy::Unspecified,
                 },
                 Backend {
-                    id: Target::dns("www.junctionlabs.io")
+                    id: Service::dns("www.junctionlabs.io")
                         .unwrap()
-                        .into_backend(443),
+                        .as_backend_id(443),
                     lb: LbPolicy::RoundRobin,
                 },
             ]
         );
 
         // with explicit ports, we should use the given port and pick up an lb policy
-        let svc = Service {
+        let svc = core_v1::Service {
             metadata: ObjectMeta {
                 namespace: Some("bar".to_string()),
                 name: Some("foo".to_string()),
@@ -421,10 +415,10 @@ mod test {
                 }),
                 ..Default::default()
             },
-            spec: Some(ServiceSpec {
+            spec: Some(core_v1::ServiceSpec {
                 type_: EXTERNAL_NAME.map(str::to_string),
                 external_name: Some("www.junctionlabs.io".to_string()),
-                ports: Some(vec![ServicePort {
+                ports: Some(vec![core_v1::ServicePort {
                     port: 7777,
                     protocol: Some("TCP".to_string()),
                     ..Default::default()
@@ -437,9 +431,9 @@ mod test {
         assert_eq!(
             Backend::from_service(&svc).unwrap(),
             vec![Backend {
-                id: Target::dns("www.junctionlabs.io")
+                id: Service::dns("www.junctionlabs.io")
                     .unwrap()
-                    .into_backend(7777),
+                    .as_backend_id(7777),
                 lb: LbPolicy::RoundRobin,
             },]
         )
@@ -448,9 +442,7 @@ mod test {
     #[test]
     fn test_svc_patch_roundtrip() {
         let backend = Backend {
-            id: Target::kube_service("bar", "foo")
-                .unwrap()
-                .into_backend(8888),
+            id: Service::kube("bar", "foo").unwrap().as_backend_id(8888),
             lb: LbPolicy::RoundRobin,
         };
 

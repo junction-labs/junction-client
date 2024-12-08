@@ -1,4 +1,7 @@
-use junction_api::{backend::Backend, http::Route, BackendId};
+use junction_api::{
+    backend::{Backend, BackendId},
+    http::Route,
+};
 use junction_core::{ResolveMode, ResourceVersion};
 use once_cell::sync::Lazy;
 use pyo3::{
@@ -280,50 +283,14 @@ fn check_route(
 /// inferred, but routes with other targets need to have namespace and name
 /// kwargs set explicitly.
 #[pyfunction]
-#[pyo3(signature = (route, *, name, namespace))]
-fn dump_kube_route(
-    route: Bound<'_, PyAny>,
-    name: Option<String>,
-    namespace: Option<String>,
-) -> PyResult<String> {
+#[pyo3(signature = (*, route, namespace))]
+fn dump_kube_route(route: Bound<'_, PyAny>, namespace: String) -> PyResult<String> {
     let route: Route = pythonize::depythonize_bound(route)?;
-
-    let (vhost_namespace, vhost_name) = match &route.vhost.target {
-        junction_api::Target::KubeService(svc) => {
-            (Some(svc.namespace.clone()), Some(svc.name.clone()))
-        }
-        _ => (None, None),
-    };
-
-    let namespace = map_from_str(namespace)?.or(vhost_namespace);
-    let name = map_from_str(name)?.or(vhost_name);
-
-    let Some((namespace, name)) = namespace.zip(name) else {
-        return Err(PyValueError::new_err(
-            "namespace and name are required but can't be inferred for this Route",
-        ));
-    };
-
-    let route = route
-        .to_gateway_httproute(&namespace, &name)
+    let kube_route = route
+        .to_gateway_httproute(&namespace)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-
-    Ok(serde_yml::to_string(&route)
+    Ok(serde_yml::to_string(&kube_route)
         .expect("Serialization failed. This is a bug in Junction, not your code."))
-}
-
-fn map_from_str<T>(v: Option<String>) -> PyResult<Option<T>>
-where
-    T: FromStr,
-    <T as FromStr>::Err: std::error::Error,
-{
-    match v {
-        Some(s) => {
-            let v = T::from_str(&s).map_err(|e| PyValueError::new_err(e.to_string()))?;
-            Ok(Some(v))
-        }
-        None => Ok(None),
-    }
 }
 
 /// Dump a Backend to Kubernetes YAML.
