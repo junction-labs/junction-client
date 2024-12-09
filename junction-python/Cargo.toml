@@ -32,4 +32,4 @@ pyo3 = { version = "0.21", features = [
 pythonize = "0.21"
 
 [build-dependencies]
-pyo3-build-config = "0.22"
+pyo3-build-config = "0.23"
