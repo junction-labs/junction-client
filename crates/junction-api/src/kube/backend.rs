@@ -186,7 +186,7 @@ mod test {
     use k8s_openapi::api::core::v1 as core_v1;
     use kube::api::ObjectMeta;
 
-    use crate::backend::{RingHashParams, SessionAffinityHashParam, SessionAffinityHashParamType};
+    use crate::backend::{RequestHashPolicy, RequestHasher, RingHashParams};
 
     use super::*;
 
@@ -350,9 +350,9 @@ mod test {
                     id: Service::kube("bar", "foo").unwrap().as_backend_id(443),
                     lb: LbPolicy::RingHash(RingHashParams {
                         min_ring_size: 1024,
-                        hash_params: vec![SessionAffinityHashParam {
+                        hash_params: vec![RequestHashPolicy {
                             terminal: false,
-                            matcher: SessionAffinityHashParamType::Header {
+                            hasher: RequestHasher::Header {
                                 name: "x-user".to_string()
                             }
                         }]

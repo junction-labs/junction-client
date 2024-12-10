@@ -252,21 +252,17 @@ class BackendId(typing.TypedDict):
     """The port backend traffic is sent on."""
 
 
-class SessionAffinityHashParam(typing.TypedDict):
+class RequestHashPolicy(typing.TypedDict):
     terminal: bool
     """Whether to stop immediately after hashing this value.
 
-    This is useful if you want to try to hash a value, and then fall back to another as a
-    default if it wasn't set."""
+    This is useful if you want to try to hash a value, and then fall back to
+    another as a default if it wasn't set."""
 
     name: str
     """The name of the header to use as hash input."""
 
-    type: typing.Literal["Header"]
-
-
-class SessionAffinity(typing.TypedDict):
-    hash_params: typing.List[SessionAffinityHashParam]
+    type: typing.Literal["Header"] | typing.Literal["QueryParam"]
 
 
 class LbPolicyRoundRobin(typing.TypedDict):
@@ -278,7 +274,7 @@ class LbPolicyRingHash(typing.TypedDict):
     min_ring_size: int
     """The minimum size of the hash ring"""
 
-    hash_params: typing.List[SessionAffinityHashParam]
+    hash_params: typing.List[RequestHashPolicy]
     """How to hash an outgoing request into the ring.
 
     Hash parameters are applied in order. If the request is missing an input, it has no effect

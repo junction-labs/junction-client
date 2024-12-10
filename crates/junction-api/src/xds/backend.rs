@@ -7,10 +7,7 @@ use xds_api::pb::envoy::config::{
 };
 
 use crate::{
-    backend::{
-        Backend, LbPolicy, RingHashParams, SessionAffinity, SessionAffinityHashParam,
-        SessionAffinityHashParamType,
-    },
+    backend::{Backend, LbPolicy, RequestHashPolicy, RequestHasher, RingHashParams},
     error::{Error, ErrorContext},
     value_or_default,
     xds::ads_config_source,
@@ -325,30 +322,34 @@ impl LbPolicy {
 }
 
 #[inline]
-fn hash_policies(action: &xds_route::RouteAction) -> Result<Vec<SessionAffinityHashParam>, Error> {
+fn hash_policies(action: &xds_route::RouteAction) -> Result<Vec<RequestHashPolicy>, Error> {
     let res: Result<Vec<_>, Error> = action
         .hash_policy
         .iter()
         .enumerate()
-        .map(|(i, policy)| SessionAffinityHashParam::from_xds(policy).with_index(i))
+        .map(|(i, policy)| RequestHashPolicy::from_xds(policy).with_index(i))
         .collect();
 
     res.with_field("hash_policy")
 }
 
-impl SessionAffinityHashParam {
+impl RequestHashPolicy {
     pub(crate) fn to_xds(&self) -> xds_route::route_action::HashPolicy {
-        use xds_route::route_action::hash_policy::Header;
-        use xds_route::route_action::hash_policy::PolicySpecifier;
+        use xds_route::route_action::hash_policy::{Header, PolicySpecifier, QueryParameter};
 
-        match &self.matcher {
-            SessionAffinityHashParamType::Header { name } => xds_route::route_action::HashPolicy {
-                terminal: self.terminal,
-                policy_specifier: Some(PolicySpecifier::Header(Header {
-                    header_name: name.clone(),
-                    regex_rewrite: None,
-                })),
-            },
+        let policy_specifier = match &self.hasher {
+            RequestHasher::Header { name } => PolicySpecifier::Header(Header {
+                header_name: name.clone(),
+                regex_rewrite: None,
+            }),
+            RequestHasher::QueryParam { name } => {
+                PolicySpecifier::QueryParameter(QueryParameter { name: name.clone() })
+            }
+        };
+
+        xds_route::route_action::HashPolicy {
+            terminal: self.terminal,
+            policy_specifier: Some(policy_specifier),
         }
     }
 
@@ -358,8 +359,14 @@ impl SessionAffinityHashParam {
         match &xds.policy_specifier {
             Some(PolicySpecifier::Header(header)) => Ok(Self {
                 terminal: xds.terminal,
-                matcher: SessionAffinityHashParamType::Header {
+                hasher: RequestHasher::Header {
                     name: header.header_name.clone(),
+                },
+            }),
+            Some(PolicySpecifier::QueryParameter(query)) => Ok(Self {
+                terminal: xds.terminal,
+                hasher: RequestHasher::QueryParam {
+                    name: query.name.clone(),
                 },
             }),
             Some(_) => {
@@ -367,25 +374,6 @@ impl SessionAffinityHashParam {
             }
             None => Err(Error::new_static("no policy specified").with_field("policy_specifier")),
         }
-    }
-}
-
-impl SessionAffinity {
-    pub fn from_xds(
-        hash_policy: &[xds_route::route_action::HashPolicy],
-    ) -> Result<Option<Self>, Error> {
-        if hash_policy.is_empty() {
-            return Ok(None);
-        }
-
-        let hash_params = hash_policy
-            .iter()
-            .enumerate()
-            .map(|(i, h)| SessionAffinityHashParam::from_xds(h).with_index(i))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        debug_assert!(!hash_params.is_empty(), "hash params must not be empty");
-        Ok(Some(Self { hash_params }))
     }
 }
 
@@ -426,15 +414,21 @@ mod test {
             lb: LbPolicy::RingHash(RingHashParams {
                 min_ring_size: 1024,
                 hash_params: vec![
-                    SessionAffinityHashParam {
+                    RequestHashPolicy {
+                        terminal: true,
+                        hasher: RequestHasher::QueryParam {
+                            name: "q".to_string(),
+                        },
+                    },
+                    RequestHashPolicy {
                         terminal: false,
-                        matcher: SessionAffinityHashParamType::Header {
+                        hasher: RequestHasher::Header {
                             name: "x-user".to_string(),
                         },
                     },
-                    SessionAffinityHashParam {
-                        terminal: false,
-                        matcher: SessionAffinityHashParamType::Header {
+                    RequestHashPolicy {
+                        terminal: true,
+                        hasher: RequestHasher::Header {
                             name: "x-env".to_string(),
                         },
                     },
@@ -465,15 +459,15 @@ mod test {
             lb: LbPolicy::RingHash(RingHashParams {
                 min_ring_size: 1024,
                 hash_params: vec![
-                    SessionAffinityHashParam {
+                    RequestHashPolicy {
                         terminal: false,
-                        matcher: SessionAffinityHashParamType::Header {
+                        hasher: RequestHasher::Header {
                             name: "x-user".to_string(),
                         },
                     },
-                    SessionAffinityHashParam {
+                    RequestHashPolicy {
                         terminal: false,
-                        matcher: SessionAffinityHashParamType::Header {
+                        hasher: RequestHasher::Header {
                             name: "x-env".to_string(),
                         },
                     },
