@@ -1,5 +1,5 @@
 use crate::{
-    endpoints::EndpointIter, load_balancer::BackendLb, xds::AdsClient, ConfigCache, Endpoint,
+    endpoints::{EndpointGroup, EndpointIter}, load_balancer::BackendLb, xds::AdsClient, ConfigCache, Endpoint,
     Error, StaticConfig,
 };
 use futures::FutureExt;
@@ -132,7 +132,7 @@ impl ConfigCache for Config {
     async fn get_endpoints(
         &self,
         backend: &BackendId,
-    ) -> Option<Arc<crate::load_balancer::EndpointGroup>> {
+    ) -> Option<Arc<EndpointGroup>> {
         match &self {
             Config::Static(s) => s.get_endpoints(backend).await,
             Config::DynamicEndpoints(_, d) => d.ads_client.get_endpoints(backend).await,

@@ -10,7 +10,7 @@ use junction_api::Hostname;
 use rand::Rng;
 use tokio::sync::Notify;
 
-use crate::load_balancer::EndpointGroup;
+use crate::endpoints::EndpointGroup;
 
 /// A blocking resolver that uses the stdlib to resolve hostnames to addresses.
 ///
@@ -652,10 +652,7 @@ mod test {
             .collect();
         assert_eq!(
             endpoints,
-            vec![crate::EndpointAddress::SocketAddr(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                7777,
-            ))]
+            vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7777,)]
         );
     }
 

@@ -670,7 +670,6 @@ impl Cache {
                         // for an LB policy update, recompute the lb config for
                         // the cluster. have to set the gc graph subscription in
                         // case this cluster doesn't exist yet.
-
                         let (cluster_node, created) =
                             self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
                         self.refs.update_edge(node, cluster_node, ());
@@ -762,14 +761,10 @@ impl Cache {
                 .route_configs
                 .is_changed(&route_config.name, &route_config)
             {
-                changed.insert(ResourceType::RouteConfiguration);
-
-                // it's possible that we got delivered a RouteConfiguration that
-                // we don't have a subscription for (either because of a silly
-                // ADS server or a race).
-                //
-                // if we did, just ignore the node.
-                let Some(node) =
+                // we need the ref here to set up edges to clusters. if we
+                // haven't subscribed to this CLA, don't bother creating a new
+                // ref - it'll just get GCd anyway.
+                let Some(cla_ref) =
                     self.find_ref(ResourceType::RouteConfiguration, &route_config.name)
                 else {
                     continue;
@@ -792,11 +787,11 @@ impl Cache {
                 match &route_config.data {
                     RouteConfigData::Route { clusters, .. } => {
                         // update the reference graph to include edges from this route to clusters.
-                        self.reset_ref(node);
+                        self.reset_ref(cla_ref);
                         for cluster in clusters {
                             let (cluster_node, created) =
                                 self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
-                            self.refs.update_edge(node, cluster_node, ());
+                            self.refs.update_edge(cla_ref, cluster_node, ());
 
                             if created {
                                 changed.insert(ResourceType::Cluster);
@@ -810,7 +805,7 @@ impl Cache {
                         // changes.
                         let (cluster_node, _) =
                             self.find_or_create_ref(ResourceType::Cluster, cluster.as_str());
-                        self.refs.update_edge(node, cluster_node, ());
+                        self.refs.update_edge(cla_ref, cluster_node, ());
 
                         if let Err(e) = self.rebuild_cluster(&mut changed, cluster, action) {
                             errors.push(e);
@@ -822,6 +817,7 @@ impl Cache {
                 self.data
                     .route_configs
                     .insert_ok(route_config_name, version.clone(), route_config);
+                changed.insert(ResourceType::RouteConfiguration);
             }
         }
 
@@ -833,7 +829,10 @@ impl Cache {
         version: crate::xds::ResourceVersion,
         load_assignments: Vec<xds_endpoint::ClusterLoadAssignment>,
     ) -> (ResourceTypeSet, Vec<ResourceError>) {
+        use ResourceType::*;
+
         let mut changed = ResourceTypeSet::default();
+        let mut errors = Vec::new();
 
         for load_assignment in load_assignments {
             if self
@@ -841,52 +840,38 @@ impl Cache {
                 .load_assignments
                 .is_changed(&load_assignment.cluster_name, &load_assignment)
             {
-                let Some(cla_node) = self.find_ref(
-                    ResourceType::ClusterLoadAssignment,
-                    &load_assignment.cluster_name,
-                ) else {
+                // ignore this CLA if the cache is not subscribed
+                if self
+                    .find_ref(ClusterLoadAssignment, &load_assignment.cluster_name)
+                    .is_none()
+                {
                     continue;
-                };
-
-                // use the GC graph to pull a ref to the parent cluster. with
-                // the xdstp:// scheme the name of a Cluster and a
-                // ClusterLoadAssignment may not be the same, so using the
-                // GC graph is necessary.
-                //
-                // this assumes that a CLA will only ever have a single parent
-                // Cluster.
-                let target = {
-                    let cluster_node = self
-                        .parent_refs(cla_node)
-                        .next()
-                        .expect("GC leak: ClusterLoadAssignment must have a parent cluster");
-                    let cluster = self
-                        .data
-                        .clusters
-                        .get(&self.refs[cluster_node].name)
-                        .expect("GC leak: parent Cluster was removed from cache");
-                    cluster
-                        .data()
-                        .expect("GC leak: parent Cluster has no data")
-                        .backend_lb
-                        .config
-                        .id
-                        .clone()
-                };
+                }
 
                 let load_assignment_name = load_assignment.cluster_name.clone();
-                let load_assignment = LoadAssignment::from_xds(target, load_assignment);
+                let load_assignment = match LoadAssignment::from_xds(load_assignment) {
+                    Ok(cla) => cla,
+                    Err(e) => {
+                        self.data.load_assignments.insert_error(
+                            load_assignment_name.clone(),
+                            version.clone(),
+                            e.clone(),
+                        );
+                        errors.push(e);
+                        continue;
+                    }
+                };
 
                 self.data.load_assignments.insert_ok(
                     load_assignment_name,
                     version.clone(),
                     load_assignment,
                 );
-                changed.insert(ResourceType::ClusterLoadAssignment);
+                changed.insert(ClusterLoadAssignment);
             }
         }
 
-        (changed, Vec::new())
+        (changed, errors)
     }
 
     /// Try to rebuild a Cluster and its data, using a new RouteAction to fill
@@ -998,10 +983,6 @@ impl Cache {
             }
             None => false,
         }
-    }
-
-    fn parent_refs(&self, node: NodeIndex) -> impl Iterator<Item = NodeIndex> + '_ {
-        self.refs.neighbors_directed(node, Direction::Incoming)
     }
 
     fn find_lb_action(&self, cluster_name: &str) -> Option<Arc<xds_route::RouteAction>> {

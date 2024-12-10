@@ -238,7 +238,7 @@ impl ConfigCache for AdsClient {
     async fn get_endpoints(
         &self,
         backend: &junction_api::backend::BackendId,
-    ) -> Option<std::sync::Arc<crate::load_balancer::EndpointGroup>> {
+    ) -> Option<std::sync::Arc<crate::EndpointGroup>> {
         match &backend.service {
             junction_api::Service::Dns(dns) => {
                 self.dns

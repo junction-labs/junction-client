@@ -53,7 +53,10 @@ mod env {
 #[pyclass]
 pub struct Endpoint {
     #[pyo3(get)]
-    addr: EndpointAddress,
+    addr: IpAddr,
+
+    #[pyo3(get)]
+    port: u16,
 
     #[pyo3(get)]
     scheme: String,
@@ -82,76 +85,77 @@ impl Endpoint {
     }
 }
 
-/// An endpoint address. An address can either be an IPAddress or a DNS name,
-/// but will always include a port.
-#[derive(Debug, Clone)]
-#[pyclass]
-enum EndpointAddress {
-    SocketAddr { addr: IpAddr, port: u32 },
-    DnsName { name: String, port: u32 },
-}
+// /// An endpoint address. An address can either be an IPAddress or a DNS name,
+// /// but will always include a port.
+// #[derive(Debug, Clone)]
+// #[pyclass]
+// enum EndpointAddress {
+//     SocketAddr { addr: IpAddr, port: u32 },
+//     DnsName { name: String, port: u32 },
+// }
 
-#[pymethods]
-impl EndpointAddress {
-    fn __repr__(&self) -> String {
-        self.to_string()
-    }
+// #[pymethods]
+// impl EndpointAddress {
+//     fn __repr__(&self) -> String {
+//         self.to_string()
+//     }
 
-    fn __str__(&self) -> String {
-        self.to_string()
-    }
-}
+//     fn __str__(&self) -> String {
+//         self.to_string()
+//     }
+// }
 
-impl std::fmt::Display for EndpointAddress {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EndpointAddress::SocketAddr { addr, port } => write!(f, "{addr}:{port}"),
-            EndpointAddress::DnsName { name, port } => write!(f, "{name}:{port}"),
-        }
-    }
-}
+// impl std::fmt::Display for EndpointAddress {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         match self {
+//             EndpointAddress::SocketAddr { addr, port } => write!(f, "{addr}:{port}"),
+//             EndpointAddress::DnsName { name, port } => write!(f, "{name}:{port}"),
+//         }
+//     }
+// }
 
-impl From<&junction_core::EndpointAddress> for EndpointAddress {
-    fn from(addr: &junction_core::EndpointAddress) -> Self {
-        match addr {
-            junction_core::EndpointAddress::SocketAddr(addr) => Self::SocketAddr {
-                addr: addr.ip(),
-                port: addr.port() as u32,
-            },
-            junction_core::EndpointAddress::DnsName(name, port) => Self::DnsName {
-                name: name.clone(),
-                port: *port,
-            },
-        }
-    }
-}
+// impl From<&junction_core::EndpointAddress> for EndpointAddress {
+//     fn from(addr: &junction_core::EndpointAddress) -> Self {
+//         match addr {
+//             junction_core::EndpointAddress::SocketAddr(addr) => Self::SocketAddr {
+//                 addr: addr.ip(),
+//                 port: addr.port() as u32,
+//             },
+//             junction_core::EndpointAddress::DnsName(name, port) => Self::DnsName {
+//                 name: name.clone(),
+//                 port: *port,
+//             },
+//         }
+//     }
+// }
 
-impl From<junction_core::EndpointAddress> for EndpointAddress {
-    fn from(addr: junction_core::EndpointAddress) -> Self {
-        match addr {
-            junction_core::EndpointAddress::SocketAddr(addr) => Self::SocketAddr {
-                addr: addr.ip(),
-                port: addr.port() as u32,
-            },
-            junction_core::EndpointAddress::DnsName(name, port) => Self::DnsName { name, port },
-        }
-    }
-}
+// impl From<junction_core::EndpointAddress> for EndpointAddress {
+//     fn from(addr: junction_core::EndpointAddress) -> Self {
+//         match addr {
+//             junction_core::EndpointAddress::SocketAddr(addr) => Self::SocketAddr {
+//                 addr: addr.ip(),
+//                 port: addr.port() as u32,
+//             },
+//             junction_core::EndpointAddress::DnsName(name, port) => Self::DnsName { name, port },
+//         }
+//     }
+// }
 
 impl From<junction_core::Endpoint> for Endpoint {
     fn from(ep: junction_core::Endpoint) -> Self {
         let scheme = ep.url.scheme().to_string();
         let host = ep.url.hostname().to_string();
         let request_uri = ep.url.to_string();
-        let addr = ep.address.into();
+        let (addr, port) = (ep.address.ip(), ep.address.port());
         let retry_policy = ep.retry.map(|r| r.into());
         let timeout_policy = ep.timeouts.map(|r| r.into());
 
         Self {
+            addr,
+            port,
             scheme,
             host,
             request_uri,
-            addr,
             retry_policy,
             timeout_policy,
         }
@@ -465,14 +469,14 @@ impl Junction {
     /// Return the list of addresses currently in cache for a backend. These
     /// endpoints are a snapshot of what is currently in cache.
     #[pyo3(signature = (backend))]
-    fn get_endpoints(&self, backend: Bound<'_, PyAny>) -> PyResult<Vec<EndpointAddress>> {
+    fn get_endpoints(&self, backend: Bound<'_, PyAny>) -> PyResult<Vec<(IpAddr, u16)>> {
         let backend: BackendId = pythonize::depythonize_bound(backend)?;
         let endpoint_iter = match self.core.get_endpoints(&backend) {
             Some(iter) => iter,
             None => return Ok(Vec::new()),
         };
 
-        Ok(endpoint_iter.addrs().map(EndpointAddress::from).collect())
+        Ok(endpoint_iter.addrs().map(|a| (a.ip(), a.port())).collect())
     }
 
     /// Resolve an endpoint based on an HTTP method, url, and headers.
