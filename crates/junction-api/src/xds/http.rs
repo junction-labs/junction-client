@@ -71,12 +71,12 @@ impl Route {
         ports.dedup();
 
         let mut rules = vec![];
-        let actions_and_matches =
-            vhost.routes.iter().enumerate().map(|(route_idx, route)| {
-                (route.action.as_ref(), (route_idx, route.r#match.as_ref()))
-            });
+        let actions_and_matches = vhost.routes.iter().enumerate().map(|(route_idx, route)| {
+            let key = (route.name.as_str(), route.action.as_ref());
+            (key, (route_idx, route))
+        });
 
-        for (action, matches) in group_by(actions_and_matches) {
+        for ((name, action), matches) in group_by(actions_and_matches) {
             // safety: group_by shouldn't be able to emit an empty group
             let action_idx = matches
                 .first()
@@ -90,7 +90,7 @@ impl Route {
             };
 
             rules.push(
-                RouteRule::from_xds_action_matches(action, &matches)
+                RouteRule::from_xds_grouped(name, action, &matches)
                     .with_field_index("virtual_hosts", 0)?,
             );
         }
@@ -187,13 +187,14 @@ fn tags_from_xds(metadata: &Option<xds_core::Metadata>) -> Result<BTreeMap<Strin
 }
 
 impl RouteRule {
-    fn from_xds_action_matches(
+    fn from_xds_grouped(
+        name: &str,
         action: &xds_route::route::Action,
-        route_matches: &[(usize, Option<&xds_route::RouteMatch>)],
+        routes: &[(usize, &xds_route::Route)],
     ) -> Result<Self, Error> {
         let mut matches = vec![];
-        for (route_idx, route_match) in route_matches {
-            if let Some(route_match) = route_match {
+        for (route_idx, route) in routes {
+            if let Some(route_match) = &route.r#match {
                 let m = RouteMatch::from_xds(route_match)
                     .with_field("match")
                     .with_field_index("route", *route_idx)?;
@@ -204,12 +205,21 @@ impl RouteRule {
         // grab the index of the first xds Route to use in errors below. we're
         // assuming that there will always be a non-empty vec of route_matches
         // here.
-        //
-        // TOOD: can we have this panic in debug builds and return 0 in release?
-        let first_route_idx = route_matches
+        let first_route_idx = routes
             .first()
             .map(|(idx, _)| *idx)
-            .expect("no matches included with action. this is a bug in Junction");
+            .expect("no Routes grouped with action. this is a bug in Junction");
+
+        // parse a route name into aa validated Name. also assume they're all the same.
+        let name = if !name.is_empty() {
+            Some(
+                Name::from_str(name)
+                    .with_field("name")
+                    .with_field_index("route", first_route_idx)?,
+            )
+        } else {
+            None
+        };
 
         let action = match action {
             xds_route::route::Action::Route(action) => action,
@@ -228,6 +238,7 @@ impl RouteRule {
             .with_field_index("route", first_route_idx)?;
 
         Ok(RouteRule {
+            name,
             matches,
             retry,
             filters: vec![],
@@ -267,8 +278,15 @@ impl RouteRule {
             ..Default::default()
         });
 
+        let name = self
+            .name
+            .as_ref()
+            .map(|name| name.to_string())
+            .unwrap_or_default();
+
         if self.matches.is_empty() {
             vec![xds_route::Route {
+                name,
                 r#match: Some(xds_route::RouteMatch {
                     path_specifier: Some(xds_route::route_match::PathSpecifier::Prefix(
                         "".to_string(),
@@ -284,6 +302,7 @@ impl RouteRule {
                 .map(|route_match| {
                     let r#match = Some(route_match.to_xds());
                     xds_route::Route {
+                        name: name.clone(),
                         r#match,
                         action: Some(route_action.clone()),
                         ..Default::default()
@@ -902,6 +921,7 @@ mod test {
             tags: Default::default(),
             rules: vec![
                 RouteRule {
+                    name: Some(Name::from_static("split-web")),
                     matches: vec![RouteMatch {
                         path: Some(PathMatch::Exact {
                             value: "/foo/feature-test".to_string(),
@@ -923,6 +943,7 @@ mod test {
                     ..Default::default()
                 },
                 RouteRule {
+                    name: Some(Name::from_static("one-web")),
                     matches: vec![RouteMatch {
                         path: Some(PathMatch::Prefix {
                             value: "/foo".to_string(),
@@ -947,6 +968,7 @@ mod test {
             tags: Default::default(),
             rules: vec![
                 RouteRule {
+                    name: Some(Name::from_static("no-timeouts")),
                     matches: vec![RouteMatch {
                         path: Some(PathMatch::Exact {
                             value: "/foo/feature-test".to_string(),
@@ -961,6 +983,7 @@ mod test {
                     ..Default::default()
                 },
                 RouteRule {
+                    name: Some(Name::from_static("with-timeouts")),
                     matches: vec![RouteMatch {
                         path: Some(PathMatch::Prefix {
                             value: "/foo".to_string(),
@@ -1023,13 +1046,53 @@ mod test {
                 },
             ],
         });
+
+        // should roundtrip with the same everything but different names
+        assert_roundtrip::<_, xds_route::RouteConfiguration>(Route {
+            id: Name::from_static("different-names"),
+            hostnames: vec![Hostname::from_static("web.internal").into()],
+            ports: vec![],
+            tags: Default::default(),
+            rules: vec![
+                RouteRule {
+                    name: Some(Name::from_static("rule-1")),
+                    matches: vec![RouteMatch {
+                        path: Some(PathMatch::Prefix {
+                            value: "/foo".to_string(),
+                        }),
+                        ..Default::default()
+                    }],
+                    backends: vec![BackendRef {
+                        weight: 1,
+                        service: web.clone(),
+                        port: None,
+                    }],
+                    ..Default::default()
+                },
+                RouteRule {
+                    name: Some(Name::from_static("rule-2")),
+                    matches: vec![RouteMatch {
+                        path: Some(PathMatch::Prefix {
+                            value: "/foo".to_string(),
+                        }),
+                        ..Default::default()
+                    }],
+                    backends: vec![BackendRef {
+                        weight: 1,
+                        service: web.clone(),
+                        port: None,
+                    }],
+                    ..Default::default()
+                },
+            ],
+        });
     }
 
     #[test]
     fn test_condense_rules() {
         let web = Service::kube("prod", "web").unwrap();
 
-        // should not roundtrip as two identical targets
+        // should be condensed - the rules have the same everything except matches
         let original = Route {
             id: Name::from_static("will-be-condensed"),
             hostnames: vec![Hostname::from_static("web.internal").into()],
