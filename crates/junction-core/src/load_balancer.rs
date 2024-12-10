@@ -187,6 +187,67 @@ impl Ring {
     }
 }
 
+/// Hash an outgoing request based on a set of hash policies.
+///
+/// Like Envoy and gRPC, multiple hash policies are combined by applying a
+/// bitwise left-rotate to the previous value and xor-ing the new value into
+/// the previous value.
+///
+/// See:
+/// - https://github.com/grpc/proposal/blob/master/A42-xds-ring-hash-lb-policy.md#xds-api-fields
+/// - https://github.com/envoyproxy/envoy/blob/main/source/common/http/hash_policy.cc#L236-L257
+pub(crate) fn hash_request(
+    hash_policies: &Vec<RequestHashPolicy>,
+    url: &crate::Url,
+    headers: &http::HeaderMap,
+) -> Option<u64> {
+    let mut hash: Option<u64> = None;
+
+    for hash_policy in hash_policies {
+        if let Some(new_hash) = hash_component(hash_policy, url, headers) {
+            hash = Some(match hash {
+                Some(hash) => hash.rotate_left(1) ^ new_hash,
+                None => new_hash,
+            });
+
+            if hash_policy.terminal {
+                break;
+            }
+        }
+    }
+
+    hash
+}
+
+fn hash_component(
+    policy: &RequestHashPolicy,
+    url: &crate::Url,
+    headers: &http::HeaderMap,
+) -> Option<u64> {
+    match &policy.hasher {
+        RequestHasher::Header { name } => {
+            let mut header_values: Vec<_> = headers
+                .get_all(name)
+                .iter()
+                .map(http::HeaderValue::as_bytes)
+                .collect();
+
+            if header_values.is_empty() {
+                None
+            } else {
+                // sort values so that "foo,bar" and "bar,foo" hash to the same value
+                header_values.sort();
+                Some(thread_local_xxhash::hash_iter(header_values))
+            }
+        }
+        RequestHasher::QueryParam { ref name } => url.query().map(|query| {
+            let matching_vals = form_urlencoded::parse(query.as_bytes())
+                .filter_map(|(param, value)| (&param == name).then_some(value));
+            thread_local_xxhash::hash_iter(matching_vals)
+        }),
+    }
+}
+
 #[cfg(test)]
 mod test_ring_hash {
     use crate::endpoints::Locality;
@@ -296,7 +357,7 @@ mod test_ring_hash {
         };
         ring.rebuild(
             0,
-            &&EndpointGroup::new(
+            &EndpointGroup::new(
                 [(
                     Locality::Unknown,
                     vec![
@@ -333,66 +394,5 @@ mod test_ring_hash {
         hashes.sort();
         hashes.dedup();
         assert_eq!(hashes.len(), r.entries.len());
-    }
-}
-
-/// Hash an outgoing request based on a set of hash policies.
-///
-/// Like Envoy and gRPC, multiple hash policies are combined by applying a
-/// bitwise left-rotate to the previous value and xor-ing the new value into
-/// the previous value.
-///
-/// See:
-/// - https://github.com/grpc/proposal/blob/master/A42-xds-ring-hash-lb-policy.md#xds-api-fields
-/// - https://github.com/envoyproxy/envoy/blob/main/source/common/http/hash_policy.cc#L236-L257
-pub(crate) fn hash_request(
-    hash_policies: &Vec<RequestHashPolicy>,
-    url: &crate::Url,
-    headers: &http::HeaderMap,
-) -> Option<u64> {
-    let mut hash: Option<u64> = None;
-
-    for hash_policy in hash_policies {
-        if let Some(new_hash) = hash_component(hash_policy, url, headers) {
-            hash = Some(match hash {
-                Some(hash) => hash.rotate_left(1) ^ new_hash,
-                None => new_hash,
-            });
-
-            if hash_policy.terminal {
-                break;
-            }
-        }
-    }
-
-    hash
-}
-
-fn hash_component(
-    policy: &RequestHashPolicy,
-    url: &crate::Url,
-    headers: &http::HeaderMap,
-) -> Option<u64> {
-    match &policy.hasher {
-        RequestHasher::Header { name } => {
-            let mut header_values: Vec<_> = headers
-                .get_all(name)
-                .iter()
-                .map(http::HeaderValue::as_bytes)
-                .collect();
-
-            if header_values.is_empty() {
-                None
-            } else {
-                // sort values so that "foo,bar" and "bar,foo" hash to the same value
-                header_values.sort();
-                Some(thread_local_xxhash::hash_iter(header_values))
-            }
-        }
-        RequestHasher::QueryParam { ref name } => url.query().map(|query| {
-            let matching_vals = form_urlencoded::parse(query.as_bytes())
-                .filter_map(|(param, value)| (&param == name).then_some(value));
-            thread_local_xxhash::hash_iter(matching_vals)
-        }),
     }
 }

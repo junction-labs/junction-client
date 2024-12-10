@@ -49,6 +49,9 @@ mod env {
 /// An endpoint that an HTTP call can be made to. Includes the address that the
 /// request should resolve to along with the original request URI, the scheme to
 /// use, and the hostname to use for TLS if appropriate.
+//
+// TODO: add http method and shadowing. we can't switch method right now so
+// method is moot.
 #[derive(Clone, Debug)]
 #[pyclass]
 pub struct Endpoint {
@@ -84,62 +87,6 @@ impl Endpoint {
         )
     }
 }
-
-// /// An endpoint address. An address can either be an IPAddress or a DNS name,
-// /// but will always include a port.
-// #[derive(Debug, Clone)]
-// #[pyclass]
-// enum EndpointAddress {
-//     SocketAddr { addr: IpAddr, port: u32 },
-//     DnsName { name: String, port: u32 },
-// }
-
-// #[pymethods]
-// impl EndpointAddress {
-//     fn __repr__(&self) -> String {
-//         self.to_string()
-//     }
-
-//     fn __str__(&self) -> String {
-//         self.to_string()
-//     }
-// }
-
-// impl std::fmt::Display for EndpointAddress {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         match self {
-//             EndpointAddress::SocketAddr { addr, port } => write!(f, "{addr}:{port}"),
-//             EndpointAddress::DnsName { name, port } => write!(f, "{name}:{port}"),
-//         }
-//     }
-// }
-
-// impl From<&junction_core::EndpointAddress> for EndpointAddress {
-//     fn from(addr: &junction_core::EndpointAddress) -> Self {
-//         match addr {
-//             junction_core::EndpointAddress::SocketAddr(addr) => Self::SocketAddr {
-//                 addr: addr.ip(),
-//                 port: addr.port() as u32,
-//             },
-//             junction_core::EndpointAddress::DnsName(name, port) => Self::DnsName {
-//                 name: name.clone(),
-//                 port: *port,
-//             },
-//         }
-//     }
-// }
-
-// impl From<junction_core::EndpointAddress> for EndpointAddress {
-//     fn from(addr: junction_core::EndpointAddress) -> Self {
-//         match addr {
-//             junction_core::EndpointAddress::SocketAddr(addr) => Self::SocketAddr {
-//                 addr: addr.ip(),
-//                 port: addr.port() as u32,
-//             },
-//             junction_core::EndpointAddress::DnsName(name, port) => Self::DnsName { name, port },
-//         }
-//     }
-// }
 
 impl From<junction_core::Endpoint> for Endpoint {
     fn from(ep: junction_core::Endpoint) -> Self {
@@ -491,7 +438,7 @@ impl Junction {
         method: &str,
         url: &str,
         headers: &Bound<PyMapping>,
-    ) -> PyResult<Vec<Endpoint>> {
+    ) -> PyResult<Endpoint> {
         let url =
             junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
         let method = method_from_py(method)?;
@@ -499,7 +446,7 @@ impl Junction {
 
         let endpoints = RUNTIME
             .block_on(self.core.resolve_http(&method, &url, &headers))
-            .map(|endpoints| endpoints.into_iter().map(|e| e.into()).collect())
+            .map(|endpoint| endpoint.into())
             .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
         Ok(endpoints)
