@@ -222,10 +222,6 @@ pub struct RouteRule {
     #[doc(hidden)]
     pub filters: Vec<RouteFilter>,
 
-    // FIXME(persistence): enable session persistence as per the Gateway API #[serde(default,
-    // skip_serializing_if = "Option::is_none")]
-    // pub session_persistence: Option<SessionPersistence>,
-
     // The timeouts set on any request that matches route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeouts: Option<RouteTimeouts>,

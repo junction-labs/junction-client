@@ -152,7 +152,7 @@ pub struct RingHashParams {
     ///
     /// If no policies match, a random hash is generated for each request.
     #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "hashParams")]
-    pub hash_params: Vec<SessionAffinityHashParam>,
+    pub hash_params: Vec<RequestHashPolicy>,
 }
 
 pub(crate) const fn default_min_ring_size() -> u32 {
@@ -160,96 +160,80 @@ pub(crate) const fn default_min_ring_size() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
+pub struct RequestHashPolicy {
+    /// Whether to stop immediately after hashing this value.
+    ///
+    /// This is useful if you want to try to hash a value, and then fall back to
+    /// another as a default if it wasn't set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub terminal: bool,
+
+    #[serde(flatten)]
+    pub hasher: RequestHasher,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub enum SessionAffinityHashParamType {
-    /// Hash the value of a header. If the header has multiple values, they will all be used as hash
-    /// input.
+pub enum RequestHasher {
+    /// Hash the value of a header. If the header has multiple values, they will
+    /// all be used as hash input.
     #[serde(alias = "header")]
     Header {
         /// The name of the header to use as hash input.
         name: String,
     },
-}
 
-// FIXME: Ben votes to skip the extra "affinity" naming here as its redundant
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct SessionAffinityHashParam {
-    /// Whether to stop immediately after hashing this value.
-    ///
-    /// This is useful if you want to try to hash a value, and then fall back to another as a
-    /// default if it wasn't set.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub terminal: bool,
-
-    #[serde(flatten)]
-    pub matcher: SessionAffinityHashParamType,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
-pub struct SessionAffinity {
-    #[serde(
-        default,
-        skip_serializing_if = "Vec::is_empty",
-        alias = "hashParams",
-        alias = "HashParams"
-    )]
-    pub hash_params: Vec<SessionAffinityHashParam>,
+    /// Hash the value of an HTTP query parameter.
+    #[serde(alias = "query")]
+    QueryParam {
+        /// The name of the query parameter to hash
+        name: String,
+    },
 }
 
 #[cfg(test)]
 mod test {
+    use std::fmt::Debug;
+
     use serde_json::json;
 
     use super::*;
 
     #[test]
     fn test_lb_policy_json() {
-        let test_json = json!({
+        assert_round_trip::<LbPolicy>(json!({
+            "type":"Unspecified",
+        }));
+        assert_round_trip::<LbPolicy>(json!({
+            "type":"RoundRobin",
+        }));
+        assert_round_trip::<LbPolicy>(json!({
             "type":"RingHash",
-            "minRingSize": 100
-        });
-        let obj: LbPolicy = serde_json::from_value(test_json.clone()).unwrap();
-
-        assert_eq!(
-            obj,
-            LbPolicy::RingHash(RingHashParams {
-                min_ring_size: 100,
-                hash_params: vec![]
-            })
-        );
-
-        assert_eq!(
-            json!({"type": "RingHash", "min_ring_size": 100}),
-            serde_json::to_value(obj).unwrap(),
-        );
+            "min_ring_size": 100,
+            "hash_params": [
+                {"type": "Header", "name": "x-user", "terminal": true},
+                {"type": "QueryParam", "name": "u"},
+            ]
+        }));
     }
 
     #[test]
     fn test_backend_json() {
-        let test_json = json!({
-            "id": { "type": "kube", "name": "foo", "namespace": "bar", "port": 789 },
+        assert_round_trip::<Backend>(json!({
+            "id": {"type": "kube", "name": "foo", "namespace": "bar", "port": 789},
             "lb": {
                 "type": "Unspecified",
             },
-        });
-        let obj: Backend = serde_json::from_value(test_json.clone()).unwrap();
-        let output_json = serde_json::to_value(obj).unwrap();
-        assert_eq!(test_json, output_json);
+        }))
     }
 
-    #[test]
-    fn test_session_affinity_json() {
-        let test_json = json!({
-            "hash_params": [
-                { "type": "Header", "name": "FOO",  "terminal": true },
-                { "type": "Header", "name": "FOO"}
-            ]
-        });
-        let obj: SessionAffinity = serde_json::from_value(test_json.clone()).unwrap();
-        let output_json = serde_json::to_value(obj).unwrap();
-        assert_eq!(test_json, output_json);
+    #[track_caller]
+    fn assert_round_trip<T: Debug + Serialize + for<'a> Deserialize<'a>>(value: serde_json::Value) {
+        let from_json: T = serde_json::from_value(value.clone()).expect("failed to deserialize");
+        let round_tripped = serde_json::to_value(&from_json).expect("failed to serialize");
+
+        assert_eq!(value, round_tripped, "serialized value should round-trip")
     }
 }

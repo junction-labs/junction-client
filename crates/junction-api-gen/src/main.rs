@@ -30,8 +30,7 @@ fn main() {
         junction_api::http::RouteRule::item(),
         junction_api::http::Route::item(),
         junction_api::backend::BackendId::item(),
-        junction_api::backend::SessionAffinityHashParam::item(),
-        junction_api::backend::SessionAffinity::item(),
+        junction_api::backend::RequestHashPolicy::item(),
         junction_api::backend::LbPolicy::item(),
         junction_api::backend::Backend::item(),
     ];
