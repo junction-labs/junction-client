@@ -293,10 +293,10 @@ method_matches! {
 impl RouteRule {
     fn to_gateway(&self) -> Result<gateway_http::HTTPRouteRules, Error> {
         Ok(gateway_http::HTTPRouteRules {
+            name: self.name.as_ref().map(|s| s.to_string()),
             backend_refs: Some(vec_to_gateway!(self.backends, err_field = "backends")?),
             filters: None,
             matches: Some(vec_to_gateway!(self.matches, err_field = "matches")?),
-            name: None,
             retry: option_to_gateway!(self.retry)
                 .transpose()
                 .with_field("retry")?,
@@ -308,6 +308,13 @@ impl RouteRule {
     }
 
     fn from_gateway(rule: &gateway_http::HTTPRouteRules) -> Result<Self, Error> {
+        let name = rule
+            .name
+            .as_ref()
+            .map(|s| Name::from_str(s))
+            .transpose()
+            .with_field("name")?;
+
         let matches = vec_from_gateway!(RouteMatch, rule.matches, "matches")?;
         let timeouts = option_from_gateway!(RouteTimeouts, rule.timeouts, "timeouts")?;
         let backends = vec_from_gateway!(BackendRef, rule.backend_refs, "backends")?;
@@ -317,6 +324,7 @@ impl RouteRule {
         let filters = vec![];
 
         Ok(RouteRule {
+            name,
             matches,
             filters,
             timeouts,
@@ -746,6 +754,7 @@ mod test {
                       ],
                       "rules": [
                         {
+                          "name": "a-name",
                           "matches": [
                             {
                               "path": {
@@ -796,6 +805,7 @@ mod test {
                 tags: Default::default(),
                 rules: vec![
                     RouteRule {
+                        name: Some(Name::from_static("a-name")),
                         matches: vec![RouteMatch {
                             path: Some(PathMatch::Prefix {
                                 value: "/login".to_string(),
