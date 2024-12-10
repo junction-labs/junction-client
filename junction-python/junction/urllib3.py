@@ -68,7 +68,7 @@ class PoolManager(urllib3.PoolManager):
             kw["headers"] = self.headers
 
         # TODO: pass in defaults here - timeouts, routing rules, etc.
-        endpoints = self.junction.resolve_http(
+        endpoint = self.junction.resolve_http(
             method,
             url,
             kw["headers"],
@@ -83,53 +83,50 @@ class PoolManager(urllib3.PoolManager):
         # them here.
         jct_tls_args = kw.pop("jct_tls_args", {})
 
-        # TODO: actually do shadowing, etc.
-        for endpoint in endpoints:
-            kw2 = dict(kw)
-            if endpoint.host:
-                kw2["headers"]["Host"] = endpoint.host
+        if endpoint.host:
+            kw["headers"]["Host"] = endpoint.host
 
-            if endpoint.retry_policy:
-                # unfortunately requests always creates an object, so testing
-                # whether its a default means assuming a count of 0 is a
-                # default, although we add a check on the read value being false
-                # as a way to workaround when you really dont want 0 to be
-                # overridden
-                current = kw2.get("retries")
-                is_default = not current or (current.total == 0 and not current.read)
-                if is_default:
-                    kw2["retries"] = urllib3.Retry(
-                        total=endpoint.retry_policy.attempts - 1,
-                        backoff_factor=endpoint.retry_policy.backoff,
-                        status_forcelist=endpoint.retry_policy.codes,
-                    )
-
-            if (
-                not kw2.get("timeout")
-                and endpoint.timeout_policy
-                and endpoint.timeout_policy.backend_request != 0
-            ):
-                kw2["timeout"] = urllib3.Timeout(
-                    total=endpoint.timeout_policy.backend_request
-                )
-            elif (
-                not kw2.get("timeout")
-                and endpoint.timeout_policy
-                and endpoint.timeout_policy.request != 0
-            ):
-                kw2["timeout"] = urllib3.Timeout(
-                    ## FIXME: this is obviously not right, but urllib3 does not
-                    ## give us more options. To implement properly, we would
-                    ## have to implement retries ourselves.
-                    total=endpoint.timeout_policy.request
+        if endpoint.retry_policy:
+            # unfortunately requests always creates an object, so testing
+            # whether its a default means assuming a count of 0 is a
+            # default, although we add a check on the read value being false
+            # as a way to workaround when you really dont want 0 to be
+            # overridden
+            current = kw.get("retries")
+            is_default = not current or (current.total == 0 and not current.read)
+            if is_default:
+                kw["retries"] = urllib3.Retry(
+                    total=endpoint.retry_policy.attempts - 1,
+                    backoff_factor=endpoint.retry_policy.backoff,
+                    status_forcelist=endpoint.retry_policy.codes,
                 )
 
-            conn = self.connection_from_endpoint(endpoint, **jct_tls_args)
-            return conn.urlopen(
-                method,
-                endpoint.request_uri,
-                **kw2,
+        if (
+            not kw.get("timeout")
+            and endpoint.timeout_policy
+            and endpoint.timeout_policy.backend_request != 0
+        ):
+            kw["timeout"] = urllib3.Timeout(
+                total=endpoint.timeout_policy.backend_request
             )
+        elif (
+            not kw.get("timeout")
+            and endpoint.timeout_policy
+            and endpoint.timeout_policy.request != 0
+        ):
+            kw["timeout"] = urllib3.Timeout(
+                ## FIXME: this is obviously not right, but urllib3 does not
+                ## give us more options. To implement properly, we would
+                ## have to implement retries ourselves.
+                total=endpoint.timeout_policy.request
+            )
+
+        conn = self.connection_from_endpoint(endpoint, **jct_tls_args)
+        return conn.urlopen(
+            method,
+            endpoint.request_uri,
+            **kw,
+        )
 
     def connection_from_endpoint(
         self,

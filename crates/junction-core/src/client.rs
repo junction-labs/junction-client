@@ -1,6 +1,8 @@
 use crate::{
-    endpoints::{EndpointGroup, EndpointIter}, load_balancer::BackendLb, xds::AdsClient, ConfigCache, Endpoint,
-    Error, StaticConfig,
+    endpoints::{EndpointGroup, EndpointIter},
+    load_balancer::BackendLb,
+    xds::AdsClient,
+    ConfigCache, Endpoint, Error, StaticConfig,
 };
 use futures::FutureExt;
 use junction_api::{
@@ -129,10 +131,7 @@ impl ConfigCache for Config {
         }
     }
 
-    async fn get_endpoints(
-        &self,
-        backend: &BackendId,
-    ) -> Option<Arc<EndpointGroup>> {
+    async fn get_endpoints(&self, backend: &BackendId) -> Option<Arc<EndpointGroup>> {
         match &self {
             Config::Static(s) => s.get_endpoints(backend).await,
             Config::DynamicEndpoints(_, d) => d.ads_client.get_endpoints(backend).await,
@@ -313,7 +312,7 @@ impl Client {
         resolve_mode: ResolveMode,
         resolved: ResolvedRoute,
         request: HttpRequest<'_>,
-    ) -> crate::Result<Vec<Endpoint>> {
+    ) -> crate::Result<Endpoint> {
         // subscribe to backends with either dynamic endpoints or full
         // dynamic mode, since this is how we'll fetch endpoints.
         //
@@ -354,7 +353,7 @@ impl Client {
         method: &http::Method,
         url: &crate::Url,
         headers: &http::HeaderMap,
-    ) -> crate::Result<Vec<crate::Endpoint>> {
+    ) -> crate::Result<crate::Endpoint> {
         let request = HttpRequest::from_parts(method, url, headers)?;
         let deadline = Instant::now() + self.resolve_timeout;
 
@@ -445,7 +444,7 @@ async fn resolve_endpoint(
     cache: &impl ConfigCache,
     resolved: ResolvedRoute,
     request: HttpRequest<'_>,
-) -> crate::Result<Vec<Endpoint>> {
+) -> crate::Result<Endpoint> {
     let Some(backend) = cache.get_backend(&resolved.backend).await else {
         return Err(Error::no_backend(
             resolved.route.id.clone(),
@@ -480,12 +479,12 @@ async fn resolve_endpoint(
         None => (None, None),
     };
 
-    Ok(vec![crate::Endpoint {
+    Ok(crate::Endpoint {
         url,
         timeouts,
         retry,
-        address: endpoint.clone(),
-    }])
+        address: *endpoint,
+    })
 }
 
 //FIXME(routing): picking between these is way more complicated than finding the
