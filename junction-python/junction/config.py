@@ -189,6 +189,13 @@ class RouteRule(typing.TypedDict):
     See the Junction docs for a high level description of how Routes and
     RouteRules behave."""
 
+    name: str
+    """A human-readable name for this rule.
+
+    This name is compeltely optional, and will only be used in diagnostics
+    to make it easier to debug. Diagnostics that don't have a name will be
+    referred to by their index in a Route's list of rules."""
+
     matches: typing.List[RouteMatch]
     """A list of match rules applied to an outgoing request.  Each match is
     independent; this rule will be matched if **any** of the listed matches
