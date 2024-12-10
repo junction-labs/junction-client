@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 xds-api = { version = "0.1", default-features = false }
 xxhash-rust = { version = "0.8.12", features = ["xxh64"] }
 
-junction-api = { version = "0.2.0", path = "crates/junction-api" }
-junction-core = { version = "0.2.0", path = "crates/junction-core" }
-junction-typeinfo = { version = "0.2.0", path = "crates/junction-typeinfo" }
-junction-typeinfo-derive = { version = "0.2.0", path = "crates/junction-typeinfo-derive" }
+junction-api = { version = "0.2.1", path = "crates/junction-api" }
+junction-core = { version = "0.2.1", path = "crates/junction-core" }
+junction-typeinfo = { version = "0.2.1", path = "crates/junction-typeinfo" }
+junction-typeinfo-derive = { version = "0.2.1", path = "crates/junction-typeinfo-derive" }
