@@ -6,8 +6,8 @@ use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 
 use enum_map::EnumMap;
 use junction_api::backend::Backend;
+use junction_api::backend::BackendId;
 use junction_api::http::Route;
-use junction_api::{backend::BackendId, Service};
 use smol_str::SmolStr;
 use xds_api::pb::google::protobuf;
 use xds_api::{
@@ -21,8 +21,8 @@ use xds_api::{
     WellKnownTypes,
 };
 
-use crate::load_balancer::{EndpointGroup, LoadBalancer, Locality, LocalityInfo};
-use crate::{BackendLb, EndpointAddress};
+use crate::endpoints::{EndpointGroup, Locality, LocalityInfo};
+use crate::load_balancer::{BackendLb, LoadBalancer};
 
 // FIXME: validate that the all the EDS config sources use ADS instead of just assuming it everywhere.
 
@@ -31,7 +31,7 @@ pub(crate) enum ResourceError {
     #[error("{0}")]
     InvalidResource(#[from] junction_api::Error),
 
-    #[error("invalid xDS discovery information")]
+    #[error("invalid xDS: {resource_name}: {message}")]
     InvalidXds {
         resource_name: String,
         message: Cow<'static, str>,
@@ -471,13 +471,14 @@ pub(crate) struct LoadAssignment {
 }
 
 impl LoadAssignment {
-    pub(crate) fn from_xds(target: BackendId, xds: xds_endpoint::ClusterLoadAssignment) -> Self {
-        let endpoint_group = Arc::new(EndpointGroup::from_xds(&target, &xds));
-
-        Self {
+    pub(crate) fn from_xds(
+        xds: xds_endpoint::ClusterLoadAssignment,
+    ) -> Result<Self, ResourceError> {
+        let endpoint_group = Arc::new(EndpointGroup::from_xds(&xds)?);
+        Ok(Self {
             xds,
             endpoint_group,
-        }
+        })
     }
 }
 
@@ -499,64 +500,67 @@ impl Locality {
 }
 
 impl EndpointGroup {
-    pub(crate) fn from_xds(target: &BackendId, cla: &xds_endpoint::ClusterLoadAssignment) -> Self {
-        let make_address = match target.service {
-            Service::Dns(_) => EndpointAddress::from_xds_dns_name,
-            Service::Kube(_) => EndpointAddress::from_xds_socket_addr,
-        };
-
+    pub(crate) fn from_xds(
+        cla: &xds_endpoint::ClusterLoadAssignment,
+    ) -> Result<Self, ResourceError> {
         let mut endpoints = BTreeMap::new();
-        for locality_endpoints in &cla.endpoints {
+        for (locality_idx, locality_endpoints) in cla.endpoints.iter().enumerate() {
             let locality = Locality::from_xds(&locality_endpoints.locality);
-            let locality_endpoints: Vec<_> = locality_endpoints
+            let locality_endpoints: Result<Vec<_>, _> = locality_endpoints
                 .lb_endpoints
                 .iter()
-                .filter_map(|endpoint| {
-                    crate::EndpointAddress::from_xds_lb_endpoint(endpoint, make_address)
+                .enumerate()
+                .map(|(endpoint_idx, e)| {
+                    xds_lb_endpoint_socket_addr(&cla.cluster_name, locality_idx, endpoint_idx, e)
                 })
                 .collect();
 
-            endpoints.insert(locality, locality_endpoints);
+            endpoints.insert(locality, locality_endpoints?);
         }
 
-        EndpointGroup::new(endpoints)
+        Ok(EndpointGroup::new(endpoints))
     }
 }
 
-impl EndpointAddress {
-    pub(crate) fn from_xds_socket_addr(xds_address: &xds_core::SocketAddress) -> Option<Self> {
-        let ip = xds_address.address.parse().ok()?;
-        let port: u16 = match xds_address.port_specifier.as_ref()? {
-            xds_core::socket_address::PortSpecifier::PortValue(port) => (*port).try_into().ok()?,
-            _ => return None,
+fn xds_lb_endpoint_socket_addr(
+    eds_name: &str,
+    locality_idx: usize,
+    endpoint_idx: usize,
+    endpoint: &xds_endpoint::LbEndpoint,
+) -> Result<SocketAddr, ResourceError> {
+    macro_rules! make_error {
+        ($msg:expr) => {
+            ResourceError::for_xds_static(
+                format!(
+                    "{}: endpoints[{}].lb_endpoints[{}]",
+                    eds_name, locality_idx, endpoint_idx
+                ),
+                $msg,
+            )
         };
-
-        Some(Self::SocketAddr(SocketAddr::new(ip, port)))
     }
 
-    pub(crate) fn from_xds_dns_name(xds_address: &xds_core::SocketAddress) -> Option<Self> {
-        let address = xds_address.address.clone();
-        let port = match xds_address.port_specifier.as_ref()? {
-            xds_core::socket_address::PortSpecifier::PortValue(port) => port,
-            _ => return None,
-        };
+    let endpoint = match &endpoint.host_identifier {
+        Some(xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(ep)) => ep,
+        _ => return Err(make_error!("endpoint is missing endpoint data")),
+    };
 
-        Some(Self::DnsName(address, *port))
-    }
+    let address = endpoint.address.as_ref().and_then(|a| a.address.as_ref());
+    match address {
+        Some(xds_core::address::Address::SocketAddress(addr)) => {
+            let ip = addr
+                .address
+                .parse()
+                .map_err(|_| make_error!("invalid socket address"))?;
+            let port = match &addr.port_specifier {
+                Some(xds_core::socket_address::PortSpecifier::PortValue(p)) => {
+                    (*p).try_into().map_err(|_| make_error!("invalid port"))?
+                }
+                _ => return Err(make_error!("missing port specifier")),
+            };
 
-    pub(crate) fn from_xds_lb_endpoint<F>(endpoint: &xds_endpoint::LbEndpoint, f: F) -> Option<Self>
-    where
-        F: Fn(&xds_core::SocketAddress) -> Option<EndpointAddress>,
-    {
-        let endpoint = match endpoint.host_identifier.as_ref()? {
-            xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(ep) => ep,
-            xds_endpoint::lb_endpoint::HostIdentifier::EndpointName(_) => return None,
-        };
-
-        let address = endpoint.address.as_ref().and_then(|a| a.address.as_ref())?;
-        match address {
-            xds_core::address::Address::SocketAddress(socket_address) => f(socket_address),
-            _ => None,
+            Ok(SocketAddr::new(ip, port))
         }
+        _ => Err(make_error!("endpoint has no socket address")),
     }
 }

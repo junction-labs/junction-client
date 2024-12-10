@@ -5,10 +5,12 @@ mod url;
 pub use crate::error::{Error, Result};
 pub use crate::url::Url;
 
+pub(crate) mod hash;
 pub(crate) mod rand;
 
 mod endpoints;
-pub use endpoints::{Endpoint, EndpointAddress};
+pub use endpoints::Endpoint;
+use endpoints::EndpointGroup;
 
 mod client;
 mod dns;
@@ -26,9 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
-pub use crate::load_balancer::BackendLb;
-use crate::load_balancer::EndpointGroup;
-pub use crate::load_balancer::LoadBalancer;
+pub use crate::load_balancer::{BackendLb, LoadBalancer};
 use junction_api::backend::{Backend, LbPolicy};
 
 /// Check route resolution.

@@ -1,76 +1,12 @@
-use crate::EndpointAddress;
+use crate::{endpoints::EndpointGroup, hash::thread_local_xxhash};
 use junction_api::backend::{Backend, LbPolicy, RequestHashPolicy, RequestHasher, RingHashParams};
 use std::{
-    collections::BTreeMap,
-    hash::Hash,
     net::SocketAddr,
     sync::{
         atomic::{AtomicUsize, Ordering},
         RwLock,
     },
 };
-
-// FIXME: we ignore weights in EndpointGroup. that probably shouldn't be the case
-
-#[derive(Debug, Default, Hash, PartialEq, Eq)]
-pub(crate) struct EndpointGroup {
-    hash: u64,
-    endpoints: BTreeMap<Locality, Vec<crate::EndpointAddress>>,
-}
-
-impl EndpointGroup {
-    pub(crate) fn new(endpoints: BTreeMap<Locality, Vec<crate::EndpointAddress>>) -> Self {
-        let hash = thread_local_xxhash::hash(&endpoints);
-        Self { hash, endpoints }
-    }
-
-    pub(crate) fn from_dns_addrs(addrs: impl IntoIterator<Item = SocketAddr>) -> Self {
-        let mut endpoints = BTreeMap::new();
-        let endpoint_addrs = addrs.into_iter().map(EndpointAddress::from).collect();
-        endpoints.insert(Locality::Unknown, endpoint_addrs);
-
-        Self::new(endpoints)
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.endpoints.values().map(|v| v.len()).sum()
-    }
-
-    /// Returns an iterator over all endpoints in the group.
-    ///
-    /// Iteration order is guaranteed to be stable as long as the EndpointGroup is
-    /// not modified, and guaranteed to consecutively produce all addresses in a single
-    /// locality.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &EndpointAddress> {
-        self.endpoints.values().flatten()
-    }
-
-    /// Return the nth address in this group. The order
-    pub(crate) fn nth(&self, n: usize) -> Option<&EndpointAddress> {
-        let mut n = n;
-        for endpoints in self.endpoints.values() {
-            if n < endpoints.len() {
-                return Some(&endpoints[n]);
-            }
-            n -= endpoints.len();
-        }
-
-        None
-    }
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Locality {
-    Unknown,
-    #[allow(unused)]
-    Known(LocalityInfo),
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct LocalityInfo {
-    pub(crate) region: String,
-    pub(crate) zone: String,
-}
 
 /// A [Backend] and the [LoadBalancer] it's configured with.
 #[derive(Debug)]
@@ -91,7 +27,7 @@ impl LoadBalancer {
         url: &crate::Url,
         headers: &http::HeaderMap,
         locality_endpoints: &'e EndpointGroup,
-    ) -> Option<&'e crate::EndpointAddress> {
+    ) -> Option<&'e SocketAddr> {
         match self {
             LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(locality_endpoints),
             LoadBalancer::RingHash(lb) => {
@@ -123,10 +59,9 @@ pub struct RoundRobinLb {
 
 impl RoundRobinLb {
     // FIXME: actually use locality
-    fn pick_endpoint<'e>(&self, endpoint_group: &'e EndpointGroup) -> Option<&'e EndpointAddress> {
-        let endpoints = endpoint_group.endpoints.get(&Locality::Unknown)?;
-        let locality_idx = self.idx.fetch_add(1, Ordering::SeqCst) % endpoints.len();
-        Some(&endpoints[locality_idx])
+    fn pick_endpoint<'e>(&self, endpoint_group: &'e EndpointGroup) -> Option<&'e SocketAddr> {
+        let idx = self.idx.fetch_add(1, Ordering::SeqCst) % endpoint_group.len();
+        endpoint_group.nth(idx)
     }
 }
 
@@ -154,7 +89,7 @@ impl RingHashLb {
         Self {
             config: config.clone(),
             ring: RwLock::new(Ring {
-                endpoint_group_hash: 0,
+                eg_hash: 0,
                 entries: Vec::with_capacity(config.min_ring_size as usize),
             }),
         }
@@ -166,7 +101,7 @@ impl RingHashLb {
         headers: &http::HeaderMap,
         hash_params: &Vec<RequestHashPolicy>,
         endpoint_group: &'e EndpointGroup,
-    ) -> Option<&'e EndpointAddress> {
+    ) -> Option<&'e SocketAddr> {
         let request_hash =
             hash_request(hash_params, url, headers).unwrap_or_else(crate::rand::random);
 
@@ -174,32 +109,40 @@ impl RingHashLb {
         endpoint_group.nth(endpoint_idx)
     }
 
+    // if you're reading this you might wonder why this takes a callback:
+    //
+    // the answer is that std's RWLock isn't upgradeable or downgradeable, so
+    // it's not easy to have an RAII guard that starts with a read lock and
+    // transparently upgrades to write when you need mut access.
+    //
+    // instead of figuring that out, this fn does the read to write upgrade and
+    // you pass the callback. easy peasy.
     fn with_ring<F, T>(&self, endpoint_group: &EndpointGroup, mut cb: F) -> T
     where
         F: FnMut(&Ring) -> T,
     {
-        // std's rwlocks aren't ugpradeable or downgradeable, so if we have to
-        // recreate the ring, there's no way to go from having modified the
-        // ring to using the version we just built. instead of figuring out
-        // how to return impl<Deref<Target = Ring>> or whatever, just accept
-        // a callback.
+        // try to just use the existing ring
+        //
+        // explicitly drop the guard at the end so we can't get confused and
+        // try to upgrade and deadlock ourselves.
         let ring = self.ring.read().unwrap();
-        if ring.endpoint_group_hash == endpoint_group.hash {
+        if ring.eg_hash == endpoint_group.hash {
             return cb(&ring);
         }
-
         std::mem::drop(ring);
+
+        // write path:
         let mut ring = self.ring.write().unwrap();
         ring.rebuild(self.config.min_ring_size as usize, endpoint_group);
         cb(&ring)
     }
 }
 
-// FIXME: this completely ignores backend weights.
 #[derive(Debug)]
 struct Ring {
-    // TODO: this could be a resource version instead, and it wouldn't need to be computed.
-    endpoint_group_hash: u64,
+    // The hash of the EndpointGroup used to build the Ring. This is slightly
+    // more stable than ResourceVersion, but could be changed to that.
+    eg_hash: u64,
     entries: Vec<RingEntry>,
 }
 
@@ -223,7 +166,7 @@ impl Ring {
             }
         }
 
-        self.endpoint_group_hash = endpoint_group.hash;
+        self.eg_hash = endpoint_group.hash;
         self.entries.sort_by_key(|e| e.hash);
     }
 
@@ -246,32 +189,30 @@ impl Ring {
 
 #[cfg(test)]
 mod test_ring_hash {
+    use crate::endpoints::Locality;
+
     use super::*;
 
     #[test]
     fn test_rebuild_ring() {
         let mut ring = Ring {
-            endpoint_group_hash: 0,
+            eg_hash: 0,
             entries: Vec::new(),
         };
 
         // rebuild a ring with no min size
         ring.rebuild(
             0,
-            &EndpointGroup {
-                hash: 111,
-                endpoints: [(
+            &EndpointGroup::new(
+                [(
                     Locality::Unknown,
-                    vec![
-                        EndpointAddress::SocketAddr("1.1.1.1:80".parse().unwrap()),
-                        EndpointAddress::SocketAddr("1.1.1.2:80".parse().unwrap()),
-                    ],
+                    vec!["1.1.1.1:80".parse().unwrap(), "1.1.1.2:80".parse().unwrap()],
                 )]
                 .into(),
-            },
+            ),
         );
 
-        assert_eq!(ring.endpoint_group_hash, 111);
+        assert_eq!(ring.eg_hash, 7513761254796112512);
         assert_eq!(ring.entries.len(), 2);
         assert_eq!(ring_indexes(&ring), (0..2).collect::<Vec<_>>());
         assert_hashes_unique(&ring);
@@ -281,21 +222,20 @@ mod test_ring_hash {
         // ignore a rebuild with the same hash
         ring.rebuild(
             0,
-            &EndpointGroup {
-                hash: 222,
-                endpoints: [(
+            &EndpointGroup::new(
+                [(
                     Locality::Unknown,
                     vec![
-                        EndpointAddress::SocketAddr("1.1.1.1:80".parse().unwrap()),
-                        EndpointAddress::SocketAddr("1.1.1.2:80".parse().unwrap()),
-                        EndpointAddress::SocketAddr("1.1.1.3:80".parse().unwrap()),
+                        "1.1.1.1:80".parse().unwrap(),
+                        "1.1.1.2:80".parse().unwrap(),
+                        "1.1.1.3:80".parse().unwrap(),
                     ],
                 )]
                 .into(),
-            },
+            ),
         );
 
-        assert_eq!(ring.endpoint_group_hash, 222);
+        assert_eq!(ring.eg_hash, 14133933280653238819);
         assert_eq!(ring.entries.len(), 3);
         assert_eq!(ring_indexes(&ring), (0..3).collect::<Vec<_>>());
         assert_hashes_unique(&ring);
@@ -314,25 +254,24 @@ mod test_ring_hash {
     #[test]
     fn test_rebuild_ring_min_size() {
         let mut ring = Ring {
-            endpoint_group_hash: 0,
+            eg_hash: 0,
             entries: Vec::new(),
         };
 
         // rebuild a ring with no min size
         ring.rebuild(
             1024,
-            &EndpointGroup {
-                hash: 111,
-                endpoints: [(
+            &EndpointGroup::new(
+                [(
                     Locality::Unknown,
                     vec![
-                        EndpointAddress::SocketAddr("1.1.1.1:80".parse().unwrap()),
-                        EndpointAddress::SocketAddr("1.1.1.2:80".parse().unwrap()),
-                        EndpointAddress::SocketAddr("1.1.1.3:80".parse().unwrap()),
+                        "1.1.1.1:80".parse().unwrap(),
+                        "1.1.1.2:80".parse().unwrap(),
+                        "1.1.1.3:80".parse().unwrap(),
                     ],
                 )]
                 .into(),
-            },
+            ),
         );
 
         // 1026 is the largest multiple of 3 larger than 1024
@@ -352,23 +291,22 @@ mod test_ring_hash {
     #[test]
     fn test_pick() {
         let mut ring = Ring {
-            endpoint_group_hash: 0,
+            eg_hash: 0,
             entries: vec![],
         };
         ring.rebuild(
             0,
-            &EndpointGroup {
-                hash: 222,
-                endpoints: [(
+            &&EndpointGroup::new(
+                [(
                     Locality::Unknown,
                     vec![
-                        EndpointAddress::SocketAddr("1.1.1.1:80".parse().unwrap()),
-                        EndpointAddress::SocketAddr("1.1.1.2:80".parse().unwrap()),
-                        EndpointAddress::SocketAddr("1.1.1.3:80".parse().unwrap()),
+                        "1.1.1.1:80".parse().unwrap(),
+                        "1.1.1.2:80".parse().unwrap(),
+                        "1.1.1.3:80".parse().unwrap(),
                     ],
                 )]
                 .into(),
-            },
+            ),
         );
 
         // anything less than or eq to the first hash, or greater than the last
@@ -456,46 +394,5 @@ fn hash_component(
                 .filter_map(|(param, value)| (&param == name).then_some(value));
             thread_local_xxhash::hash_iter(matching_vals)
         }),
-    }
-}
-
-mod thread_local_xxhash {
-    use std::cell::RefCell;
-    use xxhash_rust::xxh64::Xxh64;
-
-    // gRPC and Envoy use a zero seed. gRPC does this by definition, Envoy by
-    // default.
-    //
-    // https://github.com/grpc/proposal/blob/master/A42-xds-ring-hash-lb-policy.md#xdsconfigselector-changes
-    // https://github.com/envoyproxy/envoy/blob/main/source/common/common/hash.h#L22-L30
-    // https://github.com/envoyproxy/envoy/blob/main/source/common/http/hash_policy.cc#L69
-    const SEED: u64 = 0;
-
-    thread_local! {
-        static HASHER: RefCell<Xxh64> = const { RefCell::new(Xxh64::new(SEED)) };
-    }
-
-    /// Hash a single item using a thread-local [xx64 Hasher][Xxh64].
-    pub(crate) fn hash<H: std::hash::Hash>(h: &H) -> u64 {
-        HASHER.with_borrow_mut(|hasher| {
-            hasher.reset(SEED);
-            h.hash(hasher);
-            hasher.digest()
-        })
-    }
-
-    /// Hash an iterable of hashable items using a thread-local
-    /// [xx64 Hasher][Xxh64].
-    ///
-    /// *Note*: Tuples implement [std::hash::Hash], so if you need to hash a
-    /// sequence of items of different types, try passing a tuple to [hash].
-    pub(crate) fn hash_iter<I: IntoIterator<Item = H>, H: std::hash::Hash>(iter: I) -> u64 {
-        HASHER.with_borrow_mut(|hasher| {
-            hasher.reset(SEED);
-            for h in iter {
-                h.hash(hasher)
-            }
-            hasher.digest()
-        })
     }
 }

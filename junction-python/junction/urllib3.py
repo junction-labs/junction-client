@@ -138,12 +138,8 @@ class PoolManager(urllib3.PoolManager):
     ) -> HTTPConnectionPool:
         request_context = self._merge_pool_kwargs(overrrides)
         request_context["scheme"] = endpoint.scheme
-        request_context["port"] = endpoint.addr.port
-
-        if isinstance(endpoint.addr, endpoint.addr.SocketAddr):
-            request_context["host"] = str(endpoint.addr.addr)
-        elif isinstance(endpoint.addr, endpoint.addr.DnsName):
-            request_context["host"] = str(endpoint.addr.name)
+        request_context["host"] = str(endpoint.addr)
+        request_context["port"] = endpoint.port
 
         if endpoint.scheme == "https":
             request_context["assert_hostname"] = endpoint.host
