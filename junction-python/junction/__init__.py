@@ -1,6 +1,9 @@
 import typing
+
 from junction.junction import (
     Junction,
+    Endpoint,
+    RetryPolicy,
     default_client,
     check_route,
     dump_kube_backend,
@@ -38,6 +41,8 @@ def _default_client(
 
 __all__ = (
     Junction,
+    Endpoint,
+    RetryPolicy,
     config,
     urllib3,
     requests,

@@ -163,34 +163,34 @@ class HTTPAdapter(requests.adapters.HTTPAdapter):
             if isinstance(e.reason, ConnectTimeoutError):
                 # TODO: Remove this in 3.0.0: see #2811
                 if not isinstance(e.reason, NewConnectionError):
-                    raise ConnectTimeout(e, request=request)
+                    raise ConnectTimeout(e, request=request) from e
 
             if isinstance(e.reason, ResponseError):
-                raise RetryError(e, request=request)
+                raise RetryError(e, request=request) from e
 
             if isinstance(e.reason, _ProxyError):
-                raise ProxyError(e, request=request)
+                raise ProxyError(e, request=request) from e
 
             if isinstance(e.reason, _SSLError):
                 # This branch is for urllib3 v1.22 and later.
-                raise SSLError(e, request=request)
+                raise SSLError(e, request=request) from e
 
-            raise ConnectionError(e, request=request)
+            raise ConnectionError(e, request=request) from e
 
         except ClosedPoolError as e:
-            raise ConnectionError(e, request=request)
+            raise ConnectionError(e, request=request) from e
 
         except _ProxyError as e:
-            raise ProxyError(e)
+            raise ProxyError(e) from e
 
         except (_SSLError, _HTTPError) as e:
             if isinstance(e, _SSLError):
                 # This branch is for urllib3 versions earlier than v1.22
-                raise SSLError(e, request=request)
+                raise SSLError(e, request=request) from e
             elif isinstance(e, ReadTimeoutError):
-                raise ReadTimeout(e, request=request)
+                raise ReadTimeout(e, request=request) from e
             elif isinstance(e, _InvalidHeader):
-                raise InvalidHeader(e, request=request)
+                raise InvalidHeader(e, request=request) from e
             else:
                 raise
 
