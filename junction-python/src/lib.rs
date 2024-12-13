@@ -19,6 +19,8 @@ use xds_api::pb::google::protobuf;
 #[pymodule]
 fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Junction>()?;
+    m.add_class::<Endpoint>()?;
+    m.add_class::<RetryPolicy>()?;
     m.add_function(wrap_pyfunction!(default_client, m)?)?;
     m.add_function(wrap_pyfunction!(check_route, m)?)?;
     m.add_function(wrap_pyfunction!(dump_kube_route, m)?)?;
@@ -127,6 +129,27 @@ pub struct RetryPolicy {
     backoff: f64,
 }
 
+#[pymethods]
+impl RetryPolicy {
+    #[new]
+    fn new(codes: Option<Vec<u32>>, attempts: Option<u32>, backoff: Option<f64>) -> Self {
+        Self {
+            codes: codes.unwrap_or_default(),
+            attempts: attempts.unwrap_or_default(),
+            backoff: backoff.unwrap_or_default(),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "RetryPolicy({attempts}, {min})",
+            //FIXME: add codes
+            attempts = self.attempts,
+            min = self.backoff,
+        )
+    }
+}
+
 /// A policy that describes how a client should do timeouts.
 #[derive(Clone, Debug)]
 #[pyclass]
@@ -136,18 +159,6 @@ pub struct TimeoutPolicy {
 
     #[pyo3(get)]
     request: f64,
-}
-
-#[pymethods]
-impl RetryPolicy {
-    fn __repr__(&self) -> String {
-        format!(
-            "RetryPolicy({attempts}, {min})",
-            //FIXME: add codes
-            attempts = self.attempts,
-            min = self.backoff,
-        )
-    }
 }
 
 impl From<junction_api::http::RouteRetry> for RetryPolicy {
