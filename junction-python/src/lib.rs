@@ -463,6 +463,19 @@ impl Junction {
         Ok(endpoints)
     }
 
+    #[pyo3(signature = (*, endpoint, status_code=None, error=None))]
+    fn report_status(
+        &mut self,
+        endpoint: Endpoint,
+        status_code: Option<u16>,
+        error: Option<Bound<PyAny>>,
+    ) -> PyResult<Endpoint> {
+        // TODO: actually implement/call this in the core client.
+        let _ = status_code;
+        let _ = error;
+        Ok(endpoint)
+    }
+
     /// Spawn a new CSDS server on the given port. Spawning the server will not
     /// block the current thread.
     fn run_csds_server(&self, port: u16) -> PyResult<()> {
