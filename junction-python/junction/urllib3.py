@@ -134,7 +134,6 @@ class PoolManager(urllib3.PoolManager):
         # them here.
         jct_tls_args = kwargs.pop("jct_tls_args", {})
         kwargs["assert_same_host"] = False
-        pool = self.connection_from_endpoint(endpoint, **jct_tls_args)
 
         # set the host header correctly
         if endpoint.host:
@@ -177,10 +176,16 @@ class PoolManager(urllib3.PoolManager):
                 connect=0,
                 status=0,
             )
+            pool = self.connection_from_endpoint(endpoint, **jct_tls_args)
 
             try:
                 response = pool.urlopen(method=method, url=url, **kwargs)
             except MaxRetryError as e:
+                endpoint = self.junction.report_status(
+                    endpoint=endpoint,
+                    error=e,
+                )
+
                 if _is_redirect_err(e):
                     raise e
 
@@ -194,6 +199,10 @@ class PoolManager(urllib3.PoolManager):
                 retries.sleep()
                 continue
 
+            endpoint = self.junction.report_status(
+                endpoint=endpoint,
+                status_code=response.status,
+            )
             has_retry_after = bool(response.headers.get("Retry-After"))
             if retries.is_retry(method, response.status, has_retry_after):
                 try:
