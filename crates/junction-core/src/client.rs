@@ -332,6 +332,165 @@ impl Client {
         Client { config, ..self }
     }
 
+    /// Resolve an HTTP method, URL, and headers into an [Endpoint].
+    ///
+    /// This is the main entry point into Junction. When building an
+    /// integration, use this method to fetch an initial endpoint. After making
+    /// an initial request, use [report_status][Self::report_status] to report
+    /// the status of the request and to retry on failure.
+    ///
+    /// The endpoint returned from this method should be a complete description
+    /// of how to make an HTTP request - it contains the IP address to use, the
+    /// full URL and hostname, the complete set of headers, and retry and timeout
+    /// policy the client should use to make a request.
+    pub async fn resolve_http(
+        &mut self,
+        method: &http::Method,
+        url: &crate::Url,
+        headers: &http::HeaderMap,
+    ) -> crate::Result<Endpoint> {
+        let deadline = Instant::now() + self.resolve_timeout;
+
+        let request = HttpRequest::from_parts(method, url, headers)?;
+        let resolve_routes = self.resolve_route(self.resolve_mode, request);
+        let resolved = match tokio::time::timeout_at(deadline.into(), resolve_routes).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(Error::timed_out("timed out fetching routes")),
+        };
+
+        let lb_context = LbContext::new(resolved.trace, url, headers);
+        let select = self.select_endpoint(self.resolve_mode, &resolved.backend, lb_context);
+        let selected = match tokio::time::timeout_at(deadline.into(), select).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(Error::timed_out("timed out fetching backends")),
+        };
+        let address = selected.addr;
+        let trace = selected.trace;
+
+        let (timeouts, retry) = {
+            let rule = &resolved.route.rules[resolved.rule];
+            (rule.timeouts.clone(), rule.retry.clone())
+        };
+
+        Ok(Endpoint {
+            method: method.clone(),
+            url: url.clone(),
+            headers: headers.clone(),
+            address,
+            timeouts,
+            retry,
+            backend: resolved.backend,
+            trace,
+            previous_addrs: vec![],
+        })
+    }
+
+    /// Report the status of an externally made HTTP request made against an
+    /// [Endpoint] returned from `resolve_http`.
+    ///
+    /// If retrying the response is appropriate, a new Endpoint will be returned
+    /// with updated address and host info set - calling `resolve_http` to start
+    /// a retry attempt will drop request history and may result in too many
+    /// retries.
+    ///
+    /// If a retry is not appropriate, the returned Endpoint will have updated
+    /// history information, but request details will remain the same. Clients
+    /// may use that value for status or error reporting.
+    pub async fn report_status(
+        &mut self,
+        endpoint: Endpoint,
+        response: HttpResult,
+    ) -> crate::Result<Endpoint> {
+        // TODO: track response stats
+
+        // if there's no reason to pick a new endpoint, just return the existing one as-is
+        if response.is_ok() || !endpoint.should_retry(response) {
+            return Ok(endpoint);
+        }
+
+        // redo endpoint selection
+        // FIXME: real deadline here
+        let deadline = Instant::now() + self.resolve_timeout;
+        let lb_context = LbContext {
+            url: &endpoint.url,
+            headers: &endpoint.headers,
+            previous_addrs: &endpoint.previous_addrs,
+            trace: endpoint.trace,
+        };
+        let select_next = self.select_endpoint(self.resolve_mode, &endpoint.backend, lb_context);
+        let next = match tokio::time::timeout_at(deadline.into(), select_next).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(Error::timed_out("timed out fetching backends")),
+        };
+        let address = next.addr;
+        let trace = next.trace;
+
+        // track address history
+        let mut previous_addrs = endpoint.previous_addrs;
+        previous_addrs.push(endpoint.address);
+
+        Ok(Endpoint {
+            address,
+            trace,
+            previous_addrs,
+            ..endpoint
+        })
+    }
+
+    /// Resolve an HTTP method, URL, and headers to a target backend, returning
+    /// the Route that matched, the index of the rule that matched, and the
+    /// backend that was chosen - to make backend choice determinstic with
+    /// multiple backends, set the `JUNCTION_SEED` environment variable.
+    ///
+    /// This is a lower-level method that only performs the Route matching part
+    /// of resolution. It's intended for debugging or querying a client for
+    /// specific information. For everyday use, prefer [Client::resolve_http].
+    pub async fn resolve_route(
+        &self,
+        resolve_mode: ResolveMode,
+        request: HttpRequest<'_>,
+    ) -> crate::Result<ResolvedRoute> {
+        let trace = Trace::new();
+
+        // FIXME: move subscribe_to_hosts into cache.get and get rid of this
+        if let (ResolveMode::Dynamic, Config::Dynamic(d)) = (resolve_mode, &self.config) {
+            d.ads_client
+                .subscribe_to_hosts([request.url.authority().to_string()])
+                // FIXME: shouldn't be a panic, should be async
+                .expect("ads client overloaded, this is a bug in Junction");
+        }
+
+        resolve_routes(&self.config, request, trace).await
+    }
+
+    /// Select an endpoint address for this backend from the set of currently
+    /// available endpoints.
+    ///
+    /// This is a lower level method that only performs part of route
+    /// resolution, and is intended for debugging and testing. For everyday use,
+    /// prefer [Client::resolve_http].
+    pub async fn select_endpoint(
+        &self,
+        resolve_mode: ResolveMode,
+        backend: &BackendId,
+        ctx: LbContext<'_>,
+    ) -> crate::Result<SelectedEndpoint> {
+        // FIXME: move subscribe_to_backends into cache.get and get rid of this
+        if let (ResolveMode::Dynamic, Config::Dynamic(d) | Config::DynamicEndpoints(_, d)) =
+            (resolve_mode, &self.config)
+        {
+            d.ads_client
+                .subscribe_to_backends([backend.clone()])
+                // FIXME: shouldn't be a panic, should be async
+                .expect("ads client overloaded, this is a bug in Junction");
+        }
+
+        select_endpoint(&self.config, backend, ctx).await
+    }
+
     /// Start a gRPC CSDS server on the given port. To run the server, you must
     /// `await` this future.
     ///
@@ -387,149 +546,6 @@ impl Client {
             .now_or_never()
             .flatten()
             .map(EndpointIter::from)
-    }
-
-    /// Resolve an HTTP method, URL, and headers to a target backend, returning
-    /// the Route that matched, the index of the rule that matched, and the
-    /// backend that was chosen - to make backend choice determinstic with
-    /// multiple backends, set the `JUNCTION_SEED` environment variable.
-    ///
-    /// This is a lower-level method that only performs the Route matching part
-    /// of resolution. It's intended for debugging or querying a client for
-    /// specific information. For everyday use, prefer [Client::resolve_http].
-    /// [Client::resolve_http].
-    pub async fn resolve_route(
-        &self,
-        resolve_mode: ResolveMode,
-        request: HttpRequest<'_>,
-    ) -> crate::Result<ResolvedRoute> {
-        let trace = Trace::new();
-
-        // FIXME: move subscribe_to_hosts into cache.get and get rid of this
-        if let (ResolveMode::Dynamic, Config::Dynamic(d)) = (resolve_mode, &self.config) {
-            d.ads_client
-                .subscribe_to_hosts([request.url.authority().to_string()])
-                // FIXME: shouldn't be a panic, should be async
-                .expect("ads client overloaded, this is a bug in Junction");
-        }
-
-        resolve_routes(&self.config, request, trace).await
-    }
-
-    /// Select an endpoint address for this backend from the set of currently
-    /// available endpoints.
-    ///
-    /// This is a lower level method that only performs part of route
-    /// resolution, and is intended for debugging and testing. For everyday use,
-    /// prefer [Client::resolve_http].
-    pub async fn select_endpoint(
-        &self,
-        resolve_mode: ResolveMode,
-        backend: &BackendId,
-        ctx: LbContext<'_>,
-    ) -> crate::Result<SelectedEndpoint> {
-        // FIXME: move subscribe_to_backends into cache.get and get rid of this
-        if let (ResolveMode::Dynamic, Config::Dynamic(d) | Config::DynamicEndpoints(_, d)) =
-            (resolve_mode, &self.config)
-        {
-            d.ads_client
-                .subscribe_to_backends([backend.clone()])
-                // FIXME: shouldn't be a panic, should be async
-                .expect("ads client overloaded, this is a bug in Junction");
-        }
-
-        select_endpoint(&self.config, backend, ctx).await
-    }
-
-    /// Resolve an HTTP method, URL, and headers into an [Endpoint].
-    ///
-    /// When multiple endpoints are returned, a client should send traffic to
-    /// ALL of the returned endpoints because the routing policy specified
-    /// that traffic should be mirrored.
-    pub async fn resolve_http(
-        &mut self,
-        method: &http::Method,
-        url: &crate::Url,
-        headers: &http::HeaderMap,
-    ) -> crate::Result<Endpoint> {
-        let deadline = Instant::now() + self.resolve_timeout;
-
-        let request = HttpRequest::from_parts(method, url, headers)?;
-        let resolve_routes = self.resolve_route(self.resolve_mode, request);
-        let resolved = match tokio::time::timeout_at(deadline.into(), resolve_routes).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(Error::timed_out("timed out fetching routes")),
-        };
-
-        let lb_context = LbContext::new(resolved.trace, url, headers);
-        let select = self.select_endpoint(self.resolve_mode, &resolved.backend, lb_context);
-        let selected = match tokio::time::timeout_at(deadline.into(), select).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(Error::timed_out("timed out fetching backends")),
-        };
-        let address = selected.addr;
-        let trace = selected.trace;
-
-        let (timeouts, retry) = {
-            let rule = &resolved.route.rules[resolved.rule];
-            (rule.timeouts.clone(), rule.retry.clone())
-        };
-
-        Ok(Endpoint {
-            method: method.clone(),
-            url: url.clone(),
-            headers: headers.clone(),
-            address,
-            timeouts,
-            retry,
-            backend: resolved.backend,
-            trace,
-            previous_addrs: vec![],
-        })
-    }
-
-    pub async fn report_status(
-        &mut self,
-        endpoint: Endpoint,
-        response: HttpResult,
-    ) -> crate::Result<Endpoint> {
-        // TODO: track response stats
-
-        // if there's no reason to pick a new endpoint, just return the existing one as-is
-        if response.is_ok() || !endpoint.should_retry(response) {
-            return Ok(endpoint);
-        }
-
-        // redo endpoint selection
-        // FIXME: real deadline here
-        let deadline = Instant::now() + self.resolve_timeout;
-        let lb_context = LbContext {
-            url: &endpoint.url,
-            headers: &endpoint.headers,
-            previous_addrs: &endpoint.previous_addrs,
-            trace: endpoint.trace,
-        };
-        let select_next = self.select_endpoint(self.resolve_mode, &endpoint.backend, lb_context);
-        let next = match tokio::time::timeout_at(deadline.into(), select_next).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(Error::timed_out("timed out fetching backends")),
-        };
-        let address = next.addr;
-        let trace = next.trace;
-
-        // track address history
-        let mut previous_addrs = endpoint.previous_addrs;
-        previous_addrs.push(endpoint.address);
-
-        Ok(Endpoint {
-            address,
-            trace,
-            previous_addrs,
-            ..endpoint
-        })
     }
 }
 

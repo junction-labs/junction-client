@@ -9,7 +9,8 @@ use std::{
     },
 };
 
-/// A [Backend] and the [LoadBalancer] it's configured with.
+/// A [Backend][junction_api::backend::Backend] and the [LoadBalancer] it's
+/// configured with.
 #[derive(Debug)]
 pub struct BackendLb {
     pub config: Backend,

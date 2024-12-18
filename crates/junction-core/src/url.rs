@@ -2,8 +2,7 @@ use std::{borrow::Cow, str::FromStr};
 
 use crate::Error;
 
-/// An [http::Uri] that has an `http` or `https` scheme and a non-empty
-/// `authority`.
+/// An Uri with an `http` or `https` scheme and a non-empty `authority`.
 ///
 /// The `authority` section of a `Url` must contains a hostname and may contain
 /// a port, but must not contain a username or password.
