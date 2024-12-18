@@ -547,6 +547,22 @@ impl Junction {
 
         Ok(values)
     }
+
+    /// Dump the client's current xDS errors as a pbjson dict.
+    ///
+    /// This is the same as dumping config with dump_xds and filtering to only
+    /// xds with a `last_error` message set.
+    fn dump_xds_erorrs(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        let mut values = vec![];
+
+        for config in self.core.dump_xds_errors() {
+            let config: XdsConfig = config.into();
+            let as_py = pythonize::pythonize(py, &config)?;
+            values.push(as_py);
+        }
+
+        Ok(values)
+    }
 }
 
 #[derive(Debug, Serialize)]
