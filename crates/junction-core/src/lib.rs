@@ -17,7 +17,9 @@ mod dns;
 mod load_balancer;
 mod xds;
 
-pub use client::{Client, HttpRequest, HttpResult, ResolveMode, ResolvedRoute};
+pub use client::{
+    Client, HttpRequest, HttpResult, LbContext, ResolveMode, ResolvedRoute, SelectedEndpoint,
+};
 use error::Trace;
 use futures::FutureExt;
 use junction_api::Name;
