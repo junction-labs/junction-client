@@ -1,5 +1,6 @@
 use crate::{
     endpoints::{EndpointGroup, EndpointIter},
+    error::Trace,
     load_balancer::BackendLb,
     xds::AdsClient,
     ConfigCache, Endpoint, Error, StaticConfig,
@@ -10,8 +11,8 @@ use junction_api::{
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
 };
 use rand::distributions::WeightedError;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{net::SocketAddr, sync::Arc};
 
 /// An outgoing HTTP Request, before any rewrites or modifications have been
 /// made.
@@ -44,13 +45,112 @@ impl<'a> HttpRequest<'a> {
     }
 }
 
+/// The result of resolving a route (see [Client::resolve_route]).
+#[derive(Debug, Clone)]
+pub struct ResolvedRoute {
+    /// The resolved route.
+    pub route: Arc<Route>,
+
+    /// The index of the rule that matched the request.
+    //TODO: doesn't need to be optional? remove it for the request trace anyway
+    pub rule: usize,
+
+    /// The backend selected as part of route resolution.
+    pub backend: BackendId,
+
+    /// smuggle the request trace through here
+    trace: Trace,
+}
+
+/// The context required to select an address from a backend. Includes the URL
+/// and headers from an outgoing request.
+#[derive(Debug, Clone)]
+pub struct LbContext<'a> {
+    url: &'a crate::Url,
+
+    headers: &'a http::HeaderMap,
+
+    previous_addrs: &'a [SocketAddr],
+
+    /// smuggle the request trace through here
+    trace: Trace,
+}
+
+impl<'a> LbContext<'a> {
+    // unused, allowed so that we can make select_endpoint public without exposing Trace
+    #[allow(unused)]
+    pub fn from_parts(url: &'a crate::Url, headers: &'a http::HeaderMap) -> Self {
+        let trace = Trace::new();
+        Self {
+            url,
+            headers,
+            previous_addrs: &[],
+            trace,
+        }
+    }
+
+    fn new(trace: Trace, url: &'a crate::Url, headers: &'a http::HeaderMap) -> Self {
+        Self {
+            url,
+            headers,
+            previous_addrs: &[],
+            trace,
+        }
+    }
+}
+
+/// The result of selecting an endpoint (see [Client::select_endpoint]).
+pub struct SelectedEndpoint {
+    /// The selected endpoint address
+    pub addr: SocketAddr,
+
+    // smuggle trace data back out
+    trace: Trace,
+}
+
+/// The result of making an HTTP request.
+#[derive(Debug, Clone)]
+pub enum HttpResult {
+    /// The client recieved a complete HTTP response with a status code that was
+    /// not a client error (4xx) or a server error (5xx).
+    StatusOk(http::StatusCode),
+
+    /// The client recieved a complete HTTP response with a status code that was
+    /// a client error (4xx) or a server error (5xx).
+    StatusError(http::StatusCode),
+
+    /// The client didn't recive a complete HTTP response. This covers any IO
+    /// error or protocol error. From the Junction client's point of view, there
+    /// is no point in distinguishing them.
+    StatusFailed,
+}
+
+impl HttpResult {
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Self::StatusOk(_))
+    }
+
+    pub fn from_u16(code: u16) -> Result<Self, http::status::InvalidStatusCode> {
+        let code = http::StatusCode::from_u16(code)?;
+        Ok(Self::from_code(code))
+    }
+
+    pub fn from_code(code: http::StatusCode) -> Self {
+        if code.is_client_error() || code.is_server_error() {
+            Self::StatusError(code)
+        } else {
+            Self::StatusOk(code)
+        }
+    }
+}
+
 /// The strategy for udpating Routes, Backends, and Endpoints while resolving.
 ///
 /// Resolution mode is orthogonal to client configuration mode - it's possible
 /// to have a dynamic client, but to resolve an individual route by only using
 /// data currently in cache.
 ///
-/// See [Client::resolve_routes] and [Client::resolve_endpoint].
+/// See [Client::resolve_route].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ResolveMode {
@@ -277,60 +377,6 @@ impl Client {
         }
     }
 
-    /// Resolve an HTTP method, URL, and headers to a target backend, returning
-    /// the Route that matched, the index of the rule that matched, and the
-    /// backend that was chosen - to make backend choice determinstic with
-    /// multiple backends, set the `JUNCTION_SEED` environment variable.
-    ///
-    /// This is a lower-level method that only performs the Route matching half
-    /// of resolution. It's intended for debugging or querying a client for
-    /// specific information. For everyday use, prefer [Client::resolve_http].
-    /// [Client::resolve_http].
-    pub async fn resolve_routes(
-        &self,
-        config_mode: ResolveMode,
-        request: HttpRequest<'_>,
-    ) -> crate::Result<ResolvedRoute> {
-        if let (ResolveMode::Dynamic, Config::Dynamic(d)) = (config_mode, &self.config) {
-            d.ads_client
-                .subscribe_to_hosts([request.url.authority().to_string()])
-                // FIXME: shouldn't be a panic, should be async
-                .expect("ads client overloaded, this is a bug in Junction");
-        }
-
-        resolve_routes(&self.config, request).await
-    }
-
-    /// Use a resolved Route and Backend to select an endpoint for a request.
-    ///
-    /// This is a lower level method that only performs the Backend
-    /// load-balancing half of resolution. It's intended for debugging or
-    /// querying a client for specific information. For everday
-    /// use, prefer [Client::resolve_http].
-    pub async fn resolve_endpoint(
-        &self,
-        resolve_mode: ResolveMode,
-        resolved: ResolvedRoute,
-        request: HttpRequest<'_>,
-    ) -> crate::Result<Endpoint> {
-        // subscribe to backends with either dynamic endpoints or full
-        // dynamic mode, since this is how we'll fetch endpoints.
-        //
-        // TODO: should there be a way to subscribe to endpoints here as well?
-        // TODO: should we just get rid of the subscribe here and move it into
-        //       the get_routes/get_backends/get_endpoints calls???
-        if let (ResolveMode::Dynamic, Config::Dynamic(d) | Config::DynamicEndpoints(_, d)) =
-            (resolve_mode, &self.config)
-        {
-            d.ads_client
-                .subscribe_to_backends([resolved.backend.clone()])
-                // FIXME: shouldn't be a panic, should be async
-                .expect("ads client overloaded, this is a bug in Junction");
-        }
-
-        resolve_endpoint(&self.config, resolved, request).await
-    }
-
     /// Return the endpoints currently in cache for this backend.
     ///
     /// The returned endpoints are a snapshot of what is currently in cache and
@@ -343,7 +389,59 @@ impl Client {
             .map(EndpointIter::from)
     }
 
-    /// Resolve an HTTP method, URL, and headers into a set of [Endpoint]s.
+    /// Resolve an HTTP method, URL, and headers to a target backend, returning
+    /// the Route that matched, the index of the rule that matched, and the
+    /// backend that was chosen - to make backend choice determinstic with
+    /// multiple backends, set the `JUNCTION_SEED` environment variable.
+    ///
+    /// This is a lower-level method that only performs the Route matching part
+    /// of resolution. It's intended for debugging or querying a client for
+    /// specific information. For everyday use, prefer [Client::resolve_http].
+    /// [Client::resolve_http].
+    pub async fn resolve_route(
+        &self,
+        resolve_mode: ResolveMode,
+        request: HttpRequest<'_>,
+    ) -> crate::Result<ResolvedRoute> {
+        let trace = Trace::new();
+
+        // FIXME: move subscribe_to_hosts into cache.get and get rid of this
+        if let (ResolveMode::Dynamic, Config::Dynamic(d)) = (resolve_mode, &self.config) {
+            d.ads_client
+                .subscribe_to_hosts([request.url.authority().to_string()])
+                // FIXME: shouldn't be a panic, should be async
+                .expect("ads client overloaded, this is a bug in Junction");
+        }
+
+        resolve_routes(&self.config, request, trace).await
+    }
+
+    /// Select an endpoint address for this backend from the set of currently
+    /// available endpoints.
+    ///
+    /// This is a lower level method that only performs part of route
+    /// resolution, and is intended for debugging and testing. For everyday use,
+    /// prefer [Client::resolve_http].
+    pub async fn select_endpoint(
+        &self,
+        resolve_mode: ResolveMode,
+        backend: &BackendId,
+        ctx: LbContext<'_>,
+    ) -> crate::Result<SelectedEndpoint> {
+        // FIXME: move subscribe_to_backends into cache.get and get rid of this
+        if let (ResolveMode::Dynamic, Config::Dynamic(d) | Config::DynamicEndpoints(_, d)) =
+            (resolve_mode, &self.config)
+        {
+            d.ads_client
+                .subscribe_to_backends([backend.clone()])
+                // FIXME: shouldn't be a panic, should be async
+                .expect("ads client overloaded, this is a bug in Junction");
+        }
+
+        select_endpoint(&self.config, backend, ctx).await
+    }
+
+    /// Resolve an HTTP method, URL, and headers into an [Endpoint].
     ///
     /// When multiple endpoints are returned, a client should send traffic to
     /// ALL of the returned endpoints because the routing policy specified
@@ -353,137 +451,190 @@ impl Client {
         method: &http::Method,
         url: &crate::Url,
         headers: &http::HeaderMap,
-    ) -> crate::Result<crate::Endpoint> {
-        let request = HttpRequest::from_parts(method, url, headers)?;
+    ) -> crate::Result<Endpoint> {
         let deadline = Instant::now() + self.resolve_timeout;
 
-        let resolve_routes = self.resolve_routes(self.resolve_mode, request.clone());
+        let request = HttpRequest::from_parts(method, url, headers)?;
+        let resolve_routes = self.resolve_route(self.resolve_mode, request);
         let resolved = match tokio::time::timeout_at(deadline.into(), resolve_routes).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => return Err(e),
             Err(_) => return Err(Error::timed_out("timed out fetching routes")),
         };
 
-        let resolve_endpoint = self.resolve_endpoint(self.resolve_mode, resolved, request);
-        match tokio::time::timeout_at(deadline.into(), resolve_endpoint).await {
-            Ok(Ok(r)) => Ok(r),
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(Error::timed_out("timed out fetching backends")),
-        }
+        let lb_context = LbContext::new(resolved.trace, url, headers);
+        let select = self.select_endpoint(self.resolve_mode, &resolved.backend, lb_context);
+        let selected = match tokio::time::timeout_at(deadline.into(), select).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(Error::timed_out("timed out fetching backends")),
+        };
+        let address = selected.addr;
+        let trace = selected.trace;
+
+        let (timeouts, retry) = {
+            let rule = &resolved.route.rules[resolved.rule];
+            (rule.timeouts.clone(), rule.retry.clone())
+        };
+
+        Ok(Endpoint {
+            method: method.clone(),
+            url: url.clone(),
+            headers: headers.clone(),
+            address,
+            timeouts,
+            retry,
+            backend: resolved.backend,
+            trace,
+            previous_addrs: vec![],
+        })
     }
-}
 
-/// The result of [resolving a route][Client::resolve_routes].
-#[derive(Debug, Clone)]
-pub struct ResolvedRoute {
-    /// The resolved route.
-    pub route: Arc<Route>,
+    pub async fn report_status(
+        &mut self,
+        endpoint: Endpoint,
+        response: HttpResult,
+    ) -> crate::Result<Endpoint> {
+        // TODO: track response stats
 
-    /// The index of the rule that matched the request.
-    //TODO: doesn't need to be optional? remove it for the request trace anyway
-    pub rule: Option<usize>,
+        // if there's no reason to pick a new endpoint, just return the existing one as-is
+        if response.is_ok() || !endpoint.should_retry(response) {
+            return Ok(endpoint);
+        }
 
-    /// The backend selected as part of route resolution.
-    pub backend: BackendId,
+        // redo endpoint selection
+        // FIXME: real deadline here
+        let deadline = Instant::now() + self.resolve_timeout;
+        let lb_context = LbContext {
+            url: &endpoint.url,
+            headers: &endpoint.headers,
+            previous_addrs: &endpoint.previous_addrs,
+            trace: endpoint.trace,
+        };
+        let select_next = self.select_endpoint(self.resolve_mode, &endpoint.backend, lb_context);
+        let next = match tokio::time::timeout_at(deadline.into(), select_next).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(Error::timed_out("timed out fetching backends")),
+        };
+        let address = next.addr;
+        let trace = next.trace;
+
+        // track address history
+        let mut previous_addrs = endpoint.previous_addrs;
+        previous_addrs.push(endpoint.address);
+
+        Ok(Endpoint {
+            address,
+            trace,
+            previous_addrs,
+            ..endpoint
+        })
+    }
 }
 
 pub(crate) async fn resolve_routes(
     cache: &impl ConfigCache,
     request: HttpRequest<'_>,
+    mut trace: Trace,
 ) -> crate::Result<ResolvedRoute> {
     use rand::seq::SliceRandom;
 
     // look up the route, grabbing the first route that returns from cache.
-    let matching_route = match cache.get_route(request.url.authority()).await {
+    let route = match cache.get_route(request.url.authority()).await {
         Some(route) => route,
-        None => return Err(Error::no_route_matched(request.url.authority().to_string())),
+        None => {
+            return Err(Error::no_route_matched(
+                request.url.authority().to_string(),
+                trace,
+            ))
+        }
     };
+    trace.lookup_route(&route);
 
-    // if we got here, we have resolved to a list of routes
-    let Some((matching_rule_idx, matching_rule)) = find_matching_rule(
-        &matching_route,
-        request.method,
-        request.url,
-        request.headers,
-    ) else {
-        return Err(Error::no_rule_matched(matching_route.id.clone()));
+    // match the request against the list of RouteRules that are part of this
+    // request. the hostname and port of the request have already matched but we
+    // need to match headers/url params/method and so on.
+    let (rule, matching_rule) = match find_matching_rule(&route, request.clone()) {
+        Some((idx, r)) => (idx, r),
+        None => return Err(Error::no_rule_matched(route.id.clone(), trace)),
     };
+    trace.matched_rule(
+        rule,
+        route.rules.get(rule).and_then(|rule| rule.name.as_ref()),
+    );
 
-    // pick a target at random from the list, respecting weights.
+    // pick a target at random from the list, respecting weights. if there are
+    // no backends listed we should blackhole here.
     let weighted_backend = &crate::rand::with_thread_rng(|rng| {
         matching_rule.backends.choose_weighted(rng, |wc| wc.weight)
     });
-
     let backend_ref = match weighted_backend {
         Ok(backend_ref) => backend_ref,
         Err(WeightedError::NoItem) => {
+            // TODO: should this just return a special endpoint that 500s?
             return Err(Error::invalid_route(
                 "route has no backends",
-                matching_route.id.clone(),
-                matching_rule_idx,
-            ))
+                route.id.clone(),
+                rule,
+                trace,
+            ));
         }
         Err(_) => {
             return Err(Error::invalid_route(
                 "backends weights are invalid: total weights must be greater than zero",
-                matching_route.id.clone(),
-                matching_rule_idx,
+                route.id.clone(),
+                rule,
+                trace,
             ))
         }
     };
-
     let backend = backend_ref.into_backend_id(request.url.default_port());
+    trace.select_backend(&backend);
+
     Ok(ResolvedRoute {
-        route: matching_route.clone(),
-        rule: Some(matching_rule_idx),
+        route: route.clone(),
+        rule,
         backend,
+        trace,
     })
 }
 
-async fn resolve_endpoint(
+async fn select_endpoint(
     cache: &impl ConfigCache,
-    resolved: ResolvedRoute,
-    request: HttpRequest<'_>,
-) -> crate::Result<Endpoint> {
-    let Some(backend) = cache.get_backend(&resolved.backend).await else {
-        return Err(Error::no_backend(
-            resolved.route.id.clone(),
-            resolved.rule,
-            resolved.backend,
-        ));
+    backend: &BackendId,
+    mut ctx: LbContext<'_>,
+) -> crate::Result<SelectedEndpoint> {
+    // start the next trace phase
+    ctx.trace.start_endpoint_selection();
+
+    // lookup backend and endpoints
+    let Some(blb) = cache.get_backend(backend).await else {
+        return Err(Error::no_backend(backend.clone(), ctx.trace));
+    };
+    ctx.trace.lookup_backend(backend);
+    let Some(endpoints) = cache.get_endpoints(backend).await else {
+        return Err(Error::no_reachable_endpoints(backend.clone(), ctx.trace));
+    };
+    ctx.trace.lookup_endpoints(backend);
+
+    // load balance.
+    //
+    // no trace is done here, the load balancer impls stamp the traces themselves
+    let addr = blb.load_balancer.load_balance(
+        &mut ctx.trace,
+        &endpoints,
+        ctx.url,
+        ctx.headers,
+        ctx.previous_addrs,
+    );
+    let Some(addr) = addr else {
+        return Err(Error::no_reachable_endpoints(backend.clone(), ctx.trace));
     };
 
-    let Some(endpoints) = cache.get_endpoints(&resolved.backend).await else {
-        return Err(Error::no_reachable_endpoints(
-            resolved.route.id.clone(),
-            backend.config.id.clone(),
-        ));
-    };
-
-    let endpoint = backend
-        .load_balancer
-        .load_balance(request.url, request.headers, &endpoints);
-    let Some(endpoint) = endpoint else {
-        return Err(Error::no_reachable_endpoints(
-            resolved.route.id.clone(),
-            resolved.backend,
-        ));
-    };
-
-    let url = request.url.clone();
-    let (timeouts, retry) = match resolved.rule {
-        Some(idx) => {
-            let rule = &resolved.route.rules[idx];
-            (rule.timeouts.clone(), rule.retry.clone())
-        }
-        None => (None, None),
-    };
-
-    Ok(crate::Endpoint {
-        url,
-        timeouts,
-        retry,
-        address: *endpoint,
+    Ok(SelectedEndpoint {
+        addr: *addr,
+        trace: ctx.trace,
     })
 }
 
@@ -491,14 +642,12 @@ async fn resolve_endpoint(
 //first match
 fn find_matching_rule<'a>(
     route: &'a Route,
-    method: &http::Method,
-    url: &crate::Url,
-    headers: &http::HeaderMap,
+    request: HttpRequest<'_>,
 ) -> Option<(usize, &'a RouteRule)> {
     let rule_idx = route
         .rules
         .iter()
-        .position(|rule| is_route_rule_match(rule, method, url, headers))?;
+        .position(|rule| is_route_rule_match(rule, request.method, request.url, request.headers))?;
 
     let rule = &route.rules[rule_idx];
     Some((rule_idx, rule))
@@ -590,7 +739,7 @@ mod test {
 
     #[track_caller]
     fn assert_resolve_routes(cache: &impl ConfigCache, request: HttpRequest<'_>) -> ResolvedRoute {
-        resolve_routes(cache, request)
+        resolve_routes(cache, request, Trace::new())
             .now_or_never()
             .unwrap()
             .unwrap()
@@ -598,7 +747,7 @@ mod test {
 
     #[track_caller]
     fn assert_resolve_err(cache: &impl ConfigCache, request: HttpRequest<'_>) -> crate::Error {
-        resolve_routes(cache, request)
+        resolve_routes(cache, request, Trace::new())
             .now_or_never()
             .unwrap()
             .unwrap_err()
@@ -652,9 +801,7 @@ mod test {
         let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
 
         let err = assert_resolve_err(&routes, request);
-        assert!(err
-            .to_string()
-            .contains("no routing rules matched the request"));
+        assert!(err.to_string().contains("no rules matched the request"));
         assert!(!err.is_temporary());
     }
 
@@ -734,7 +881,7 @@ mod test {
         let resolved = assert_resolve_routes(&routes, request);
 
         // should match the fallthrough rule
-        assert_eq!(resolved.rule, Some(1));
+        assert_eq!(resolved.rule, 1);
         assert_eq!(resolved.backend, backend_two.as_backend_id(8919));
 
         let url = Url::from_str("http://example.com/users/123").unwrap();
@@ -744,9 +891,7 @@ mod test {
 
         // should match the first rule, with the path match
         assert_eq!(resolved.backend, backend_one.as_backend_id(8910));
-        assert!(!resolved.route.rules[resolved.rule.unwrap()]
-            .matches
-            .is_empty());
+        assert!(!resolved.route.rules[resolved.rule].matches.is_empty());
 
         let url = Url::from_str("http://example.com/users/123").unwrap();
         let headers = &http::HeaderMap::default();
@@ -754,7 +899,7 @@ mod test {
 
         let resolved = assert_resolve_routes(&routes, request);
         // should match the first rule, with the path match
-        assert_eq!(resolved.rule, Some(0));
+        assert_eq!(resolved.rule, 0);
         assert_eq!(resolved.backend, backend_one.as_backend_id(8910));
     }
 
@@ -819,7 +964,7 @@ mod test {
 
             let resolved = assert_resolve_routes(&routes, request);
             // should match the fallthrough rule
-            assert_eq!(resolved.rule, Some(1));
+            assert_eq!(resolved.rule, 1);
             assert_eq!(resolved.backend, backend_two.as_backend_id(8919));
         }
 
@@ -838,7 +983,7 @@ mod test {
             // should match one of the query matches
             assert_eq!(
                 (resolved.rule, &resolved.backend),
-                (Some(0), &backend_one.as_backend_id(8910)),
+                (0, &backend_one.as_backend_id(8910)),
                 "should match the first rule: {url}"
             );
         }

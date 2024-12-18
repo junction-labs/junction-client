@@ -680,7 +680,7 @@ pub struct RouteRetry {
     //
     // TODO: should this be http::StatusCode?
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub codes: Vec<u32>,
+    pub codes: Vec<u16>,
 
     /// The total number of attempts to make when retrying this request.
     #[serde(default, skip_serializing_if = "Option::is_none")]

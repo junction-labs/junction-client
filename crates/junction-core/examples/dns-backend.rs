@@ -49,7 +49,7 @@ async fn main() {
     loop {
         match client.resolve_http(&Method::GET, &http_url, &headers).await {
             Ok(endpoint) => {
-                eprintln!(" http: {:>15}", &endpoint.address);
+                eprintln!(" http: {:>15}", &endpoint.addr());
             }
             Err(e) => eprintln!("http: something went wrong: {e}"),
         }
@@ -58,7 +58,7 @@ async fn main() {
             .await
         {
             Ok(endpoint) => {
-                eprintln!("https: {:>15}", &endpoint.address);
+                eprintln!("https: {:>15}", &endpoint.addr());
             }
             Err(e) => eprintln!("https: something went wrong: {e}"),
         }

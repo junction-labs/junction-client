@@ -17,7 +17,8 @@ mod dns;
 mod load_balancer;
 mod xds;
 
-pub use client::{Client, HttpRequest, ResolveMode, ResolvedRoute};
+pub use client::{Client, HttpRequest, HttpResult, ResolveMode, ResolvedRoute};
+use error::Trace;
 use futures::FutureExt;
 use junction_api::Name;
 pub use xds::{ResourceVersion, XdsConfig};
@@ -57,7 +58,7 @@ pub fn check_route(
     // resolve_routes is async but we know that with StaticConfig, fetching
     // config should NEVER block. now-or-never just calls Poll with a noop
     // waker and unwraps the result ASAP.
-    client::resolve_routes(&config, request)
+    client::resolve_routes(&config, request, Trace::new())
         .now_or_never()
         .expect("check_route yielded unexpectedly. this is a bug in Junction, please file an issue")
 }

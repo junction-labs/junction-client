@@ -377,7 +377,7 @@ impl RouteRetry {
     fn from_gateway(retry: &gateway_http::HTTPRouteRulesRetry) -> Result<Self, Error> {
         let mut codes = Vec::with_capacity(retry.codes.as_ref().map_or(0, |c| c.len()));
         for (i, &code) in retry.codes.iter().flatten().enumerate() {
-            let code: u32 = code
+            let code: u16 = code
                 .try_into()
                 .map_err(|_| Error::new_static("invalid response code"))
                 .with_field_index("codes", i)?;
