@@ -26,6 +26,8 @@ pub struct Url {
     path_and_query: http::uri::PathAndQuery,
 }
 
+// TODO: own error type here?
+
 impl std::fmt::Display for Url {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

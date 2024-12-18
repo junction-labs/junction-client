@@ -136,8 +136,8 @@ class PoolManager(urllib3.PoolManager):
         kwargs["assert_same_host"] = False
 
         # set the host header correctly
-        if endpoint.host:
-            kwargs["headers"]["Host"] = endpoint.host
+        if endpoint.hostname:
+            kwargs["headers"]["Host"] = endpoint.hostname
 
         # build the retry policy we'll use to make this request
         retries, redirect_retries = _configure_retries(
@@ -185,6 +185,7 @@ class PoolManager(urllib3.PoolManager):
                     endpoint=endpoint,
                     error=e,
                 )
+                e.junction_endpiont = endpoint
 
                 if _is_redirect_err(e):
                     raise e
@@ -199,20 +200,27 @@ class PoolManager(urllib3.PoolManager):
                 retries.sleep()
                 continue
 
+            # the response with the endpoint and then report status.
+            #
+            # FIXME: this selects a new ip address even if we're about to give
+            # up and stop retrying. bah humbug. do we need to split the baby?
             endpoint = self.junction.report_status(
                 endpoint=endpoint,
                 status_code=response.status,
             )
+            response.junction_endpoint = endpoint
+
             has_retry_after = bool(response.headers.get("Retry-After"))
             if retries.is_retry(method, response.status, has_retry_after):
                 try:
                     retries = retries.increment(
                         method, url, response=response, _pool=pool
                     )
-                except MaxRetryError:
+                except MaxRetryError as e:
+                    e.junction_endpoint = endpoint
                     if retries.raise_on_status:
                         response.drain_conn()
-                        raise
+                        raise e
                     return response
 
                 response.drain_conn()
@@ -232,6 +240,6 @@ class PoolManager(urllib3.PoolManager):
         request_context["port"] = endpoint.port
 
         if endpoint.scheme == "https":
-            request_context["assert_hostname"] = endpoint.host
+            request_context["assert_hostname"] = endpoint.hostname
 
         return self.connection_from_context(request_context=request_context)

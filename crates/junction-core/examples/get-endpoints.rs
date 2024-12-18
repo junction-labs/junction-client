@@ -108,7 +108,7 @@ async fn main() {
 
         let prod = prod_endpoints.unwrap();
         let staging = staging_endpoints.unwrap();
-        println!("prod={:<20} staging={:<20}", prod.address, staging.address);
+        println!("prod={:<20} staging={:<20}", prod.addr(), staging.addr());
 
         tokio::time::sleep(Duration::from_millis(1500)).await;
     }

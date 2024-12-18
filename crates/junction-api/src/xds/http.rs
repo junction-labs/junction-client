@@ -21,7 +21,10 @@ use xds_api::pb::{
         },
         r#type::matcher::v3::{string_matcher::MatchPattern, StringMatcher},
     },
-    google::{self, protobuf},
+    google::{
+        self,
+        protobuf::{self, UInt32Value},
+    },
 };
 
 use crate::xds::shared::{parse_xds_regex, regex_matcher};
@@ -578,8 +581,12 @@ impl PathMatch {
 
 impl RouteRetry {
     pub fn from_xds(r: &xds_route::RetryPolicy) -> Self {
-        let codes = r.retriable_status_codes.clone();
-        let attempts = Some(1 + r.num_retries.clone().map_or(0, |v| v.into()));
+        let codes = r
+            .retriable_status_codes
+            .iter()
+            .map(|code| *code as u16)
+            .collect();
+        let attempts = r.num_retries.clone().map(|v| u32::from(v) + 1);
         let backoff = r
             .retry_back_off
             .as_ref()
@@ -592,11 +599,10 @@ impl RouteRetry {
     }
 
     pub fn to_xds(&self) -> xds_route::RetryPolicy {
-        let retriable_status_codes = self.codes.clone();
+        let retriable_status_codes = self.codes.iter().map(|&code| code as u32).collect();
         let num_retries = self
             .attempts
-            .map(|attempts| attempts.saturating_sub(1))
-            .unwrap_or(0);
+            .map(|attempts| UInt32Value::from(attempts.saturating_sub(1)));
 
         let retry_back_off = self.backoff.map(|b| xds_route::retry_policy::RetryBackOff {
             base_interval: Some(b.try_into().unwrap()),
@@ -605,7 +611,7 @@ impl RouteRetry {
 
         xds_route::RetryPolicy {
             retriable_status_codes,
-            num_retries: Some(num_retries.into()),
+            num_retries,
             retry_back_off,
             ..Default::default()
         }
@@ -1259,6 +1265,7 @@ mod test {
         });
     }
 
+    #[track_caller]
     fn assert_roundtrip<T, Xds>(v: T)
     where
         T: PartialEq + std::fmt::Debug,

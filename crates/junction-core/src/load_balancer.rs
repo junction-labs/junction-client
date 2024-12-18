@@ -1,5 +1,6 @@
-use crate::{endpoints::EndpointGroup, hash::thread_local_xxhash};
+use crate::{endpoints::EndpointGroup, error::Trace, hash::thread_local_xxhash};
 use junction_api::backend::{Backend, LbPolicy, RequestHashPolicy, RequestHasher, RingHashParams};
+use smol_str::ToSmolStr;
 use std::{
     net::SocketAddr,
     sync::{
@@ -24,14 +25,18 @@ pub enum LoadBalancer {
 impl LoadBalancer {
     pub(crate) fn load_balance<'e>(
         &self,
+        trace: &mut Trace,
+        endpoints: &'e EndpointGroup,
         url: &crate::Url,
         headers: &http::HeaderMap,
-        locality_endpoints: &'e EndpointGroup,
+        previous_addrs: &[SocketAddr],
     ) -> Option<&'e SocketAddr> {
         match self {
-            LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(locality_endpoints),
+            // RoundRobin skips previously picked addrs and ignores context
+            LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(trace, endpoints, previous_addrs),
+            // RingHash needs context but doesn't care about history
             LoadBalancer::RingHash(lb) => {
-                lb.pick_endpoint(url, headers, &lb.config.hash_params, locality_endpoints)
+                lb.pick_endpoint(trace, endpoints, url, headers, &lb.config.hash_params)
             }
         }
     }
@@ -59,9 +64,26 @@ pub struct RoundRobinLb {
 
 impl RoundRobinLb {
     // FIXME: actually use locality
-    fn pick_endpoint<'e>(&self, endpoint_group: &'e EndpointGroup) -> Option<&'e SocketAddr> {
+    fn pick_endpoint<'e>(
+        &self,
+        trace: &mut Trace,
+        endpoint_group: &'e EndpointGroup,
+        previous_addrs: &[SocketAddr],
+    ) -> Option<&'e SocketAddr> {
+        // TODO: actually use previous addrs to pick a new address. have to
+        // decide if we return anything if all addresses have previously been
+        // picked, or how many dupes we allow, etc. Envoy has a policy for this,
+        // but we'd prefer to do something simpler by default.
+        //
+        // https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-retrypolicy
+        let _ = previous_addrs;
+
         let idx = self.idx.fetch_add(1, Ordering::SeqCst) % endpoint_group.len();
-        endpoint_group.nth(idx)
+        let addr = endpoint_group.nth(idx);
+
+        trace.load_balance("ROUND_ROBIN", addr, Vec::new());
+
+        addr
     }
 }
 
@@ -97,16 +119,21 @@ impl RingHashLb {
 
     fn pick_endpoint<'e>(
         &self,
+        trace: &mut Trace,
+        endpoints: &'e EndpointGroup,
         url: &crate::Url,
         headers: &http::HeaderMap,
         hash_params: &Vec<RequestHashPolicy>,
-        endpoint_group: &'e EndpointGroup,
     ) -> Option<&'e SocketAddr> {
         let request_hash =
             hash_request(hash_params, url, headers).unwrap_or_else(crate::rand::random);
 
-        let endpoint_idx = self.with_ring(endpoint_group, |r| r.pick(request_hash))?;
-        endpoint_group.nth(endpoint_idx)
+        let endpoint_idx = self.with_ring(endpoints, |r| r.pick(request_hash))?;
+        let addr = endpoints.nth(endpoint_idx);
+
+        trace.load_balance("RING_HASH", addr, vec![("hash", request_hash.to_smolstr())]);
+
+        addr
     }
 
     // if you're reading this you might wonder why this takes a callback:

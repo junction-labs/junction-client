@@ -2,7 +2,7 @@ use junction_api::{
     backend::{Backend, BackendId},
     http::Route,
 };
-use junction_core::{ResolveMode, ResourceVersion};
+use junction_core::{HttpResult, ResolveMode, ResourceVersion};
 use once_cell::sync::Lazy;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -57,26 +57,7 @@ mod env {
 #[derive(Clone, Debug)]
 #[pyclass]
 pub struct Endpoint {
-    #[pyo3(get)]
-    addr: IpAddr,
-
-    #[pyo3(get)]
-    port: u16,
-
-    #[pyo3(get)]
-    scheme: String,
-
-    #[pyo3(get)]
-    host: String,
-
-    #[pyo3(get)]
-    request_uri: String,
-
-    #[pyo3(get)]
-    retry_policy: Option<RetryPolicy>,
-
-    #[pyo3(get)]
-    timeout_policy: Option<TimeoutPolicy>,
+    inner: junction_core::Endpoint,
 }
 
 #[pymethods]
@@ -84,30 +65,49 @@ impl Endpoint {
     fn __repr__(&self) -> String {
         format!(
             "Endpoint({addr}, {uri})",
-            addr = self.addr,
-            uri = self.request_uri
+            addr = self.inner.addr(),
+            uri = self.inner.url(),
         )
+    }
+
+    #[getter]
+    fn scheme(&self) -> &str {
+        self.inner.url().scheme()
+    }
+
+    #[getter]
+    fn addr(&self) -> IpAddr {
+        self.inner.addr().ip()
+    }
+
+    #[getter]
+    fn port(&self) -> u16 {
+        self.inner.addr().port()
+    }
+
+    #[getter]
+    fn hostname(&self) -> &str {
+        self.inner.url().hostname()
+    }
+
+    #[getter]
+    fn retry_policy(&self) -> Option<RetryPolicy> {
+        self.inner.retry().clone().map(|r| r.into())
+    }
+
+    #[getter]
+    fn timeout_policy(&self) -> Option<TimeoutPolicy> {
+        self.inner.timeouts().clone().map(|t| t.into())
+    }
+
+    fn print_trace(&self) {
+        self.inner.print_trace();
     }
 }
 
 impl From<junction_core::Endpoint> for Endpoint {
-    fn from(ep: junction_core::Endpoint) -> Self {
-        let scheme = ep.url.scheme().to_string();
-        let host = ep.url.hostname().to_string();
-        let request_uri = ep.url.to_string();
-        let (addr, port) = (ep.address.ip(), ep.address.port());
-        let retry_policy = ep.retry.map(|r| r.into());
-        let timeout_policy = ep.timeouts.map(|r| r.into());
-
-        Self {
-            addr,
-            port,
-            scheme,
-            host,
-            request_uri,
-            retry_policy,
-            timeout_policy,
-        }
+    fn from(inner: junction_core::Endpoint) -> Self {
+        Self { inner }
     }
 }
 
@@ -120,7 +120,7 @@ impl From<junction_core::Endpoint> for Endpoint {
 #[pyclass]
 pub struct RetryPolicy {
     #[pyo3(get)]
-    codes: Vec<u32>,
+    codes: Vec<u16>,
 
     #[pyo3(get)]
     attempts: u32,
@@ -132,7 +132,7 @@ pub struct RetryPolicy {
 #[pymethods]
 impl RetryPolicy {
     #[new]
-    fn new(codes: Option<Vec<u32>>, attempts: Option<u32>, backoff: Option<f64>) -> Self {
+    fn new(codes: Option<Vec<u16>>, attempts: Option<u32>, backoff: Option<f64>) -> Self {
         Self {
             codes: codes.unwrap_or_default(),
             attempts: attempts.unwrap_or_default(),
@@ -150,6 +150,16 @@ impl RetryPolicy {
     }
 }
 
+impl From<junction_api::http::RouteRetry> for RetryPolicy {
+    fn from(value: junction_api::http::RouteRetry) -> Self {
+        Self {
+            codes: value.codes,
+            attempts: value.attempts.unwrap_or(1),
+            backoff: value.backoff.map(|x| x.as_secs_f64()).unwrap_or(0.0),
+        }
+    }
+}
+
 /// A policy that describes how a client should do timeouts.
 #[derive(Clone, Debug)]
 #[pyclass]
@@ -159,16 +169,6 @@ pub struct TimeoutPolicy {
 
     #[pyo3(get)]
     request: f64,
-}
-
-impl From<junction_api::http::RouteRetry> for RetryPolicy {
-    fn from(value: junction_api::http::RouteRetry) -> Self {
-        Self {
-            codes: value.codes,
-            attempts: value.attempts.unwrap_or(1),
-            backoff: value.backoff.map(|x| x.as_secs_f64()).unwrap_or(0.0),
-        }
-    }
 }
 
 #[pymethods]
@@ -221,7 +221,7 @@ fn check_route(
     method: &str,
     url: &str,
     headers: &Bound<PyMapping>,
-) -> PyResult<(Py<PyAny>, Option<usize>, Py<PyAny>)> {
+) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
     let url: junction_core::Url = url
         .parse()
         .map_err(|e| PyValueError::new_err(format!("{e}")))?;
@@ -401,7 +401,7 @@ impl Junction {
         url: &str,
         headers: &Bound<PyMapping>,
         dynamic: bool,
-    ) -> PyResult<(Py<PyAny>, Option<usize>, Py<PyAny>)> {
+    ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
         let method = method_from_py(method)?;
         let url =
             junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
@@ -416,7 +416,7 @@ impl Junction {
         };
 
         let resolved = RUNTIME
-            .block_on(self.core.resolve_routes(config_mode, request))
+            .block_on(self.core.resolve_route(config_mode, request))
             .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
         let route = pythonize::pythonize(py, &resolved.route)?;
@@ -470,9 +470,22 @@ impl Junction {
         status_code: Option<u16>,
         error: Option<Bound<PyAny>>,
     ) -> PyResult<Endpoint> {
-        // TODO: actually implement/call this in the core client.
-        let _ = status_code;
-        let _ = error;
+        let result = match (status_code, error) {
+            (Some(code), _) => HttpResult::from_u16(code)
+                .map_err(|_| PyValueError::new_err("invalid status code"))?,
+            (None, Some(_)) => HttpResult::StatusFailed,
+            (None, None) => {
+                return Err(PyValueError::new_err(
+                    "either status_code or error is required",
+                ))
+            }
+        };
+
+        let endpoint = RUNTIME
+            .block_on(self.core.report_status(endpoint.inner, result))
+            .map(|endpoint| endpoint.into())
+            .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
+
         Ok(endpoint)
     }
 
