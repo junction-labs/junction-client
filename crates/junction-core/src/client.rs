@@ -514,6 +514,19 @@ impl Client {
         }
     }
 
+    /// Dump xDS resources that failed to update. This is a view of the data
+    /// returned by [Client::dump_xds] that only contains resources with
+    /// errors.
+    pub fn dump_xds_errors(&self) -> Vec<crate::XdsConfig> {
+        match self.config.ads() {
+            Some(ads) => ads
+                .iter_xds()
+                .filter(|xds| xds.last_error.is_some())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// Dump the Client's current table of [Route]s, merging together any
     /// default routes and remotely fetched routes the same way the client would
     /// when resolving endpoints.
