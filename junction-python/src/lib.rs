@@ -16,6 +16,8 @@ use serde::Serialize;
 use std::{net::IpAddr, str::FromStr};
 use xds_api::pb::google::protobuf;
 
+mod runtime;
+
 #[pymodule]
 fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Junction>()?;
@@ -194,17 +196,6 @@ impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
     }
 }
 
-static RUNTIME: once_cell::sync::Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .thread_name("junction")
-        .build()
-        .expect("failed to initialize a junction runtime");
-
-    rt
-});
-
 /// Check route resolution.
 ///
 /// Resolve a request against a routing table. Returns the full route that was
@@ -294,18 +285,13 @@ fn new_client(
     node_name: String,
     cluster_name: String,
 ) -> PyResult<junction_core::Client> {
-    let rt = &RUNTIME;
-    rt.block_on(junction_core::Client::build(
-        ads_address,
-        node_name,
-        cluster_name,
-    ))
-    .map_err(|e| {
-        let error_message = match e.source() {
-            Some(cause) => format!("ads connection failed: {e}: {cause}"),
-            None => format!("ads connection failed: {e}"),
-        };
-        PyRuntimeError::new_err(error_message)
+    runtime::block_and_check_signals(async {
+        junction_core::Client::build(ads_address, node_name, cluster_name)
+            .await
+            .map_err(|e| match e.source() {
+                Some(cause) => format!("ads connection failed: {e}: {cause}"),
+                None => format!("ads connection failed: {e}"),
+            })
     })
 }
 
@@ -415,9 +401,8 @@ impl Junction {
             false => ResolveMode::Static,
         };
 
-        let resolved = RUNTIME
-            .block_on(self.core.resolve_route(config_mode, request))
-            .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
+        let resolved =
+            runtime::block_and_check_signals(self.core.resolve_route(config_mode, request))?;
 
         let route = pythonize::pythonize(py, &resolved.route)?;
         let backend = pythonize::pythonize(py, &resolved.backend)?;
@@ -455,12 +440,10 @@ impl Junction {
         let method = method_from_py(method)?;
         let headers = headers_from_py(headers)?;
 
-        let endpoints = RUNTIME
-            .block_on(self.core.resolve_http(&method, &url, &headers))
-            .map(|endpoint| endpoint.into())
-            .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
+        let endpoint =
+            runtime::block_and_check_signals(self.core.resolve_http(&method, &url, &headers))?;
 
-        Ok(endpoints)
+        Ok(endpoint.into())
     }
 
     #[pyo3(signature = (*, endpoint, status_code=None, error=None))]
@@ -481,12 +464,10 @@ impl Junction {
             }
         };
 
-        let endpoint = RUNTIME
-            .block_on(self.core.report_status(endpoint.inner, result))
-            .map(|endpoint| endpoint.into())
-            .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
+        let endpoint =
+            runtime::block_and_check_signals(self.core.report_status(endpoint.inner, result))?;
 
-        Ok(endpoint)
+        Ok(endpoint.into())
     }
 
     /// Spawn a new CSDS server on the given port. Spawning the server will not
@@ -495,7 +476,7 @@ impl Junction {
         let run_server = self.core.clone().csds_server(port);
         // FIXME: figure out how to report an error better than this. just
         // printing the exception is good buuuuuuut.
-        RUNTIME.spawn(async move {
+        runtime::spawn(async move {
             if let Err(e) = run_server.await {
                 let py_err = PyRuntimeError::new_err(format!("csds server exited: {e}"));
                 Python::with_gil(|py| py_err.print(py));
