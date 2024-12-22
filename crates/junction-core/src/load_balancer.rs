@@ -189,6 +189,14 @@ impl Ring {
 
         for (idx, endpoint) in endpoint_group.iter().enumerate() {
             for i in 0..repeats {
+                // we're using both the endpoint address and the index as the
+                // hash key. envoy stringifies things to do this but we don't
+                // need to match exactly.
+                //
+                // https://github.com/envoyproxy/envoy/blob/66cc2175fe5044117c9f00af8d09293012778000/source/extensions/load_balancing_policies/ring_hash/ring_hash_lb.cc#L195-L205
+                //
+                // we're depending here on derive(Hash) for SocketAddr being
+                // stable across rustc versions
                 let hash = thread_local_xxhash::hash(&(endpoint, i));
                 self.entries.push(RingEntry { hash, idx });
             }
@@ -290,41 +298,22 @@ mod test_ring_hash {
         };
 
         // rebuild a ring with no min size
-        ring.rebuild(
-            0,
-            &EndpointGroup::new(
-                [(
-                    Locality::Unknown,
-                    vec!["1.1.1.1:80".parse().unwrap(), "1.1.1.2:80".parse().unwrap()],
-                )]
-                .into(),
-            ),
-        );
+        ring.rebuild(0, &endpoint_group(123, ["1.1.1.1:80", "1.1.1.2:80"]));
 
-        assert_eq!(ring.eg_hash, 7513761254796112512);
+        assert_eq!(ring.eg_hash, 123);
         assert_eq!(ring.entries.len(), 2);
         assert_eq!(ring_indexes(&ring), (0..2).collect::<Vec<_>>());
         assert_hashes_unique(&ring);
 
         let first_ring = ring.entries.clone();
 
-        // ignore a rebuild with the same hash
+        // rebuild the ring with new ips
         ring.rebuild(
             0,
-            &EndpointGroup::new(
-                [(
-                    Locality::Unknown,
-                    vec![
-                        "1.1.1.1:80".parse().unwrap(),
-                        "1.1.1.2:80".parse().unwrap(),
-                        "1.1.1.3:80".parse().unwrap(),
-                    ],
-                )]
-                .into(),
-            ),
+            &endpoint_group(123, ["1.1.1.1:80", "1.1.1.2:80", "1.1.1.3:80"]),
         );
 
-        assert_eq!(ring.eg_hash, 14133933280653238819);
+        assert_eq!(ring.eg_hash, 123);
         assert_eq!(ring.entries.len(), 3);
         assert_eq!(ring_indexes(&ring), (0..3).collect::<Vec<_>>());
         assert_hashes_unique(&ring);
@@ -350,17 +339,7 @@ mod test_ring_hash {
         // rebuild a ring with no min size
         ring.rebuild(
             1024,
-            &EndpointGroup::new(
-                [(
-                    Locality::Unknown,
-                    vec![
-                        "1.1.1.1:80".parse().unwrap(),
-                        "1.1.1.2:80".parse().unwrap(),
-                        "1.1.1.3:80".parse().unwrap(),
-                    ],
-                )]
-                .into(),
-            ),
+            &endpoint_group(123, ["1.1.1.1:80", "1.1.1.2:80", "1.1.1.3:80"]),
         );
 
         // 1026 is the largest multiple of 3 larger than 1024
@@ -415,6 +394,15 @@ mod test_ring_hash {
         let mut indexes: Vec<_> = r.entries.iter().map(|e| e.idx).collect();
         indexes.sort();
         indexes
+    }
+
+    fn endpoint_group(hash: u64, addrs: impl IntoIterator<Item = &'static str>) -> EndpointGroup {
+        let addrs = addrs.into_iter().map(|s| s.parse().unwrap()).collect();
+
+        let mut eg = EndpointGroup::new([(Locality::Unknown, addrs)].into());
+        eg.hash = hash;
+
+        eg
     }
 
     fn assert_hashes_unique(r: &Ring) {
