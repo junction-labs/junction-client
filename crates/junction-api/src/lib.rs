@@ -1,7 +1,7 @@
 //! The Junction configuration API. This crate allows you to build configuration
 //! for a dynamic HTTP client and export it to a control plane or pass it
-//! directly to an in-process client. Junction configuration is expressable as
-//! plain Rust strucs, and can be serialized/deserialized with a [serde]
+//! directly to an in-process client. Junction configuration is expressible as
+//! plain Rust structs, and can be serialized/deserialized with a [serde]
 //! compatible library.
 //!
 //! # Core Concepts
@@ -232,7 +232,7 @@ newtype_string! {
     /// AN RFC 1123 DNS domain name.
     ///
     /// This name must be no more than 253 characters, and can only contain
-    /// lowercase ascii alphanumeric charaters, `.` and `-`.
+    /// lowercase ascii alphanumeric characters, `.` and `-`.
     pub Hostname
 }
 

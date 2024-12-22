@@ -376,7 +376,7 @@ impl RouteMatch {
             }
         }
 
-        // query paramters get their own field name, the oneof happens inside
+        // query parameters get their own field name, the oneof happens inside
         // the array of matches.
         let query_params = r
             .query_parameters
@@ -737,7 +737,7 @@ impl BackendRef {
                     .collect::<Result<Vec<_>, _>>()
                     .with_fields("weighted_clusters", "clusters")
             }
-            Some(_) => Err(Error::new_static("unsupporetd cluster specifier")),
+            Some(_) => Err(Error::new_static("unsupported cluster specifier")),
             None => Ok(Vec::new()),
         }
     }

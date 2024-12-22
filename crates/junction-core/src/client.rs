@@ -111,15 +111,15 @@ pub struct SelectedEndpoint {
 /// The result of making an HTTP request.
 #[derive(Debug, Clone)]
 pub enum HttpResult {
-    /// The client recieved a complete HTTP response with a status code that was
+    /// The client received a complete HTTP response with a status code that was
     /// not a client error (4xx) or a server error (5xx).
     StatusOk(http::StatusCode),
 
-    /// The client recieved a complete HTTP response with a status code that was
+    /// The client received a complete HTTP response with a status code that was
     /// a client error (4xx) or a server error (5xx).
     StatusError(http::StatusCode),
 
-    /// The client didn't recive a complete HTTP response. This covers any IO
+    /// The client didn't receive a complete HTTP response. This covers any IO
     /// error or protocol error. From the Junction client's point of view, there
     /// is no point in distinguishing them.
     StatusFailed,
@@ -144,7 +144,7 @@ impl HttpResult {
     }
 }
 
-/// The strategy for udpating Routes, Backends, and Endpoints while resolving.
+/// The strategy for updating Routes, Backends, and Endpoints while resolving.
 ///
 /// Resolution mode is orthogonal to client configuration mode - it's possible
 /// to have a dynamic client, but to resolve an individual route by only using
@@ -200,7 +200,7 @@ struct DynamicConfig {
     /// a the shared handle to the task that's actually running the client in
     /// the background. should not drop until every active client drops.
     ///
-    /// TOODO: should this get bundled into AdsClient? shrug emoji?
+    /// TODO: should this get bundled into AdsClient? shrug emoji?
     #[allow(unused)]
     ads_task: tokio::task::JoinHandle<()>,
 }
@@ -242,7 +242,7 @@ impl ConfigCache for Config {
 
 // FIXME: Vec<Endpoints> is probably the wrong thing to return from all our
 // resolve methods. We probably need a struct that has something like a list
-// of primary endpoints to cycle through on retries, and a seprate list of
+// of primary endpoints to cycle through on retries, and a separate list of
 // endpoints to mirror traffic to. Figure that out once we support mirroring.
 
 impl Client {
@@ -271,7 +271,7 @@ impl Client {
             ads_task.connect().await.expect("xds: connection failed");
             match ads_task.run().await {
                 Ok(()) => (),
-                Err(e) => panic!("xds: ads client exited: unxpected error: {e}"),
+                Err(e) => panic!("xds: ads client exited: unexpected error: {e}"),
             }
         });
 

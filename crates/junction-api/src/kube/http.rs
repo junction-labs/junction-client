@@ -31,10 +31,7 @@ macro_rules! vec_from_gateway {
             .map(|(i, e)| <$t>::from_gateway(e).with_field_index($field_name, i))
             .collect::<Result<Vec<_>, _>>()
     };
-}
-
-macro_rules! vec_from_gateway_p {
-    ($param:expr, $t:ty, $opt_vec:expr, $field_name:literal) => {
+    ($t:ty, $opt_vec:expr, $field_name:literal, $param:expr) => {
         $opt_vec
             .iter()
             .flatten()
@@ -72,7 +69,7 @@ impl Route {
             httproute.spec.parent_refs.as_deref().unwrap_or_default(),
         )?;
         let tags = read_tags(httproute.annotations());
-        let rules = vec_from_gateway_p!(namespace, RouteRule, httproute.spec.rules, "rules")
+        let rules = vec_from_gateway!(RouteRule, httproute.spec.rules, "rules", namespace)
             .with_field("spec")?;
 
         Ok(Self {
@@ -330,7 +327,7 @@ impl RouteRule {
         let matches = vec_from_gateway!(RouteMatch, rule.matches, "matches")?;
         let timeouts = option_from_gateway!(RouteTimeouts, rule.timeouts, "timeouts")?;
         let backends =
-            vec_from_gateway_p!(route_namespace, BackendRef, rule.backend_refs, "backends")?;
+            vec_from_gateway!(BackendRef, rule.backend_refs, "backends", route_namespace)?;
         let retry = option_from_gateway!(RouteRetry, rule.retry, "retry")?;
 
         // FIXME: filters are ignored because they're not implemented yet
@@ -963,13 +960,13 @@ mod test {
         let gateway_route: gateway_http::HTTPRoute = serde_json::from_value(gateway_spec).unwrap();
         assert!(
             Route::from_gateway_httproute(&gateway_route).is_err(),
-            "expcted an invalid route, but deserialized ok",
+            "expected an invalid route, but deserialized ok",
         )
     }
 
     #[test]
     fn test_roundtrip_simple_route() {
-        assert_roundrip(Route {
+        assert_roundtrip(Route {
             id: Name::from_static("simple-route"),
             hostnames: vec!["foo.bar".parse().unwrap()],
             ports: vec![],
@@ -987,7 +984,7 @@ mod test {
 
     #[test]
     fn test_roundtrip_full_route() {
-        assert_roundrip(Route {
+        assert_roundtrip(Route {
             id: Name::from_static("full-route"),
             hostnames: vec!["*.foo.bar".parse().unwrap(), "foo.bar".parse().unwrap()],
             ports: vec![80, 8080],
@@ -1022,7 +1019,7 @@ mod test {
     }
 
     #[track_caller]
-    fn assert_roundrip(route: Route) {
+    fn assert_roundtrip(route: Route) {
         assert_eq!(
             route,
             Route::from_gateway_httproute(
