@@ -31,6 +31,14 @@ macro_rules! vec_from_gateway {
             .map(|(i, e)| <$t>::from_gateway(e).with_field_index($field_name, i))
             .collect::<Result<Vec<_>, _>>()
     };
+    ($t:ty, $opt_vec:expr, $field_name:literal, $param:expr) => {
+        $opt_vec
+            .iter()
+            .flatten()
+            .enumerate()
+            .map(|(i, e)| <$t>::from_gateway($param, e).with_field_index($field_name, i))
+            .collect::<Result<Vec<_>, _>>()
+    };
 }
 
 macro_rules! option_to_gateway {
@@ -55,11 +63,14 @@ impl Route {
     /// Convert a Gateway API [HTTPRoute][gateway_http::HTTPRoute] into a Junction [Route].
     pub fn from_gateway_httproute(httproute: &gateway_http::HTTPRoute) -> Result<Route, Error> {
         let id = Name::from_str(httproute.meta().name.as_ref().unwrap()).unwrap();
-        let (hostnames, ports) =
-            from_parent_refs(httproute.spec.parent_refs.as_deref().unwrap_or_default())?;
+        let namespace = httproute.meta().namespace.as_deref().unwrap_or("default");
+        let (hostnames, ports) = from_parent_refs(
+            namespace,
+            httproute.spec.parent_refs.as_deref().unwrap_or_default(),
+        )?;
         let tags = read_tags(httproute.annotations());
-        let rules =
-            vec_from_gateway!(RouteRule, httproute.spec.rules, "rules").with_field("spec")?;
+        let rules = vec_from_gateway!(RouteRule, httproute.spec.rules, "rules", namespace)
+            .with_field("spec")?;
 
         Ok(Self {
             id,
@@ -96,6 +107,7 @@ impl Route {
 }
 
 fn from_parent_refs(
+    route_namespace: &str,
     parent_refs: &[gateway_http::HTTPRouteParentRefs],
 ) -> Result<(Vec<HostnameMatch>, Vec<u16>), Error> {
     let mut hostnames_and_ports: BTreeMap<_, HashSet<u16>> = BTreeMap::new();
@@ -110,13 +122,7 @@ fn from_parent_refs(
         let hostname = match (group, kind) {
             ("junctionlabs.io", "DNS") => HostnameMatch::from_str(&parent_ref.name)?,
             ("", "Service") => {
-                // NOTE: kube doesn't require the namespace and will infer a
-                // default. we require it at the moment.
-                let namespace = parent_ref
-                    .namespace
-                    .as_deref()
-                    .ok_or_else(|| Error::new_static("missing namespace"))
-                    .with_field("namespace")?;
+                let namespace = parent_ref.namespace.as_deref().unwrap_or(route_namespace);
 
                 // generate the kube service Hostname and convert it to a match
                 crate::Service::kube(namespace, &parent_ref.name)?
@@ -307,7 +313,10 @@ impl RouteRule {
         })
     }
 
-    fn from_gateway(rule: &gateway_http::HTTPRouteRules) -> Result<Self, Error> {
+    fn from_gateway(
+        route_namespace: &str,
+        rule: &gateway_http::HTTPRouteRules,
+    ) -> Result<Self, Error> {
         let name = rule
             .name
             .as_ref()
@@ -317,7 +326,8 @@ impl RouteRule {
 
         let matches = vec_from_gateway!(RouteMatch, rule.matches, "matches")?;
         let timeouts = option_from_gateway!(RouteTimeouts, rule.timeouts, "timeouts")?;
-        let backends = vec_from_gateway!(BackendRef, rule.backend_refs, "backends")?;
+        let backends =
+            vec_from_gateway!(BackendRef, rule.backend_refs, "backends", route_namespace)?;
         let retry = option_from_gateway!(RouteRetry, rule.retry, "retry")?;
 
         // FIXME: filters are ignored because they're not implemented yet
@@ -571,7 +581,10 @@ impl HeaderMatch {
 }
 
 impl BackendRef {
-    fn from_gateway(backend_ref: &gateway_http::HTTPRouteRulesBackendRefs) -> Result<Self, Error> {
+    fn from_gateway(
+        route_namespace: &str,
+        backend_ref: &gateway_http::HTTPRouteRulesBackendRefs,
+    ) -> Result<Self, Error> {
         let group = backend_ref.group.as_deref().unwrap_or("");
         let kind = backend_ref.kind.as_deref().unwrap_or("Service");
         let weight = backend_ref
@@ -590,15 +603,8 @@ impl BackendRef {
                 crate::Service::dns(&backend_ref.name).with_field("name")?
             }
             ("", "Service") => {
-                // NOTE: kube doesn't require the namespace, but we do for now.
-                let namespace = backend_ref
-                    .namespace
-                    .as_deref()
-                    .ok_or_else(|| Error::new_static("missing namespace"))
-                    .and_then(Name::from_str)
-                    .with_field("namespace")?;
-
-                crate::Service::kube(&namespace, &backend_ref.name)?
+                let namespace = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
+                crate::Service::kube(namespace, &backend_ref.name)?
             }
             (group, kind) => {
                 return Err(Error::new(format!(
@@ -841,6 +847,54 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_from_gateway_no_namespaces() {
+        assert_from_gateway(
+            json!(
+                {
+                    "apiVersion": "gateway.networking.k8s.io/v1",
+                    "kind": "HTTPRoute",
+                    "metadata": {
+                      "name": "example-route",
+                      "namespace": "prod"
+                    },
+                    "spec": {
+                      "parentRefs": [
+                        {"name": "foo-svc", "group": "", "kind": "Service", "port": 80},
+                      ],
+                      "rules": [
+                        {
+                          "backendRefs": [
+                            {
+                              "name": "bar-svc",
+                              "port": 8080
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+            ),
+            Route {
+                id: Name::from_static("example-route"),
+                hostnames: ["foo-svc.prod.svc.cluster.local"]
+                    .into_iter()
+                    .map(|s| HostnameMatch::from_str(s).unwrap())
+                    .collect(),
+                ports: vec![80],
+                tags: Default::default(),
+                rules: vec![RouteRule {
+                    backends: vec![BackendRef {
+                        weight: 1,
+                        service: Service::kube("prod", "bar-svc").unwrap(),
+                        port: Some(8080),
+                    }],
+                    ..Default::default()
+                }],
+            },
+        );
+    }
+
     #[track_caller]
     fn assert_from_gateway(gateway_spec: serde_json::Value, expected: Route) {
         let gateway_route: gateway_http::HTTPRoute = serde_json::from_value(gateway_spec).unwrap();
@@ -906,13 +960,13 @@ mod test {
         let gateway_route: gateway_http::HTTPRoute = serde_json::from_value(gateway_spec).unwrap();
         assert!(
             Route::from_gateway_httproute(&gateway_route).is_err(),
-            "expcted an invalid route, but deserialized ok",
+            "expected an invalid route, but deserialized ok",
         )
     }
 
     #[test]
     fn test_roundtrip_simple_route() {
-        assert_roundrip(Route {
+        assert_roundtrip(Route {
             id: Name::from_static("simple-route"),
             hostnames: vec!["foo.bar".parse().unwrap()],
             ports: vec![],
@@ -930,7 +984,7 @@ mod test {
 
     #[test]
     fn test_roundtrip_full_route() {
-        assert_roundrip(Route {
+        assert_roundtrip(Route {
             id: Name::from_static("full-route"),
             hostnames: vec!["*.foo.bar".parse().unwrap(), "foo.bar".parse().unwrap()],
             ports: vec![80, 8080],
@@ -965,7 +1019,7 @@ mod test {
     }
 
     #[track_caller]
-    fn assert_roundrip(route: Route) {
+    fn assert_roundtrip(route: Route) {
         assert_eq!(
             route,
             Route::from_gateway_httproute(

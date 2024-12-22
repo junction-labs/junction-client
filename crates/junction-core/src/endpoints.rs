@@ -126,7 +126,7 @@ impl From<Arc<EndpointGroup>> for EndpointIter {
 }
 
 // TODO: add a way to see endpoints grouped by locality. have to decide how
-// to publicy expose Locality.
+// to publicly expose Locality.
 impl EndpointIter {
     /// Iterate over all of the addresses in this group, without any locality
     /// information.
@@ -239,7 +239,7 @@ mod test {
         assert!(endpoint.should_retry(HttpResult::StatusFailed),);
         assert!(endpoint.should_retry(HttpResult::StatusError(StatusCode::BAD_REQUEST)),);
 
-        // two ips in history and one current ip, three attempst have been made, shouldn't retry again
+        // two ips in history and one current ip, three attempts have been made, shouldn't retry again
         endpoint
             .previous_addrs
             .push(SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443));
