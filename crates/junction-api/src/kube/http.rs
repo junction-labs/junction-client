@@ -607,7 +607,7 @@ impl BackendRef {
             }
             ("", "Service") => {
                 let namespace = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
-                crate::Service::kube(&namespace, &backend_ref.name)?
+                crate::Service::kube(namespace, &backend_ref.name)?
             }
             (group, kind) => {
                 return Err(Error::new(format!(
