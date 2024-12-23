@@ -69,8 +69,11 @@ impl Route {
             httproute.spec.parent_refs.as_deref().unwrap_or_default(),
         )?;
         let tags = read_tags(httproute.annotations());
-        let rules = vec_from_gateway!(RouteRule, httproute.spec.rules, "rules", namespace)
+
+        let mut rules = vec_from_gateway!(RouteRule, httproute.spec.rules, "rules", namespace)
             .with_field("spec")?;
+        // reverse sort rules
+        rules.sort_by(|a, b| b.cmp(a));
 
         Ok(Self {
             id,
@@ -735,6 +738,76 @@ mod test {
                     }],
                     ..Default::default()
                 }],
+            },
+        );
+    }
+
+    #[test]
+    fn test_from_gateway_sort_rules() {
+        assert_from_gateway(
+            json!(
+                {
+                    "apiVersion": "gateway.networking.k8s.io/v1",
+                    "kind": "HTTPRoute",
+                    "metadata": {
+                      "name": "example-route"
+                    },
+                    "spec": {
+                      "parentRefs": [
+                        {"name": "foo-svc", "namespace": "prod", "group": "", "kind": "Service"},
+                      ],
+                      "rules": [
+                        {
+                          "backendRefs": [
+                            {"name": "foo-svc", "namespace": "prod", "port": 8080},
+                          ]
+                        },
+                        {
+                          "matches": [
+                            {
+                                "path": {
+                                    "type": "PathPrefix",
+                                    "value": "/path5"
+                                }
+                            }
+                          ],
+                          "backendRefs": [
+                            {"name": "bar-svc", "namespace": "prod", "port": 8080},
+                          ]
+                        }
+                      ]
+                    }
+                  }
+            ),
+            Route {
+                id: Name::from_static("example-route"),
+                hostnames: vec![Hostname::from_static("foo-svc.prod.svc.cluster.local").into()],
+                ports: vec![],
+                tags: Default::default(),
+                rules: vec![
+                    RouteRule {
+                        matches: vec![RouteMatch {
+                            path: Some(PathMatch::Prefix {
+                                value: "/path5".to_string(),
+                            }),
+                            ..Default::default()
+                        }],
+                        backends: vec![BackendRef {
+                            weight: 1,
+                            service: Service::kube("prod", "bar-svc").unwrap(),
+                            port: Some(8080),
+                        }],
+                        ..Default::default()
+                    },
+                    RouteRule {
+                        backends: vec![BackendRef {
+                            weight: 1,
+                            service: Service::kube("prod", "foo-svc").unwrap(),
+                            port: Some(8080),
+                        }],
+                        ..Default::default()
+                    },
+                ],
             },
         );
     }
