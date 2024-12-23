@@ -10,7 +10,7 @@ use std::time::Duration as StdDuration;
 use junction_typeinfo::TypeInfo;
 
 /// A fraction, expressed as a numerator and a denominator.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct Fraction {
     pub numerator: i32,
@@ -24,6 +24,14 @@ pub struct Fraction {
 /// `Regex` has same syntax and semantics as Rust's [`regex` crate](https://docs.rs/regex/latest/regex/).
 #[derive(Clone)]
 pub struct Regex(regex::Regex);
+
+impl PartialEq for Regex {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str() == other.0.as_str()
+    }
+}
+
+impl Eq for Regex {}
 
 impl std::fmt::Debug for Regex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
@@ -97,12 +105,6 @@ impl<'de> Deserialize<'de> for Regex {
             }
         }
         deserializer.deserialize_string(RegexVisitor)
-    }
-}
-
-impl PartialEq for Regex {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.as_str() == other.0.as_str()
     }
 }
 

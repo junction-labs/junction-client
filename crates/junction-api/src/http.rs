@@ -2,7 +2,7 @@
 //! put directly in client code like timeouts and retries, failure detection, or
 //! picking a different backend based on request data.
 
-use std::{collections::BTreeMap, str::FromStr};
+use std::{cmp::Ordering, collections::BTreeMap, str::FromStr};
 
 use crate::{
     backend::BackendId,
@@ -197,7 +197,18 @@ impl Route {
 ///
 /// See the Junction docs for a high level description of how Routes and
 /// RouteRules behave.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+///
+/// # Ordering Rules
+///
+/// Route rules may be ordered by comparing their maximum
+/// [matches][Self::matches], breaking ties by comparing their next-highest
+/// match. This provides a total ordering on rules. Note that having a sorted
+/// list of rules does not mean that the list of all matches across all rules is
+/// totally sorted.
+///
+/// This ordering is provided for convenience - clients match rules in the order
+/// they're listed in a Route.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRule {
@@ -246,8 +257,38 @@ pub struct RouteRule {
     pub backends: Vec<BackendRef>,
 }
 
+impl PartialOrd for RouteRule {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RouteRule {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let mut self_matches: Vec<_> = self.matches.iter().collect();
+        self_matches.sort();
+        let mut self_matches = self_matches.iter().rev();
+
+        let mut other_matches: Vec<_> = other.matches.iter().collect();
+        other_matches.sort();
+        let mut other_matches = other_matches.iter().rev();
+
+        loop {
+            match (self_matches.next(), other_matches.next()) {
+                (None, None) => return Ordering::Equal,
+                (None, Some(_)) => return Ordering::Less,
+                (Some(_), None) => return Ordering::Greater,
+                (Some(a), Some(b)) => match a.cmp(b) {
+                    Ordering::Equal => {}
+                    ord => return ord,
+                },
+            }
+        }
+    }
+}
+
 /// Defines timeouts that can be configured for a HTTP Route.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteTimeouts {
@@ -283,7 +324,25 @@ pub struct RouteTimeouts {
 ///
 /// The default RouteMatch functions like a path match on the empty prefix,
 /// which matches every request.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+///
+/// ## Match Ordering
+///
+/// Route matches are [Ordered][Ord] to help break ties. While once a Route is
+/// constructed, rules are matched in-order, sorting matches and rules can be
+/// useful while constructing a Route in case there isn't an obvious order
+/// matches should apply in. From highest-value to lowest value, routes are
+/// ordered by:
+///
+/// - "Exact" path match.
+/// - "Prefix" path match with largest number of characters.
+/// - Method match.
+/// - Largest number of header matches.
+/// - Largest number of query param matches.
+///
+/// Note that this means a route that matches on a path is greater than a route
+/// that only matches on headers. To get a natural sort order by precedence, you
+/// may want to reverse-sort a list of matches.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteMatch {
@@ -308,13 +367,41 @@ pub struct RouteMatch {
     pub method: Option<Method>,
 }
 
+impl PartialOrd for RouteMatch {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RouteMatch {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.path.cmp(&other.path) {
+            Ordering::Equal => (),
+            cmp => return cmp,
+        }
+
+        match (&self.method, &other.method) {
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            _ => (),
+        }
+
+        match self.headers.len().cmp(&other.headers.len()) {
+            Ordering::Equal => (),
+            cmp => return cmp,
+        }
+
+        self.query_params.len().cmp(&other.query_params.len())
+    }
+}
+
 /// Describes how to select a HTTP route by matching the HTTP request path.  The
 /// `type` of a match specifies how HTTP paths should be compared.
 ///
 /// PathPrefix and Exact paths must be syntactically valid:
 /// - Must begin with the `/` character
 /// - Must not contain consecutive `/` characters (e.g. `/foo///`, `//`)
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum PathMatch {
@@ -336,6 +423,31 @@ impl PathMatch {
     pub fn empty_prefix() -> Self {
         Self::Prefix {
             value: String::new(),
+        }
+    }
+}
+
+impl PartialOrd for PathMatch {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PathMatch {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            // exact.cmp
+            (Self::Exact { value: v1 }, Self::Exact { value: v2 }) => v1.len().cmp(&v2.len()),
+            (Self::Exact { .. }, _) => Ordering::Greater,
+            // prefix.cmp
+            (Self::Prefix { .. }, Self::Exact { .. }) => Ordering::Less,
+            (Self::Prefix { value: v1 }, Self::Prefix { value: v2 }) => v1.len().cmp(&v2.len()),
+            (Self::Prefix { .. }, _) => Ordering::Greater,
+            // regex.cmp
+            (Self::RegularExpression { value: v1 }, Self::RegularExpression { value: v2 }) => {
+                v1.as_str().len().cmp(&v2.as_str().len())
+            }
+            (Self::RegularExpression { .. }, _) => Ordering::Less,
         }
     }
 }
@@ -369,7 +481,7 @@ pub type HeaderName = String;
 /// equivalent.
 //
 // FIXME: actually do this only-the-first-entry matching thing
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum HeaderMatch {
@@ -401,7 +513,7 @@ impl HeaderMatch {
 }
 
 /// Describes how to select a HTTP route by matching HTTP query parameters.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields, tag = "type")]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum QueryParamMatch {
@@ -445,7 +557,7 @@ pub type Method = String;
 //
 // TODO: This feels very gateway-ey and redundant to type out in config. Should we switch to
 // untagged here? Something else?
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "type", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum RouteFilter {
@@ -489,7 +601,7 @@ pub enum RouteFilter {
 }
 
 /// Defines configuration for the RequestHeaderModifier filter.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct HeaderFilter {
@@ -531,7 +643,7 @@ pub struct HeaderFilter {
     pub remove: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct HeaderValue {
@@ -544,7 +656,7 @@ pub struct HeaderValue {
 }
 
 /// Defines configuration for path modifiers.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "type", deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub enum PathModifier {
@@ -590,7 +702,7 @@ pub enum PathModifier {
 
 /// Defines a filter that redirects a request. This filter MUST not be used on the same Route rule
 /// as a URL Rewrite filter.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RequestRedirectFilter {
@@ -638,7 +750,7 @@ pub struct RequestRedirectFilter {
 
 /// Defines a filter that modifies a request during forwarding. At most one of these filters may be
 /// used on a Route rule. This may not be used on the same Route rule as a RequestRedirect filter.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct UrlRewriteFilter {
@@ -652,7 +764,7 @@ pub struct UrlRewriteFilter {
 }
 
 /// Defines configuration for the RequestMirror filter.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RequestMirrorFilter {
@@ -672,7 +784,7 @@ pub struct RequestMirrorFilter {
 }
 
 /// Configure client retry policy.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct RouteRetry {
@@ -699,7 +811,7 @@ const fn default_weight() -> u32 {
 // TODO: gateway API also allows filters here under an extended support
 // condition we need to decide whether this is one where its simpler just to
 // drop it.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "typeinfo", derive(TypeInfo))]
 pub struct BackendRef {
     /// The Serivce to route to when traffic matches. This Service will always
@@ -784,6 +896,7 @@ impl FromStr for BackendRef {
 mod test {
     use std::str::FromStr;
 
+    use rand::seq::SliceRandom;
     use serde::de::DeserializeOwned;
     use serde_json::json;
 
@@ -990,5 +1103,190 @@ mod test {
         json: serde_json::Value,
     ) -> serde_json::Error {
         serde_json::from_value::<T>(json).unwrap_err()
+    }
+
+    #[test]
+    fn test_path_match() {
+        // test that exact cmps are only based on length
+        arbtest::arbtest(|u| {
+            let s1: String = u.arbitrary()?;
+            let s2: String = u.arbitrary()?;
+
+            let m1 = PathMatch::Exact { value: s1.clone() };
+            let m2 = PathMatch::Exact { value: s2.clone() };
+
+            assert_eq!(s1.len().cmp(&s2.len()), m1.cmp(&m2));
+
+            Ok(())
+        });
+
+        // test that prefix cmps are only based on length
+        arbtest::arbtest(|u| {
+            let s1: String = u.arbitrary()?;
+            let s2: String = u.arbitrary()?;
+
+            let m1 = PathMatch::Prefix { value: s1.clone() };
+            let m2 = PathMatch::Prefix { value: s2.clone() };
+
+            assert_eq!(s1.len().cmp(&s2.len()), m1.cmp(&m2));
+
+            Ok(())
+        });
+
+        // test that exact > prefix always
+        arbtest::arbtest(|u| {
+            let m1 = PathMatch::Exact {
+                value: u.arbitrary()?,
+            };
+            let m2 = PathMatch::Prefix {
+                value: u.arbitrary()?,
+            };
+            assert!(m1 > m2);
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_order_route_match() {
+        let path_match = RouteMatch {
+            path: Some(PathMatch::Exact {
+                value: "/potato".to_string(),
+            }),
+            ..Default::default()
+        };
+        let method_match = RouteMatch {
+            method: Some("PUT".to_string()),
+            ..Default::default()
+        };
+        let header_match = RouteMatch {
+            headers: vec![HeaderMatch::Exact {
+                name: "x-user".to_string(),
+                value: "a-user".to_string(),
+            }],
+            ..Default::default()
+        };
+        let query_match = RouteMatch {
+            query_params: vec![QueryParamMatch::Exact {
+                name: "q".to_string(),
+                value: "value".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        // order some simple combos
+        assert_eq!(
+            vec![&query_match, &header_match, &method_match, &path_match],
+            shuffle_and_sort([&path_match, &query_match, &header_match, &method_match]),
+        );
+
+        // tie-breaking within a field
+        let m1 = RouteMatch {
+            path: Some(PathMatch::Exact {
+                value: "fooooooooooo".to_string(),
+            }),
+            query_params: query_match.query_params.clone(),
+            ..Default::default()
+        };
+        let m2 = RouteMatch {
+            path: Some(PathMatch::Exact {
+                value: "foo".to_string(),
+            }),
+            query_params: query_match.query_params.clone(),
+            ..Default::default()
+        };
+        assert!(m1 > m2, "should tie break by comparing path_match");
+
+        // tie-breaking with other fields
+        let m1 = RouteMatch {
+            path: path_match.path.clone(),
+            query_params: query_match.query_params.clone(),
+            ..Default::default()
+        };
+        let m2 = RouteMatch {
+            path: path_match.path.clone(),
+            ..Default::default()
+        };
+        assert!(m1 > m2, "should tie-break with query params");
+
+        let m1 = RouteMatch {
+            method: Some("GET".to_string()),
+            query_params: query_match.query_params.clone(),
+            ..Default::default()
+        };
+        let m2 = RouteMatch {
+            method: Some("PUT".to_string()),
+            ..Default::default()
+        };
+        assert!(m1 > m2, "should tie-break with query params");
+    }
+
+    #[test]
+    fn test_order_route_rule() {
+        let path_match = RouteMatch {
+            path: Some(PathMatch::Exact {
+                value: "/potato".to_string(),
+            }),
+            ..Default::default()
+        };
+        let header_match = RouteMatch {
+            headers: vec![HeaderMatch::Exact {
+                name: "x-user".to_string(),
+                value: "a-user".to_string(),
+            }],
+            ..Default::default()
+        };
+        let query_match = RouteMatch {
+            query_params: vec![QueryParamMatch::Exact {
+                name: "q".to_string(),
+                value: "value".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        // simple single match
+        let r1 = RouteRule {
+            matches: vec![path_match.clone()],
+            ..Default::default()
+        };
+        let r2 = RouteRule {
+            matches: vec![header_match.clone()],
+            ..Default::default()
+        };
+        assert!(r1 > r2);
+        assert!(r2 < r1);
+
+        // tie break with extra matches
+        let r1 = RouteRule {
+            matches: vec![path_match.clone()],
+            ..Default::default()
+        };
+        let r2 = RouteRule {
+            matches: vec![path_match.clone(), header_match.clone()],
+            ..Default::default()
+        };
+        assert!(r1 < r2);
+        assert!(r2 > r1);
+
+        // empty matches sorts last
+        let r1 = RouteRule {
+            matches: vec![query_match.clone()],
+            ..Default::default()
+        };
+        let r2 = RouteRule {
+            matches: vec![],
+            ..Default::default()
+        };
+        assert!(r2 < r1);
+        assert!(r1 > r2);
+    }
+
+    fn shuffle_and_sort<T: Ord>(xs: impl IntoIterator<Item = T>) -> Vec<T> {
+        let mut rng = rand::thread_rng();
+
+        let mut v: Vec<_> = xs.into_iter().collect();
+        v.shuffle(&mut rng);
+        v.sort();
+        v
     }
 }

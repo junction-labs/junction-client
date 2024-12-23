@@ -37,6 +37,7 @@ kube = { version = "0.96", optional = true }
 serde_yml = "0.0.12"
 arbtest = "0.3"
 arbitrary = "1.3"
+rand = "0.8"
 
 [features]
 default = []

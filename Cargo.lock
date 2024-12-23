@@ -1058,6 +1058,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "once_cell",
+ "rand",
  "regex",
  "serde",
  "serde_json",
