@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
             allow_staged,
         } => rust::ci_clippy(&sh, crates, *fix, *allow_staged),
         // node
-        NodeBuild => node::build(&sh),
+        NodeBuild { clean_install } => node::build(&sh, *clean_install),
         NodeClean => node::clean(&sh),
         NodeLint { fix } => node::lint(&sh, *fix),
         NodeShell => node::shell(&sh),
@@ -100,7 +100,11 @@ enum Commands {
     ///
     /// Does not build a release build. To build a release build in CI, use
     /// Cargo and npm directly.
-    NodeBuild,
+    NodeBuild {
+        /// Run install with `npm ci` intead of `npm i`.
+        #[clap(long)]
+        clean_install: bool,
+    },
 
     /// Clean up the current node_modules and remove any built native
     /// extensions.
@@ -445,10 +449,11 @@ mod node {
         Ok(())
     }
 
-    pub(super) fn build(sh: &Shell) -> anyhow::Result<()> {
+    pub(super) fn build(sh: &Shell, clean_install: bool) -> anyhow::Result<()> {
         let _dir = sh.push_dir("junction-node");
 
-        cmd!(sh, "npm install --fund=false").run()?;
+        let install_cmd = if clean_install { "ci" } else { "i" };
+        cmd!(sh, "npm {install_cmd} --fund=false").run()?;
         cmd!(sh, "npm run build").run()?;
 
         Ok(())

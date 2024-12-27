@@ -1,0 +1,115 @@
+name: junction-node CI
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "junction-node/**"
+      - ".github/workflows/junction-node-ci.yml"
+
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "junction-node/**"
+      - ".github/workflows/junction-node-ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  rust_stable: stable
+  rust_min: 1.79
+  node_lts: 20.x
+
+jobs:
+  # Rust CI steps
+  #
+  # These should be largely the same as the steps in junction-core-ci.yml but
+  # testing a different package.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install Rust @${{ env.rust_min }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_min }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: check
+        run: cargo check -p junction-node
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: clippy
+        run: cargo xtask ci-clippy --crates junction-node
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: |
+          if ! rustfmt --check --edition 2021 $(git ls-files 'junction-node/*.rs'); then
+            echo "rustfmt found un-formatted files" >&2
+            exit 1
+          fi
+
+  # Node CI steps
+  #
+  # these lean on xtask tasks so they're similar to what you'd run locally
+  test-node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.node_lts }}
+          cache: npm
+          cache-dependency-path: junction-node/package-lock.json
+
+      - name: build
+        run: cargo xtask node-build --clean-install
+
+      - name: lint
+        run: cargo xtask node-lint
+
+      - name: check for uncommitted changes
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+              echo "Found uncomitted changes:"
+              git diff
+              exit 1
+          fi
+
+      - name: run rust tests
+        run: cargo test -p junction-node
+
+      # TODO: add some node tests
+      #
+      # - name: run node tests
+      #   run: cargo xtask node-test
