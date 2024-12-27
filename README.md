@@ -50,10 +50,11 @@ you've developed and tested to a centralized config server.
 
 ### Supported Languages and HTTP Libraries
 
-| Language | Core Library      | Supported HTTP Libraries |
-|----------|-------------------|--------------------------|
-| Rust     | `junction-core`   |  None                    |
-| Python   | `junction`        | [requests] and [urllib3] |
+| Language | Core Library             | Supported HTTP Libraries |
+|----------|--------------------------|--------------------------|
+| Rust     | `junction-core`          |  None                    |
+| Python   | `junction`               | [requests] and [urllib3] |
+| Python   | `@junction-labs/client`  | Coming Soon              |
 
 [requests]: https://pypi.org/project/requests/
 [urllib3]: https://github.com/urllib3/urllib3
@@ -172,7 +173,7 @@ more.
 
 ### NodeJS
 
-NodeJS support is coming soon! Please reach out to
+NodeJS support is a work in progress! Please reach out to
 [info@junctionlabs.io](mailto:info@junctionlabs.io) if you run NodeJS services
 and are interested in being an early access design partner.
 
