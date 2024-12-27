@@ -11,6 +11,8 @@ fn main() -> anyhow::Result<()> {
 
     use Commands::*;
     match &args.command {
+        InstallPrecommit => install_precommit(&sh),
+        Precommit => precommit(&sh, &venv),
         // rust
         CITest => rust::ci_test(&sh),
         CIDoc => rust::ci_doc(&sh),
@@ -60,6 +62,16 @@ enum MaturinOption {
 #[allow(clippy::enum_variant_names)]
 #[derive(Subcommand)]
 enum Commands {
+    /// Install xtask precommit hooks in the local git repo.
+    InstallPrecommit,
+
+    /// Run xtask precommit hooks.
+    ///
+    /// This currently includes linting Rust, Python, and Node libraries on
+    /// every commit. Heavier tasks like full builds and tests will only run in
+    /// CI.
+    Precommit,
+
     /// Run `cargo clippy` with some extra lints, and deny all default warnings.
     CIClippy {
         /// The crates to check. Defaults to the workspace defaults.
@@ -141,6 +153,27 @@ enum Commands {
     PythonTest,
 }
 
+fn install_precommit(sh: &Shell) -> anyhow::Result<()> {
+    cmd!(sh, "git config --local core.hooksPath xtask/hooks").run()?;
+
+    Ok(())
+}
+
+fn precommit(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+    // clippy everything
+    rust::ci_clippy::<&'static str>(sh, &[], false, false)?;
+    rust::ci_clippy(sh, &["junction-python", "junction-node"], false, false)?;
+
+    // regenerate SDKs and lint. verify that they're not going to cause a diff.
+    python::generate(sh, venv)?;
+
+    // per-language lints
+    python::lint(sh, venv, false)?;
+    node::lint(sh, false)?;
+
+    Ok(())
+}
+
 mod rust {
     use super::*;
 
@@ -175,9 +208,9 @@ mod rust {
         Ok(())
     }
 
-    pub(super) fn ci_clippy(
+    pub(super) fn ci_clippy<S: AsRef<str>>(
         sh: &Shell,
-        crates: &[String],
+        crates: &[S],
         fix: bool,
         allow_staged: bool,
     ) -> anyhow::Result<()> {
@@ -209,8 +242,12 @@ mod rust {
         Ok(())
     }
 
-    fn crate_args(crates: &[String]) -> Vec<&str> {
-        crates.iter().map(|name| ["-p", &name]).flatten().collect()
+    fn crate_args(crates: &[impl AsRef<str>]) -> Vec<&str> {
+        crates
+            .iter()
+            .map(|name| ["-p", name.as_ref()])
+            .flatten()
+            .collect()
     }
 }
 
@@ -251,7 +288,7 @@ mod python {
         }
 
         if stubs {
-            generate_typing_hints(sh, venv)?;
+            generate(sh, venv)?;
         }
 
         Ok(())
@@ -281,7 +318,7 @@ mod python {
         Ok(())
     }
 
-    fn generate_typing_hints(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+    pub(super) fn generate(sh: &Shell, venv: &str) -> anyhow::Result<()> {
         let generate_cmd = cmd!(sh, "cargo run -p junction-api-gen");
         // .run() doesn't echo the command. do it ourselves
         //
