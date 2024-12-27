@@ -1,0 +1,26 @@
+[package]
+name = "junction-node"
+version = "0.2.1"
+edition = "2021"
+description = """
+Dynamically configurable HTTP service discovery bindings for NodeJS
+"""
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+categories = ["api-bindings", "network-programming"]
+
+exclude = ["index.node"]
+
+[lib]
+name = "client"
+crate-type = ["cdylib"]
+
+[dependencies]
+http = { workspace = true }
+neon = { version = "1.0", default-features = false, features = ["napi-8"] }
+once_cell = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+junction-core = { workspace = true }
+junction-api = { workspace = true, features = ["kube_v1_29", "xds"] }

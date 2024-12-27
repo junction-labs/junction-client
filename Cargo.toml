@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "junction-python", "xtask"]
+members = ["crates/*", "junction-node", "junction-python", "xtask"]
 default-members = ["crates/*"]
 resolver = "2"
 

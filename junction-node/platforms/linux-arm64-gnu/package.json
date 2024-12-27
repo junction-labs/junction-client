@@ -1,0 +1,29 @@
+{
+  "name": "@junction-labs/client-linux-arm64-gnu",
+  "description": "Prebuilt binary package for `@junction-labs/client` on `linux-arm64-gnu`.",
+  "version": "0.1.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "index.node",
+  "files": [
+    "index.node"
+  ],
+  "neon": {
+    "type": "binary",
+    "rust": "aarch64-unknown-linux-gnu",
+    "node": "linux-arm64-gnu",
+    "os": "linux",
+    "arch": "arm64",
+    "abi": "gnu"
+  },
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "github.com/junction-labs/junction-client"
+  },
+  "license": "Apache-2.0"
+}

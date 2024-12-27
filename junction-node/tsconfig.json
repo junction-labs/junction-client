@@ -1,0 +1,16 @@
+{
+  "extends": "@tsconfig/node20/tsconfig.json",
+  "compilerOptions": {
+    "module": "node16",
+    "declaration": true,
+    "outDir": "./lib",
+    "rootDir": "./ts",
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+    ]
+  },
+  "exclude": [
+    "lib"
+  ]
+}
