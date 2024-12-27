@@ -5,13 +5,11 @@
   "main": "./lib/index.cjs",
   "scripts": {
     "test": "tsc &&cargo test",
-    "clean": "rm -rf lib/ index.node",
-    "cargo-build": "tsc &&cargo build --message-format=json-render-diagnostics > cargo.log",
-    "postcargo-build": "neon dist < cargo.log",
-    "debug": "npm run cargo-build --",
-    "build": "npm run cargo-build -- --release",
     "prepack": "tsc && neon update",
     "version": "neon bump --binaries platforms && git add .",
+    "postcargo-build": "neon dist < cargo.log",
+    "build": "tsc && cargo build --message-format=json-render-diagnostics > cargo.log",
+    "build-release": "tsc && cargo build --release --message-format=json-render-diagnostics > cargo.log",
     "lint": "biome check",
     "fix": "biome check --write"
   },
