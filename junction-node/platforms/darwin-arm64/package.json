@@ -2,16 +2,10 @@
   "name": "@junction-labs/client-darwin-arm64",
   "description": "Prebuilt binary package for `@junction-labs/client` on `darwin-arm64`.",
   "version": "0.1.0",
-  "os": [
-    "darwin"
-  ],
-  "cpu": [
-    "arm64"
-  ],
+  "os": ["darwin"],
+  "cpu": ["arm64"],
   "main": "index.node",
-  "files": [
-    "index.node"
-  ],
+  "files": ["index.node"],
   "neon": {
     "type": "binary",
     "rust": "aarch64-apple-darwin",

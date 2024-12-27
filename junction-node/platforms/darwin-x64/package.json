@@ -2,16 +2,10 @@
   "name": "@junction-labs/client-darwin-x64",
   "description": "Prebuilt binary package for `@junction-labs/client` on `darwin-x64`.",
   "version": "0.1.0",
-  "os": [
-    "darwin"
-  ],
-  "cpu": [
-    "x64"
-  ],
+  "os": ["darwin"],
+  "cpu": ["x64"],
   "main": "index.node",
-  "files": [
-    "index.node"
-  ],
+  "files": ["index.node"],
   "neon": {
     "type": "binary",
     "rust": "x86_64-apple-darwin",

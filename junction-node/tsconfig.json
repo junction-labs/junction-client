@@ -5,12 +5,7 @@
     "declaration": true,
     "outDir": "./lib",
     "rootDir": "./ts",
-    "lib": [
-      "DOM",
-      "DOM.Iterable",
-    ]
+    "lib": ["DOM", "DOM.Iterable"]
   },
-  "exclude": [
-    "lib"
-  ]
+  "exclude": ["lib"]
 }
