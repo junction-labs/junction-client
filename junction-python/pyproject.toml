@@ -17,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Rust",
 ]
+dynamic = ["version"]
 
 [project.urls]
 Homepage = "https://junctionlabs.io"

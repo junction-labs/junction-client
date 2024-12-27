@@ -163,7 +163,25 @@ class RouteMatch(typing.TypedDict):
     matches and both of the `query_params` are matches.
 
     The default RouteMatch functions like a path match on the empty prefix,
-    which matches every request."""
+    which matches every request.
+
+    ## Match Ordering
+
+    Route matches are [Ordered][Ord] to help break ties. While once a Route is
+    constructed, rules are matched in-order, sorting matches and rules can be
+    useful while constructing a Route in case there isn't an obvious order
+    matches should apply in. From highest-value to lowest value, routes are
+    ordered by:
+
+    - "Exact" path match.
+    - "Prefix" path match with largest number of characters.
+    - Method match.
+    - Largest number of header matches.
+    - Largest number of query param matches.
+
+    Note that this means a route that matches on a path is greater than a route
+    that only matches on headers. To get a natural sort order by precedence, you
+    may want to reverse-sort a list of matches."""
 
     path: PathMatch
     """Specifies a HTTP request path matcher."""
@@ -187,7 +205,18 @@ class RouteRule(typing.TypedDict):
     to, processing rules, and the final destination(s) for matching traffic.
 
     See the Junction docs for a high level description of how Routes and
-    RouteRules behave."""
+    RouteRules behave.
+
+    # Ordering Rules
+
+    Route rules may be ordered by comparing their maximum
+    [matches][Self::matches], breaking ties by comparing their next-highest
+    match. This provides a total ordering on rules. Note that having a sorted
+    list of rules does not mean that the list of all matches across all rules is
+    totally sorted.
+
+    This ordering is provided for convenience - clients match rules in the order
+    they're listed in a Route."""
 
     name: str
     """A human-readable name for this rule.
