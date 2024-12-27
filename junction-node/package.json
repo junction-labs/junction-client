@@ -11,7 +11,9 @@
     "debug": "npm run cargo-build --",
     "build": "npm run cargo-build -- --release",
     "prepack": "tsc && neon update",
-    "version": "neon bump --binaries platforms && git add ."
+    "version": "neon bump --binaries platforms && git add .",
+    "lint": "biome check",
+    "fix": "biome check --write"
   },
   "author": "",
   "license": "Apache-2.0",
@@ -28,9 +30,7 @@
     }
   },
   "types": "./lib/index.d.cts",
-  "files": [
-    "lib/**/*.?({c,m}){t,j}s"
-  ],
+  "files": ["lib/**/*.?({c,m}){t,j}s"],
   "neon": {
     "type": "library",
     "org": "@junction-node/",
@@ -38,6 +38,7 @@
     "load": "./ts/load.cts"
   },
   "devDependencies": {
+    "@biomejs/biome": "1.9.4",
     "@neon-rs/cli": "^0.1.82",
     "@tsconfig/node20": "^20.1.4",
     "@types/node": "^20.11.16",
@@ -51,10 +52,10 @@
     "url": "github.com/junction-labs/junction-client"
   },
   "optionalDependencies": {
-    "@junction-labs/client-win32-x64-msvc": "0.1.0",
-    "@junction-labs/client-darwin-x64": "0.1.0",
     "@junction-labs/client-darwin-arm64": "0.1.0",
+    "@junction-labs/client-darwin-x64": "0.1.0",
+    "@junction-labs/client-linux-arm64-gnu": "0.1.0",
     "@junction-labs/client-linux-x64-gnu": "0.1.0",
-    "@junction-labs/client-linux-arm64-gnu": "0.1.0"
+    "@junction-labs/client-win32-x64-msvc": "0.1.0"
   }
 }

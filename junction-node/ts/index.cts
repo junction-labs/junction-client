@@ -2,94 +2,113 @@
 
 // pull in the ffi addon but don't export it directly. it's got some rough edges
 // we hide with this layer
-import * as ffi from './load.cjs';
+import * as ffi from "./load.cjs";
 
 // types for the ffi module, since they're not declared for us.
 declare module "./load.cjs" {
-  interface Runtime { }
-  interface Client { }
-  interface EndpointHandle { }
+  interface Runtime {}
+  interface Client {}
+  interface EndpointHandle {}
 
   type EndpointResult = [EndpointHandle, Endpoint];
 
   type Headers = Array<[string, string]>;
 
   function newRuntime(): Runtime;
-  function newClient(rt: Runtime, adsServer: string, node: string, cluster: string): Promise<Client>;
-  function resolveHttp(rt: Runtime, client: Client, method: String, url: String, headers: Headers): Promise<EndpointResult>;
-  function reportStatus(rt: Runtime, client: Client, endpoint: EndpointHandle, status?: number, error?: string): Promise<EndpointResult>;
+  function newClient(
+    rt: Runtime,
+    adsServer: string,
+    node: string,
+    cluster: string,
+  ): Promise<Client>;
+  function resolveHttp(
+    rt: Runtime,
+    client: Client,
+    method: string,
+    url: string,
+    headers: Headers,
+  ): Promise<EndpointResult>;
+
+  function reportStatus(
+    rt: Runtime,
+    client: Client,
+    endpoint: EndpointHandle,
+    status?: number,
+    error?: string,
+  ): Promise<EndpointResult>;
 }
 
 const defaultRuntime: ffi.Runtime = ffi.newRuntime();
 
-fetch
+fetch;
 
 export type ClientOpts = {
-  adsServer: string,
-  nodeName?: string,
-  clusterName?: string,
-}
+  adsServer: string;
+  nodeName?: string;
+  clusterName?: string;
+};
 
 export type ResolveHttpOpts = {
-  method?: string,
-  url: string,
-  headers?: HeadersInit,
-}
+  method?: string;
+  url: string;
+  headers?: HeadersInit;
+};
 
 export type ReportStatusOpts = {
-  code?: number,
-  error?: string,
-}
+  code?: number;
+  error?: string;
+};
 
 export interface RetryPolicy {
-  attempts?: number,
-  backoff?: [number, number],
-  codes?: [number],
+  attempts?: number;
+  backoff?: [number, number];
+  codes?: [number];
 }
 
 export interface Timeouts {
-  request?: [number, number],
-  backendRequest?: [number, number],
+  request?: [number, number];
+  backendRequest?: [number, number];
 }
 
 export interface Endpoint {
-  readonly scheme: string,
-  readonly address: string,
-  readonly port: number,
-  readonly hostname: string,
-  readonly retryPolicy?: RetryPolicy,
-  readonly timeouts?: Timeouts,
+  readonly scheme: string;
+  readonly address: string;
+  readonly port: number;
+  readonly hostname: string;
+  readonly retryPolicy?: RetryPolicy;
+  readonly timeouts?: Timeouts;
 }
 
+const _FFI_ENDPOINT: unique symbol = Symbol();
+
 interface PrivateEndpoint extends Endpoint {
-  [_FFI_ENDPOINT]: ffi.EndpointHandle
+  [_FFI_ENDPOINT]: ffi.EndpointHandle;
 }
 
 const _FFI_RT: unique symbol = Symbol();
 const _FFI_CLIENT: unique symbol = Symbol();
-const _FFI_ENDPOINT: unique symbol = Symbol();
 
 export class Client {
-  [_FFI_RT]: ffi.Runtime
-  [_FFI_CLIENT]: ffi.Client
+  [_FFI_RT]: ffi.Runtime;
+  [_FFI_CLIENT]: ffi.Client;
 
   private constructor(rt: ffi.Runtime, client: ffi.Client) {
-    this[_FFI_RT] = rt
-    this[_FFI_CLIENT] = client
+    this[_FFI_RT] = rt;
+    this[_FFI_CLIENT] = client;
   }
 
   static async build(opts: ClientOpts): Promise<Client> {
-    let client = await ffi.newClient(
+    const client = await ffi.newClient(
       defaultRuntime,
       opts.adsServer,
       opts.nodeName || "nodejs",
       opts.clusterName || "junction-node",
-    )
-    return new Client(defaultRuntime, client)
+    );
+    return new Client(defaultRuntime, client);
   }
 
   async resolveHttp(options: ResolveHttpOpts): Promise<Endpoint> {
-    let [handle, data] = await ffi.resolveHttp(
+    const [handle, data] = await ffi.resolveHttp(
       this[_FFI_RT],
       this[_FFI_CLIENT],
       options.method || "GET",
@@ -97,19 +116,22 @@ export class Client {
       toFfiHeaders(options.headers),
     );
 
-    let endpoint: PrivateEndpoint = {
+    const endpoint: PrivateEndpoint = {
       [_FFI_ENDPOINT]: handle,
       ...data,
-    }
+    };
     return endpoint;
   }
 
-  async reportStatus(endpoint: Endpoint, opts: ReportStatusOpts): Promise<Endpoint> {
+  async reportStatus(
+    endpoint: Endpoint,
+    opts: ReportStatusOpts,
+  ): Promise<Endpoint> {
     if (!hasPrivateEndpoint(endpoint)) {
       throw new TypeError("endpoint is missing Junction core data");
     }
 
-    let [handle, data] = await ffi.reportStatus(
+    const [handle, data] = await ffi.reportStatus(
       this[_FFI_RT],
       this[_FFI_CLIENT],
       endpoint[_FFI_ENDPOINT],
@@ -117,22 +139,22 @@ export class Client {
       opts.error,
     );
 
-    let newEndpoint: PrivateEndpoint = {
+    const newEndpoint: PrivateEndpoint = {
       [_FFI_ENDPOINT]: handle,
-      ...data
+      ...data,
     };
-    return newEndpoint
+    return newEndpoint;
   }
 }
 
 function toFfiHeaders(headers?: HeadersInit): ffi.Headers {
-  if (headers instanceof Array) {
-    return headers
+  if (Array.isArray(headers)) {
+    return headers;
   }
 
-  return [...new Headers(headers)]
+  return [...new Headers(headers)];
 }
 
 function hasPrivateEndpoint(endpoint: Endpoint): endpoint is PrivateEndpoint {
-  return (endpoint as PrivateEndpoint)[_FFI_ENDPOINT] !== undefined
+  return (endpoint as PrivateEndpoint)[_FFI_ENDPOINT] !== undefined;
 }
