@@ -1,0 +1,60 @@
+{
+  "name": "@junction-labs/client",
+  "version": "0.1.0",
+  "description": "",
+  "main": "./lib/index.cjs",
+  "scripts": {
+    "test": "tsc &&cargo test",
+    "clean": "rm -rf lib/ index.node",
+    "cargo-build": "tsc &&cargo build --message-format=json-render-diagnostics > cargo.log",
+    "postcargo-build": "neon dist < cargo.log",
+    "debug": "npm run cargo-build --",
+    "build": "npm run cargo-build -- --release",
+    "prepack": "tsc && neon update",
+    "version": "neon bump --binaries platforms && git add ."
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.cts",
+        "default": "./lib/index.cjs"
+      }
+    }
+  },
+  "types": "./lib/index.d.cts",
+  "files": [
+    "lib/**/*.?({c,m}){t,j}s"
+  ],
+  "neon": {
+    "type": "library",
+    "org": "@junction-node/",
+    "platforms": "common",
+    "load": "./ts/load.cts"
+  },
+  "devDependencies": {
+    "@neon-rs/cli": "^0.1.82",
+    "@tsconfig/node20": "^20.1.4",
+    "@types/node": "^20.11.16",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@neon-rs/load": "^0.1.82"
+  },
+  "repository": {
+    "type": "git",
+    "url": "github.com/junction-labs/junction-client"
+  },
+  "optionalDependencies": {
+    "@junction-labs/client-win32-x64-msvc": "0.1.0",
+    "@junction-labs/client-darwin-x64": "0.1.0",
+    "@junction-labs/client-darwin-arm64": "0.1.0",
+    "@junction-labs/client-linux-x64-gnu": "0.1.0",
+    "@junction-labs/client-linux-arm64-gnu": "0.1.0"
+  }
+}
