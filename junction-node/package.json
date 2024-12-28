@@ -7,9 +7,10 @@
     "test": "tsc &&cargo test",
     "prepack": "tsc && neon update",
     "version": "neon bump --binaries platforms && git add .",
-    "postcargo-build": "neon dist < cargo.log",
     "build": "tsc && cargo build --message-format=json-render-diagnostics > cargo.log",
+    "postbuild": "neon dist < cargo.log",
     "build-release": "tsc && cargo build --release --message-format=json-render-diagnostics > cargo.log",
+    "postbuild-release": "neon dist < cargo.log",
     "lint": "biome check",
     "fix": "biome check --write"
   },
