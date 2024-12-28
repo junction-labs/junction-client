@@ -2,7 +2,7 @@ use junction_api::{
     backend::{Backend, BackendId},
     http::Route,
 };
-use junction_core::{HttpResult, ResolveMode, ResourceVersion};
+use junction_core::{HttpResult, ResourceVersion};
 use once_cell::sync::Lazy;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -379,14 +379,13 @@ impl Junction {
     ///
     /// If `dynamic=False` is passed as a kwarg, the resolution happens without
     /// fetching any new routing data over the network.
-    #[pyo3(signature = (method, url, headers, dynamic=true))]
+    #[pyo3(signature = (method, url, headers))]
     fn resolve_route(
         &mut self,
         py: Python<'_>,
         method: &str,
         url: &str,
         headers: &Bound<PyMapping>,
-        dynamic: bool,
     ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
         let method = method_from_py(method)?;
         let url =
@@ -395,14 +394,7 @@ impl Junction {
 
         let request = junction_core::HttpRequest::from_parts(&method, &url, &headers)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-
-        let config_mode = match dynamic {
-            true => ResolveMode::Dynamic,
-            false => ResolveMode::Static,
-        };
-
-        let resolved =
-            runtime::block_and_check_signals(self.core.resolve_route(config_mode, request))?;
+        let resolved = runtime::block_and_check_signals(self.core.resolve_route(request))?;
 
         let route = pythonize::pythonize(py, &resolved.route)?;
         let backend = pythonize::pythonize(py, &resolved.backend)?;

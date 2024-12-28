@@ -17,9 +17,7 @@ mod dns;
 mod load_balancer;
 mod xds;
 
-pub use client::{
-    Client, HttpRequest, HttpResult, LbContext, ResolveMode, ResolvedRoute, SelectedEndpoint,
-};
+pub use client::{Client, HttpRequest, HttpResult, LbContext, ResolvedRoute, SelectedEndpoint};
 use error::Trace;
 use futures::FutureExt;
 use junction_api::Name;
@@ -170,29 +168,6 @@ impl StaticConfig {
         backends.extend(inferred_backends);
 
         Self { routes, backends }
-    }
-
-    pub(crate) fn backends(&self) -> Vec<BackendId> {
-        let mut backends = Vec::with_capacity(self.routes.len() + self.backends.len());
-
-        // backends
-        backends.extend(self.backends.keys().cloned());
-
-        // all of the route targets
-        for route in &self.routes {
-            for rule in &route.rules {
-                for backend_ref in &rule.backends {
-                    if let Some(port) = backend_ref.port {
-                        backends.push(backend_ref.service.as_backend_id(port));
-                    }
-                }
-            }
-        }
-
-        backends.sort();
-        backends.dedup();
-
-        backends
     }
 }
 

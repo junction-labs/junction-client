@@ -78,8 +78,11 @@ pub struct XdsConfig {
 #[derive(Debug)]
 enum SubscriptionUpdate {
     AddHosts(Vec<String>),
-    RemoveHosts(Vec<String>),
     AddBackends(Vec<BackendId>),
+
+    #[allow(unused)]
+    RemoveHosts(Vec<String>),
+    #[allow(unused)]
     RemoveBackends(Vec<BackendId>),
 }
 
@@ -151,58 +154,6 @@ impl AdsClient {
         Ok((client, task))
     }
 
-    pub(super) fn subscribe_to_hosts(
-        &self,
-        hosts: impl IntoIterator<Item = String>,
-    ) -> Result<(), ()> {
-        let hosts = hosts.into_iter().collect();
-        self.subs
-            .try_send(SubscriptionUpdate::AddHosts(hosts))
-            .map_err(|_| ())?;
-
-        Ok(())
-    }
-
-    // TODO: call this on client dropping defaults
-    #[allow(unused)]
-    pub(super) fn unsubscribe_from_hosts(
-        &self,
-        hosts: impl IntoIterator<Item = String>,
-    ) -> Result<(), ()> {
-        let hosts = hosts.into_iter().collect();
-        self.subs
-            .try_send(SubscriptionUpdate::RemoveHosts(hosts))
-            .map_err(|_| ())?;
-
-        Ok(())
-    }
-
-    pub(super) fn subscribe_to_backends(
-        &self,
-        backends: impl IntoIterator<Item = BackendId>,
-    ) -> Result<(), ()> {
-        let backends = backends.into_iter().collect();
-        self.subs
-            .try_send(SubscriptionUpdate::AddBackends(backends))
-            .map_err(|_| ())?;
-
-        Ok(())
-    }
-
-    // TODO: call this on client dropping defaults
-    #[allow(unused)]
-    pub(super) fn unsubscribe_from_backends(
-        &self,
-        backends: impl IntoIterator<Item = BackendId>,
-    ) -> Result<(), ()> {
-        let backends = backends.into_iter().collect();
-        self.subs
-            .try_send(SubscriptionUpdate::RemoveBackends(backends))
-            .map_err(|_| ())?;
-
-        Ok(())
-    }
-
     pub(super) fn csds_server(
         &self,
         port: u16,
@@ -225,20 +176,29 @@ impl AdsClient {
 
 impl ConfigCache for AdsClient {
     async fn get_route<S: AsRef<str>>(&self, host: S) -> Option<Arc<Route>> {
+        let hosts = vec![host.as_ref().to_string()];
+        let _ = self.subs.send(SubscriptionUpdate::AddHosts(hosts)).await;
+
         self.cache.get_route(host).await
     }
 
     async fn get_backend(
         &self,
-        target: &junction_api::backend::BackendId,
+        backend: &junction_api::backend::BackendId,
     ) -> Option<std::sync::Arc<crate::BackendLb>> {
-        self.cache.get_backend(target).await
+        let bs = vec![backend.clone()];
+        let _ = self.subs.send(SubscriptionUpdate::AddBackends(bs)).await;
+
+        self.cache.get_backend(backend).await
     }
 
     async fn get_endpoints(
         &self,
         backend: &junction_api::backend::BackendId,
     ) -> Option<std::sync::Arc<crate::EndpointGroup>> {
+        let bs = vec![backend.clone()];
+        let _ = self.subs.send(SubscriptionUpdate::AddBackends(bs)).await;
+
         match &backend.service {
             junction_api::Service::Dns(dns) => {
                 self.dns
