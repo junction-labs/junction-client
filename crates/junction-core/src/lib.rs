@@ -58,7 +58,7 @@ pub fn check_route(
     // resolve_routes is async but we know that with StaticConfig, fetching
     // config should NEVER block. now-or-never just calls Poll with a noop
     // waker and unwraps the result ASAP.
-    client::resolve_routes(&config, request, Trace::new())
+    client::resolve_routes(&config, Trace::new(), request, None)
         .now_or_never()
         .expect("check_route yielded unexpectedly. this is a bug in Junction, please file an issue")
 }

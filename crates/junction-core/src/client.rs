@@ -323,23 +323,15 @@ impl Client {
         let deadline = Instant::now() + self.resolve_timeout;
 
         let request = HttpRequest::from_parts(method, url, headers)?;
-        let resolve_routes = self.resolve_route(request);
-        let resolved = match tokio::time::timeout_at(deadline.into(), resolve_routes).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(Error::timed_out("timed out fetching routes")),
-        };
+        let resolved = self.resolve_route(request, Some(deadline)).await?;
 
         let lb_context = LbContext::new(resolved.trace, url, headers);
-        let select = self.select_endpoint(&resolved.backend, lb_context);
-        let selected = match tokio::time::timeout_at(deadline.into(), select).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(Error::timed_out("timed out fetching backends")),
-        };
+        let selected = self
+            .select_endpoint(&resolved.backend, lb_context, Some(deadline))
+            .await?;
+
         let address = selected.addr;
         let trace = selected.trace;
-
         let (timeouts, retry) = {
             let rule = &resolved.route.rules[resolved.rule];
             (rule.timeouts.clone(), rule.retry.clone())
@@ -390,12 +382,9 @@ impl Client {
             previous_addrs: &endpoint.previous_addrs,
             trace: endpoint.trace,
         };
-        let select_next = self.select_endpoint(&endpoint.backend, lb_context);
-        let next = match tokio::time::timeout_at(deadline.into(), select_next).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(Error::timed_out("timed out fetching backends")),
-        };
+        let next = self
+            .select_endpoint(&endpoint.backend, lb_context, Some(deadline))
+            .await?;
         let address = next.addr;
         let trace = next.trace;
 
@@ -419,9 +408,13 @@ impl Client {
     /// This is a lower-level method that only performs the Route matching part
     /// of resolution. It's intended for debugging or querying a client for
     /// specific information. For everyday use, prefer [Client::resolve_http].
-    pub async fn resolve_route(&self, request: HttpRequest<'_>) -> crate::Result<ResolvedRoute> {
+    pub async fn resolve_route(
+        &self,
+        request: HttpRequest<'_>,
+        deadline: Option<Instant>,
+    ) -> crate::Result<ResolvedRoute> {
         let trace = Trace::new();
-        resolve_routes(&self.config, request, trace).await
+        resolve_routes(&self.config, trace, request, deadline).await
     }
 
     /// Select an endpoint address for this backend from the set of currently
@@ -434,8 +427,9 @@ impl Client {
         &self,
         backend: &BackendId,
         ctx: LbContext<'_>,
+        deadline: Option<Instant>,
     ) -> crate::Result<SelectedEndpoint> {
-        select_endpoint(&self.config, backend, ctx).await
+        select_endpoint(&self.config, backend, ctx, deadline).await
     }
 
     /// Start a gRPC CSDS server on the given port. To run the server, you must
@@ -509,22 +503,39 @@ impl Client {
     }
 }
 
+macro_rules! with_deadline {
+    ($fut:expr, $deadline:expr, $msg:expr, $trace:expr $(,)*) => {
+        tokio::select! {
+            biased;
+
+            res = $fut => res,
+            _ = sleep_until($deadline) => {
+                return Err(Error::timed_out($msg, $trace));
+            }
+        }
+    };
+}
+
 pub(crate) async fn resolve_routes(
     cache: &impl ConfigCache,
-    request: HttpRequest<'_>,
     mut trace: Trace,
+    request: HttpRequest<'_>,
+    deadline: Option<Instant>,
 ) -> crate::Result<ResolvedRoute> {
     use rand::seq::SliceRandom;
 
     // look up the route, grabbing the first route that returns from cache.
-    let route = match cache.get_route(request.url.authority()).await {
-        Some(route) => route,
-        None => {
-            return Err(Error::no_route_matched(
-                request.url.authority().to_string(),
-                trace,
-            ))
-        }
+    let route = with_deadline!(
+        cache.get_route(request.url.authority()),
+        deadline,
+        "timed out fetching route",
+        trace,
+    );
+    let Some(route) = route else {
+        return Err(Error::no_route_matched(
+            request.url.authority().to_string(),
+            trace,
+        ));
     };
     trace.lookup_route(&route);
 
@@ -580,16 +591,36 @@ async fn select_endpoint(
     cache: &impl ConfigCache,
     backend: &BackendId,
     mut ctx: LbContext<'_>,
+    deadline: Option<Instant>,
 ) -> crate::Result<SelectedEndpoint> {
     // start the next trace phase
     ctx.trace.start_endpoint_selection();
 
     // lookup backend and endpoints
-    let Some(blb) = cache.get_backend(backend).await else {
+    //
+    // these lookups are done sequentially, even though they could be raced, so
+    // that we can tell what step a lookup timed out on. we're assuming that
+    // this is okay because in the background fetching a backend for a cache
+    // will also trigger fetching its endpoints and parallelism here won't do
+    // much for us.
+    let blb = with_deadline!(
+        cache.get_backend(backend),
+        deadline,
+        "timed out fetching backend",
+        ctx.trace,
+    );
+    let Some(blb) = blb else {
         return Err(Error::no_backend(backend.clone(), ctx.trace));
     };
     ctx.trace.lookup_backend(backend);
-    let Some(endpoints) = cache.get_endpoints(backend).await else {
+
+    let endpoints = with_deadline!(
+        cache.get_endpoints(backend),
+        deadline,
+        "timed out fetching endpoints",
+        ctx.trace,
+    );
+    let Some(endpoints) = endpoints else {
         return Err(Error::no_reachable_endpoints(backend.clone(), ctx.trace));
     };
     ctx.trace.lookup_endpoints(backend);
@@ -612,6 +643,12 @@ async fn select_endpoint(
         addr: *addr,
         trace: ctx.trace,
     })
+}
+
+async fn sleep_until(deadline: Option<Instant>) {
+    if let Some(d) = deadline {
+        tokio::time::sleep_until(d.into()).await;
+    }
 }
 
 //FIXME(routing): picking between these is way more complicated than finding the
@@ -715,7 +752,7 @@ mod test {
 
     #[track_caller]
     fn assert_resolve_routes(cache: &impl ConfigCache, request: HttpRequest<'_>) -> ResolvedRoute {
-        resolve_routes(cache, request, Trace::new())
+        resolve_routes(cache, Trace::new(), request, None)
             .now_or_never()
             .unwrap()
             .unwrap()
@@ -723,7 +760,7 @@ mod test {
 
     #[track_caller]
     fn assert_resolve_err(cache: &impl ConfigCache, request: HttpRequest<'_>) -> crate::Error {
-        resolve_routes(cache, request, Trace::new())
+        resolve_routes(cache, Trace::new(), request, None)
             .now_or_never()
             .unwrap()
             .unwrap_err()
