@@ -305,11 +305,11 @@ impl Client {
             Config::Dynamic(d) => Arc::clone(d),
         };
 
-        dyn_config
+        // try to subscribe here. it's best effort
+        let _ = dyn_config
             .ads_client
             .subscribe_to_backends(static_config.backends())
-            // FIXME: don't panic here
-            .expect("ads is overloaded. this is a bug in Junction");
+            .now_or_never();
 
         let config = Config::DynamicEndpoints(static_config, dyn_config);
         Client { config, ..self }
@@ -455,12 +455,14 @@ impl Client {
     ) -> crate::Result<ResolvedRoute> {
         let trace = Trace::new();
 
-        // FIXME: move subscribe_to_hosts into cache.get and get rid of this
         if let (ResolveMode::Dynamic, Config::Dynamic(d)) = (resolve_mode, &self.config) {
-            d.ads_client
+            let res = d
+                .ads_client
                 .subscribe_to_hosts([request.url.authority().to_string()])
-                // FIXME: shouldn't be a panic, should be async
-                .expect("ads client overloaded, this is a bug in Junction");
+                .await;
+            if res.is_err() {
+                panic!("subscription channel has shut down. this is a bug in Junction.")
+            }
         }
 
         resolve_routes(&self.config, request, trace).await
@@ -482,10 +484,10 @@ impl Client {
         if let (ResolveMode::Dynamic, Config::Dynamic(d) | Config::DynamicEndpoints(_, d)) =
             (resolve_mode, &self.config)
         {
-            d.ads_client
-                .subscribe_to_backends([backend.clone()])
-                // FIXME: shouldn't be a panic, should be async
-                .expect("ads client overloaded, this is a bug in Junction");
+            let res = d.ads_client.subscribe_to_backends([backend.clone()]).await;
+            if res.is_err() {
+                panic!("subscription channel has shut down. this is a bug in Junction.")
+            }
         }
 
         select_endpoint(&self.config, backend, ctx).await

@@ -78,8 +78,11 @@ pub struct XdsConfig {
 #[derive(Debug)]
 enum SubscriptionUpdate {
     AddHosts(Vec<String>),
-    RemoveHosts(Vec<String>),
     AddBackends(Vec<BackendId>),
+
+    #[allow(unused)]
+    RemoveHosts(Vec<String>),
+    #[allow(unused)]
     RemoveBackends(Vec<BackendId>),
 }
 
@@ -151,53 +154,27 @@ impl AdsClient {
         Ok((client, task))
     }
 
-    pub(super) fn subscribe_to_hosts(
+    pub(super) async fn subscribe_to_hosts(
         &self,
         hosts: impl IntoIterator<Item = String>,
     ) -> Result<(), ()> {
         let hosts = hosts.into_iter().collect();
         self.subs
-            .try_send(SubscriptionUpdate::AddHosts(hosts))
+            .send(SubscriptionUpdate::AddHosts(hosts))
+            .await
             .map_err(|_| ())?;
 
         Ok(())
     }
 
-    // TODO: call this on client dropping defaults
-    #[allow(unused)]
-    pub(super) fn unsubscribe_from_hosts(
-        &self,
-        hosts: impl IntoIterator<Item = String>,
-    ) -> Result<(), ()> {
-        let hosts = hosts.into_iter().collect();
-        self.subs
-            .try_send(SubscriptionUpdate::RemoveHosts(hosts))
-            .map_err(|_| ())?;
-
-        Ok(())
-    }
-
-    pub(super) fn subscribe_to_backends(
+    pub(super) async fn subscribe_to_backends(
         &self,
         backends: impl IntoIterator<Item = BackendId>,
     ) -> Result<(), ()> {
         let backends = backends.into_iter().collect();
         self.subs
-            .try_send(SubscriptionUpdate::AddBackends(backends))
-            .map_err(|_| ())?;
-
-        Ok(())
-    }
-
-    // TODO: call this on client dropping defaults
-    #[allow(unused)]
-    pub(super) fn unsubscribe_from_backends(
-        &self,
-        backends: impl IntoIterator<Item = BackendId>,
-    ) -> Result<(), ()> {
-        let backends = backends.into_iter().collect();
-        self.subs
-            .try_send(SubscriptionUpdate::RemoveBackends(backends))
+            .send(SubscriptionUpdate::AddBackends(backends))
+            .await
             .map_err(|_| ())?;
 
         Ok(())
