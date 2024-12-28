@@ -144,29 +144,6 @@ impl HttpResult {
     }
 }
 
-/// The strategy for updating Routes, Backends, and Endpoints while resolving.
-///
-/// Resolution mode is orthogonal to client configuration mode - it's possible
-/// to have a dynamic client, but to resolve an individual route by only using
-/// data currently in cache.
-///
-/// See [Client::resolve_route].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ResolveMode {
-    /// Resolve configuration with only existing routes and backends, do not
-    /// request new ones over the network.
-    ///
-    /// This mode does not disable push-based updates to existing routes or
-    /// backends. For example, the addresses that are part of a backend or its
-    /// load balancing configuration may still change during resolution.
-    Static,
-
-    /// Update configuration dynamically as part of making this request. New
-    /// routes, backends, and addresses may fetched to make this request.
-    Dynamic,
-}
-
 /// A service discovery client that looks up URL information based on URLs,
 /// headers, and methods.
 ///
@@ -182,7 +159,6 @@ pub struct Client {
     // TODO: make configurable with a builder or something, not sure if they
     // will survive.
     resolve_timeout: Duration,
-    resolve_mode: ResolveMode,
 
     config: Config,
 }
@@ -267,11 +243,13 @@ impl Client {
         // once it's started, hand off the task to the executor in the
         // background.
         ads_task.connect().await?;
+
         let handle = tokio::spawn(async move {
-            ads_task.connect().await.expect("xds: connection failed");
             match ads_task.run().await {
                 Ok(()) => (),
-                Err(e) => panic!("xds: ads client exited: unexpected error: {e}"),
+                Err(e) => panic!(
+                    "junction-core: ads client exited with an unexpected error: {e}. this is a bug in Junction!"
+                ),
             }
         });
 
@@ -282,7 +260,6 @@ impl Client {
 
         let client = Self {
             resolve_timeout: Duration::from_secs(5),
-            resolve_mode: ResolveMode::Dynamic,
             config: Config::Dynamic(dyn_config),
         };
 
@@ -304,12 +281,6 @@ impl Client {
             Config::DynamicEndpoints(_, d) => Arc::clone(d),
             Config::Dynamic(d) => Arc::clone(d),
         };
-
-        dyn_config
-            .ads_client
-            .subscribe_to_backends(static_config.backends())
-            // FIXME: don't panic here
-            .expect("ads is overloaded. this is a bug in Junction");
 
         let config = Config::DynamicEndpoints(static_config, dyn_config);
         Client { config, ..self }
@@ -352,7 +323,7 @@ impl Client {
         let deadline = Instant::now() + self.resolve_timeout;
 
         let request = HttpRequest::from_parts(method, url, headers)?;
-        let resolve_routes = self.resolve_route(self.resolve_mode, request);
+        let resolve_routes = self.resolve_route(request);
         let resolved = match tokio::time::timeout_at(deadline.into(), resolve_routes).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => return Err(e),
@@ -360,7 +331,7 @@ impl Client {
         };
 
         let lb_context = LbContext::new(resolved.trace, url, headers);
-        let select = self.select_endpoint(self.resolve_mode, &resolved.backend, lb_context);
+        let select = self.select_endpoint(&resolved.backend, lb_context);
         let selected = match tokio::time::timeout_at(deadline.into(), select).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => return Err(e),
@@ -419,7 +390,7 @@ impl Client {
             previous_addrs: &endpoint.previous_addrs,
             trace: endpoint.trace,
         };
-        let select_next = self.select_endpoint(self.resolve_mode, &endpoint.backend, lb_context);
+        let select_next = self.select_endpoint(&endpoint.backend, lb_context);
         let next = match tokio::time::timeout_at(deadline.into(), select_next).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => return Err(e),
@@ -448,21 +419,8 @@ impl Client {
     /// This is a lower-level method that only performs the Route matching part
     /// of resolution. It's intended for debugging or querying a client for
     /// specific information. For everyday use, prefer [Client::resolve_http].
-    pub async fn resolve_route(
-        &self,
-        resolve_mode: ResolveMode,
-        request: HttpRequest<'_>,
-    ) -> crate::Result<ResolvedRoute> {
+    pub async fn resolve_route(&self, request: HttpRequest<'_>) -> crate::Result<ResolvedRoute> {
         let trace = Trace::new();
-
-        // FIXME: move subscribe_to_hosts into cache.get and get rid of this
-        if let (ResolveMode::Dynamic, Config::Dynamic(d)) = (resolve_mode, &self.config) {
-            d.ads_client
-                .subscribe_to_hosts([request.url.authority().to_string()])
-                // FIXME: shouldn't be a panic, should be async
-                .expect("ads client overloaded, this is a bug in Junction");
-        }
-
         resolve_routes(&self.config, request, trace).await
     }
 
@@ -474,20 +432,9 @@ impl Client {
     /// prefer [Client::resolve_http].
     pub async fn select_endpoint(
         &self,
-        resolve_mode: ResolveMode,
         backend: &BackendId,
         ctx: LbContext<'_>,
     ) -> crate::Result<SelectedEndpoint> {
-        // FIXME: move subscribe_to_backends into cache.get and get rid of this
-        if let (ResolveMode::Dynamic, Config::Dynamic(d) | Config::DynamicEndpoints(_, d)) =
-            (resolve_mode, &self.config)
-        {
-            d.ads_client
-                .subscribe_to_backends([backend.clone()])
-                // FIXME: shouldn't be a panic, should be async
-                .expect("ads client overloaded, this is a bug in Junction");
-        }
-
         select_endpoint(&self.config, backend, ctx).await
     }
 
