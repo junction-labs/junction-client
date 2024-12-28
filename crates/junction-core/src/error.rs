@@ -179,11 +179,10 @@ impl Error {
 impl Error {
     // timeouts
 
-    // FIXME: needs a trace?
-    pub(crate) fn timed_out(message: &'static str) -> Self {
+    pub(crate) fn timed_out(message: &'static str, trace: Trace) -> Self {
         let inner = ErrorImpl::TimedOut(Cow::from(message));
         Self {
-            trace: None,
+            trace: Some(trace),
             inner: Box::new(inner),
         }
     }

@@ -13,7 +13,11 @@ use pyo3::{
     wrap_pyfunction, Bound, Py, PyAny, PyResult, Python,
 };
 use serde::Serialize;
-use std::{net::IpAddr, str::FromStr};
+use std::{
+    net::IpAddr,
+    str::FromStr,
+    time::{Duration, Instant},
+};
 use xds_api::pb::google::protobuf;
 
 mod runtime;
@@ -379,22 +383,26 @@ impl Junction {
     ///
     /// If `dynamic=False` is passed as a kwarg, the resolution happens without
     /// fetching any new routing data over the network.
-    #[pyo3(signature = (method, url, headers))]
+    #[pyo3(signature = (method, url, headers, timeout=None))]
     fn resolve_route(
         &mut self,
         py: Python<'_>,
         method: &str,
         url: &str,
         headers: &Bound<PyMapping>,
+        timeout: Option<u64>,
     ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
         let method = method_from_py(method)?;
         let url =
             junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
         let headers = headers_from_py(headers)?;
 
+        let deadline = timeout.map(|d| Instant::now() + Duration::from_secs(d));
+
         let request = junction_core::HttpRequest::from_parts(&method, &url, &headers)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let resolved = runtime::block_and_check_signals(self.core.resolve_route(request))?;
+        let resolved =
+            runtime::block_and_check_signals(self.core.resolve_route(request, deadline))?;
 
         let route = pythonize::pythonize(py, &resolved.route)?;
         let backend = pythonize::pythonize(py, &resolved.backend)?;
