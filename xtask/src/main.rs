@@ -1,10 +1,16 @@
-use std::{env, ffi::OsStr};
+use std::{
+    env,
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use xshell::{cmd, Shell};
 
 fn main() -> anyhow::Result<()> {
     let sh = Shell::new()?;
+    sh.change_dir(project_root());
+
     let args = Args::parse();
 
     let venv = env::var("VIRTUAL_ENV").unwrap_or_else(|_| ".venv".to_string());
@@ -37,6 +43,14 @@ fn main() -> anyhow::Result<()> {
         PythonTest => python::test(&sh, &venv),
         PythonShell => python::shell(&sh, &venv),
     }
+}
+
+fn project_root() -> PathBuf {
+    Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(1)
+        .unwrap()
+        .to_path_buf()
 }
 
 /// Cargo xtasks for development.
