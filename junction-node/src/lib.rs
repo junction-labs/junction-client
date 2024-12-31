@@ -295,7 +295,11 @@ fn js_duration<'a>(cx: &mut impl Context<'a>, d: &Duration) -> JsResult<'a, JsAr
 /// of the FFI code is responsible for managing which runtimes exist.
 struct Runtime {
     runtime: Arc<tokio::runtime::Runtime>,
-    channel: neon::event::Channel,
+    // TODO: it's probably better to share a channel, but we need some way
+    // to unref this fucker after work is done without explicitly destroying
+    // a client.
+    //
+    // channel: neon::event::Channel,
 }
 
 /// when finalized, shut down the Runtime without waiting for any background
@@ -310,18 +314,17 @@ impl Finalize for Runtime {
 }
 
 impl Runtime {
-    fn new_default<'a>(cx: &mut impl Context<'a>) -> Result<Self, std::io::Error> {
+    fn new_default<'a>(_cx: &mut impl Context<'a>) -> Result<Self, std::io::Error> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .thread_name("junction-core")
             .worker_threads(2)
             .enable_all()
             .build()?;
 
-        let channel = cx.channel();
-
+        // let channel = cx.channel();
         Ok(Self {
             runtime: Arc::new(runtime),
-            channel,
+            // channel,
         })
     }
 
@@ -338,7 +341,7 @@ impl Runtime {
         V: Value,
     {
         let (deferred, promise) = cx.promise();
-        let channel = self.channel.clone();
+        let channel = cx.channel();
         self.runtime.spawn(async move {
             let output = fut.await;
 

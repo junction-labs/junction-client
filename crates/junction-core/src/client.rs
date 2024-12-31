@@ -266,6 +266,12 @@ impl Client {
         Ok(client)
     }
 
+    pub fn close(self) {
+        // this is a fancy call to drop. by construction, there's nothing to do
+        // here - there are no references
+        std::mem::drop(self);
+    }
+
     /// Build a client with static configuration. This client will use the
     /// passed configuration to resolve routes and backends, but will still
     /// fetch endpoints dynamically.
