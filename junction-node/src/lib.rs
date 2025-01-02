@@ -71,7 +71,7 @@ where
 }
 
 fn new_runtime(mut cx: FunctionContext) -> JsResult<JsBox<Runtime>> {
-    match Runtime::new_default(&mut cx) {
+    match Runtime::new_default() {
         Ok(rt) => Ok(cx.boxed(rt)),
         Err(e) => cx.throw_error(format!("failed to create runtime: {e}")),
     }
@@ -136,11 +136,11 @@ fn report_status(mut cx: FunctionContext) -> JsResult<JsPromise> {
             // panicing. there is no try_into impl as of 1.79
             match junction_core::HttpResult::from_u16(status_code as u16) {
                 Ok(result) => result,
-                Err(_) => return cx.throw_error("invalid http statusCode"),
+                Err(_) => return cx.throw_error("invalid http status code"),
             }
         }
         (None, Some(_)) => junction_core::HttpResult::StatusFailed,
-        (None, None) => return cx.throw_error("either statusCode or errorMessage is required"),
+        (None, None) => return cx.throw_error("either status code or error message is required"),
     };
 
     // make an async block here so that it captures client, endpoint, and
@@ -241,7 +241,7 @@ fn js_retry<'a>(
     obj.set(cx, "attempts", attempts)?;
 
     let backoff: Handle<JsValue> = match &retry.backoff {
-        Some(backoff) => js_duration(cx, backoff)?.upcast(),
+        Some(backoff) => js_duration_ms(cx, backoff)?.upcast(),
         None => cx.undefined().upcast(),
     };
     obj.set(cx, "backoff", backoff)?;
@@ -263,13 +263,13 @@ fn js_timeouts<'a>(
     let obj = cx.empty_object();
 
     let request: Handle<JsValue> = match &timeouts.request {
-        Some(request) => js_duration(cx, request)?.upcast(),
+        Some(request) => js_duration_ms(cx, request)?.upcast(),
         None => cx.undefined().upcast(),
     };
     obj.set(cx, "request", request)?;
 
     let backend_request: Handle<JsValue> = match &timeouts.backend_request {
-        Some(backend_request) => js_duration(cx, backend_request)?.upcast(),
+        Some(backend_request) => js_duration_ms(cx, backend_request)?.upcast(),
         None => cx.undefined().upcast(),
     };
     obj.set(cx, "backendRequest", backend_request)?;
@@ -277,15 +277,11 @@ fn js_timeouts<'a>(
     Ok(obj)
 }
 
-fn js_duration<'a>(cx: &mut impl Context<'a>, d: &Duration) -> JsResult<'a, JsArray> {
-    let secs = cx.number(d.as_secs() as f64);
-    let subsec_nanos = cx.number(d.subsec_nanos());
-
-    let time = JsArray::new(cx, 2);
-    time.set(cx, 0, secs)?;
-    time.set(cx, 1, subsec_nanos)?;
-
-    Ok(time)
+fn js_duration_ms<'a>(cx: &mut impl Context<'a>, d: &Duration) -> JsResult<'a, JsNumber> {
+    let secs = d.as_secs();
+    let subsec_nanos = d.subsec_nanos() as u64;
+    let millis = secs * 1000 + (subsec_nanos / 1_000_000);
+    Ok(cx.number(millis as f64))
 }
 
 /// A shared tokio Runtime that is shut down when finalized by the JS executor.
@@ -294,8 +290,11 @@ fn js_duration<'a>(cx: &mut impl Context<'a>, d: &Duration) -> JsResult<'a, JsAr
 /// but to avoid contention with JS worker threads, the typescript layer on top
 /// of the FFI code is responsible for managing which runtimes exist.
 struct Runtime {
+    // TODO: it's probably better to share a channel here that we use to pass
+    // tasks back to the JS thread afterwards, but we need some way to unref
+    // it when there's no pending work. having folks call Runtime.close() is
+    // a non-starter.
     runtime: Arc<tokio::runtime::Runtime>,
-    channel: neon::event::Channel,
 }
 
 /// when finalized, shut down the Runtime without waiting for any background
@@ -310,18 +309,15 @@ impl Finalize for Runtime {
 }
 
 impl Runtime {
-    fn new_default<'a>(cx: &mut impl Context<'a>) -> Result<Self, std::io::Error> {
+    fn new_default() -> Result<Self, std::io::Error> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .thread_name("junction-core")
             .worker_threads(2)
             .enable_all()
             .build()?;
 
-        let channel = cx.channel();
-
         Ok(Self {
             runtime: Arc::new(runtime),
-            channel,
         })
     }
 
@@ -338,7 +334,7 @@ impl Runtime {
         V: Value,
     {
         let (deferred, promise) = cx.promise();
-        let channel = self.channel.clone();
+        let channel = cx.channel();
         self.runtime.spawn(async move {
             let output = fut.await;
 

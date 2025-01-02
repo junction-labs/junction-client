@@ -1,11 +1,12 @@
 {
   "extends": "@tsconfig/node20/tsconfig.json",
   "compilerOptions": {
-    "module": "node16",
+    "module": "nodenext",
     "declaration": true,
+    "removeComments": false,
     "outDir": "./lib",
     "rootDir": "./ts",
-    "lib": ["DOM", "DOM.Iterable"]
+    "lib": ["es2022", "DOM", "DOM.Iterable"]
   },
   "exclude": ["lib"]
 }
