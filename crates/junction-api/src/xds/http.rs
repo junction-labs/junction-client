@@ -233,11 +233,7 @@ impl RouteRule {
         };
 
         let timeouts = RouteTimeouts::from_xds(action)?;
-        let retry = action
-            .retry_policy
-            .as_ref()
-            .map(RouteRetry::from_xds)
-            .flatten();
+        let retry = action.retry_policy.as_ref().and_then(RouteRetry::from_xds);
         // cluster_specifier is a oneof field, so let WeightedTarget specify the
         // field names in errors. we still need to get the index to the
         let backends = BackendRef::from_xds(action.cluster_specifier.as_ref())

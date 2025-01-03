@@ -93,7 +93,7 @@ jobs:
           kubectl run jct-client --image=jct_http_client:latest --image-pull-policy=IfNotPresent --env="JUNCTION_ADS_SERVER=grpc://ezbake.junction.svc.cluster.local:8008" --restart=Never --attach
       - name: run tests gateway api mode
         run: |
-          kubectl run jct-client --image=jct_http_client:latest --image-pull-policy=IfNotPresent --env="JUNCTION_ADS_SERVER=grpc://ezbake.junction.svc.cluster.local:8008" --restart=Never --attach --use-gateway-api
+          kubectl run jct-client --image=jct_http_client:latest --image-pull-policy=IfNotPresent --env="JUNCTION_ADS_SERVER=grpc://ezbake.junction.svc.cluster.local:8008" --restart=Never --attach -- --use-gateway-api
       - name: debug state
         if: ${{ ! cancelled() }}
         run: |
