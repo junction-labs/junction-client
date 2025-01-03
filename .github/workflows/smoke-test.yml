@@ -79,6 +79,7 @@ jobs:
       - name: set up kube manifests
         run: |
           kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml
+          kubectl apply -f junction-python/samples/routing-and-load-balancing/client_cluster_role_binding.yml
           kubectl apply -f junction-python/samples/routing-and-load-balancing/latest_ezbake.yml
           kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml
           kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml
