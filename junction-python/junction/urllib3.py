@@ -144,27 +144,33 @@ class PoolManager(urllib3.PoolManager):
             kwargs.get("retries"), endpoint.retry_policy
         )
 
-        # set a per-request timeout (don't clobber an existing one) if there's a
-        # Junction timeout.
-        if not kwargs.get("timeout") and endpoint.timeout_policy:
-            request_timeout = min(
-                endpoint.timeout_policy.backend_request, endpoint.timeout_policy.request
-            )
-            if request_timeout > 0:
-                kwargs["timeout"] = urllib3.Timeout(total=request_timeout)
-
-        # set up an overall deadline based on the endpoint's timeout policy
+        # set up an overall deadline if we have one
         deadline = None
         if endpoint.timeout_policy and endpoint.timeout_policy.request:
             deadline = time.time() + endpoint.timeout_policy.request
 
         while True:
-            if deadline and time.time() > deadline:
-                # TODO: should this be a Junction timeout error instead of the
-                # more general urllib3 one?
-                raise TimeoutError("request timeout exceeded")
+            # set a per-request timeout (don't clobber an existing one) if there's a
+            # Junction timeout.
+            if not kwargs.get("timeout") and endpoint.timeout_policy:
+                request_timeout = 0
+                if deadline:
+                    request_timeout = deadline - time.time()
+                    if request_timeout <= 0:
+                        # TODO: should this be a Junction timeout error instead of the
+                        # more general urllib3 one?
+                        raise TimeoutError("request timeout exceeded")
+                if endpoint.timeout_policy.backend_request:
+                    if request_timeout > 0:
+                        request_timeout = min(
+                            request_timeout, endpoint.timeout_policy.backend_request
+                        )
+                    else:
+                        request_timeout = endpoint.timeout_policy.backend_request
+                if request_timeout > 0:
+                    kwargs["timeout"] = urllib3.Timeout(total=request_timeout)
 
-            # make a copy of request kwargs and ovewrite retries to only allow
+            # make a copy of request kwargs and overwrite retries to only allow
             # redirect handling.
             #
             # only setting `total=None` does weird things here
@@ -185,7 +191,7 @@ class PoolManager(urllib3.PoolManager):
                     endpoint=endpoint,
                     error=e,
                 )
-                e.junction_endpiont = endpoint
+                e.junction_endpoint = endpoint
 
                 if _is_redirect_err(e):
                     raise e

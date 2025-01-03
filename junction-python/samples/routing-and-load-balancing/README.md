@@ -25,22 +25,14 @@ cargo xtask python-build
 source .venv/bin/activate
 ```
 
-## Run client with just client config
-
+## Run client with static config
 ```bash
 python junction-python/samples/routing-and-load-balancing/client.py
 ```
 
-## Run client with dynamic config overriding client config
-
-Eventually we will provide a way to export from client config to CRDs and annotations. At the moment
-you have to do it by hand. To demonstrate the capability we have done so in a hard coded example,
-that changes the output of one the path match sample. With this CRD in place, now 100% of traffic to
-`/feature-1/index` goes to `jct-http-server-feature-1`.
-
+## Run client with dynamic config
 ```bash
-kubectl apply -f junction-python/samples/routing-and-load-balancing/gateway.yml
-python junction-python/samples/routing-and-load-balancing/client.py --sample path_match_sample
+python junction-python/samples/routing-and-load-balancing/client.py --use-gateway-api
 ```
 
 ## Clean up
