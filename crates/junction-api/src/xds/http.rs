@@ -233,7 +233,11 @@ impl RouteRule {
         };
 
         let timeouts = RouteTimeouts::from_xds(action)?;
-        let retry = action.retry_policy.as_ref().map(RouteRetry::from_xds);
+        let retry = action
+            .retry_policy
+            .as_ref()
+            .map(RouteRetry::from_xds)
+            .flatten();
         // cluster_specifier is a oneof field, so let WeightedTarget specify the
         // field names in errors. we still need to get the index to the
         let backends = BackendRef::from_xds(action.cluster_specifier.as_ref())
@@ -580,7 +584,14 @@ impl PathMatch {
 }
 
 impl RouteRetry {
-    pub fn from_xds(r: &xds_route::RetryPolicy) -> Self {
+    pub fn from_xds(r: &xds_route::RetryPolicy) -> Option<Self> {
+        if r.retriable_status_codes.is_empty()
+            && r.num_retries.is_none()
+            && r.retry_back_off.is_none()
+        {
+            //need to do this as some of the timeout logic is carried in the same proto
+            return None;
+        }
         let codes = r
             .retriable_status_codes
             .iter()
@@ -591,11 +602,11 @@ impl RouteRetry {
             .retry_back_off
             .as_ref()
             .and_then(|r2| r2.base_interval.clone().map(|x| x.try_into().unwrap()));
-        Self {
+        Some(Self {
             codes,
             attempts,
             backoff,
-        }
+        })
     }
 
     pub fn to_xds(&self) -> xds_route::RetryPolicy {

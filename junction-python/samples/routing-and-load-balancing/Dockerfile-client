@@ -13,6 +13,7 @@ ADD ${junction_wheel} .
 
 RUN python -m venv .venv
 RUN .venv/bin/pip install --upgrade pip
+RUN .venv/bin/pip install pyyaml
 RUN .venv/bin/pip install *.whl
 ADD junction-python/samples/routing-and-load-balancing/client.py .
-CMD [".venv/bin/python", "./client.py"]
+ENTRYPOINT [".venv/bin/python", "./client.py"]
