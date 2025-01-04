@@ -349,7 +349,7 @@ impl AdsTask {
                     // on XDS errors, just say fuck it and return so that the
                     // connection resets. there's something fucked up that will
                     // be fixed best by resetting connection state.
-                    tracing::trace!("handling ads message");
+                    tracing::trace!("ads connection: handle_ads_message");
                     conn.handle_ads_message(response)
                 }
                 sub_update = self.subs.recv() => {
@@ -358,7 +358,7 @@ impl AdsTask {
                     };
                     tracing::trace!(
                         ?sub_update,
-                        "handling subscrition update",
+                        "ads connection: handle_subscription_update",
                     );
                     conn.handle_subscription_update(sub_update)
                 }

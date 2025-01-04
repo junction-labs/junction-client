@@ -85,7 +85,7 @@ impl StdlibResolver {
             inner: Arc::new(inner),
         };
 
-        for _ in 0..=threads {
+        for _ in 0..threads {
             let resolver = resolver.clone();
             std::thread::spawn(move || resolver.run());
         }
@@ -150,8 +150,11 @@ impl StdlibResolver {
     pub(crate) fn subscribe(&self, name: Hostname, port: u16) {
         let mut tasks = no_poison!(self.inner.tasks.lock());
 
+        // on a new subscribtion, notify both the background workers and any
+        // async tasks waiting on a get.
         if tasks.pin(name, port) {
             self.inner.cond.notify_all();
+            self.inner.async_notify.notify_waiters();
         }
     }
 
@@ -171,15 +174,25 @@ impl StdlibResolver {
     }
 
     pub(crate) fn run(&self) {
-        tracing::trace!("resolver: worker starting");
+        let thread_id = std::thread::current().id();
+        macro_rules! worker_trace {
+            ($($item:tt)*) => {
+                tracing::trace!(
+                    ?thread_id,
+                    worker_count = self.inner.worker_count,
+                    strong_count = Arc::strong_count(&self.inner),
+                    $(
+                        $item
+                    )*
+                )
+            };
+        }
+
+        worker_trace!("starting");
         loop {
             // grab the next name
             let Some(name) = self.next_name() else {
-                tracing::trace!(
-                    worker_count = self.inner.worker_count,
-                    strong_count = Arc::strong_count(&self.inner),
-                    "resolver: worker exiting"
-                );
+                worker_trace!("exiting");
                 return;
             };
 
@@ -187,7 +200,7 @@ impl StdlibResolver {
             //
             // this always uses 80 and then immediately discards the port. we
             // don't actually care about what the port is here.
-            tracing::trace!(%name, "resolver: starting lookup");
+            worker_trace!(%name, "starting lookup");
             let addr = (&name[..], 80);
             let answer = std::net::ToSocketAddrs::to_socket_addrs(&addr).map(|answer| {
                 // TODO: we're filtering out every v6 address here. this isn't
@@ -197,11 +210,7 @@ impl StdlibResolver {
             });
 
             // save the answer
-            tracing::trace!(
-                %name,
-                ?answer,
-                "resolver: saving answer",
-            );
+            worker_trace!(%name, "resolved");
             self.insert_answer(name, Instant::now(), answer);
         }
     }
@@ -221,7 +230,6 @@ impl StdlibResolver {
             // claim a name older than the cutoff
             let before = Instant::now() - self.inner.lookup_interval;
             if let Some(name) = tasks.next_name(before) {
-                tracing::trace!(%name, "claimed name");
                 return Some(name.clone());
             }
 
@@ -261,7 +269,6 @@ impl StdlibResolver {
         //
         // notify all async callers in get_await. since there's no
         // blocking get_* method, there are no sync callers to notify.
-        tracing::trace!("notifying waiters");
         self.inner.async_notify.notify_waiters();
     }
 }
@@ -389,11 +396,16 @@ impl ResolverState {
     }
 
     fn pin(&mut self, hostname: Hostname, port: u16) -> bool {
-        let (created, name_info) = match self.0.entry(hostname) {
+        let (mut created, name_info) = match self.0.entry(hostname) {
             btree_map::Entry::Vacant(entry) => (true, entry.insert(Default::default())),
             btree_map::Entry::Occupied(entry) => (false, entry.into_mut()),
         };
-        let port_info = name_info.ports.entry(port).or_default();
+
+        let (port_created, port_info) = match name_info.ports.entry(port) {
+            btree_map::Entry::Vacant(entry) => (true, entry.insert(Default::default())),
+            btree_map::Entry::Occupied(entry) => (false, entry.into_mut()),
+        };
+        created |= port_created;
         port_info.pinned = true;
 
         if let Some(addrs) = &name_info.last_addrs {
@@ -642,7 +654,14 @@ mod test {
             Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234)]),
         );
 
-        resolver.pin(Hostname::from_static("www.junctionlabs.io"), 7777);
+        assert!(
+            !resolver.pin(Hostname::from_static("www.junctionlabs.io"), 443),
+            "should not return true when the same port is inserted"
+        );
+        assert!(
+            resolver.pin(Hostname::from_static("www.junctionlabs.io"), 7777),
+            "should return true when a new port is inserted"
+        );
 
         let endpoints: Vec<_> = resolver
             .get_endpoints(&Hostname::from_static("www.junctionlabs.io"), 7777)
