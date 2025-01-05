@@ -458,6 +458,7 @@ mod node {
     pub(super) fn clean(sh: &Shell) -> anyhow::Result<()> {
         cmd!(sh, "rm -rf junction-node/node_modules/").run()?;
         cmd!(sh, "rm -rf junction-node/index.node").run()?;
+        cmd!(sh, "rm -rf junction-node/lib/").run()?;
         cmd!(sh, "rm -rf junction-node/platforms/**/index.node").run()?;
 
         Ok(())
