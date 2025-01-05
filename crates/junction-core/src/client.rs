@@ -295,10 +295,6 @@ impl Client {
     /// discovery data.
     pub fn with_static_endpoints(self, routes: Vec<Route>, backends: Vec<Backend>) -> Client {
         let static_config = Arc::new(StaticConfig::with_inferred(routes, backends));
-
-        // FIXME: this needs a way to subscribe to DNS endpoints or specify endpoints
-        // somehow?
-
         let config = Config::Static(static_config);
         Client { config, ..self }
     }
