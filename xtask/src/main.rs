@@ -28,7 +28,11 @@ fn main() -> anyhow::Result<()> {
             allow_staged,
         } => rust::ci_clippy(&sh, crates, *fix, *allow_staged),
         // node
-        NodeBuild { clean_install } => node::build(&sh, *clean_install),
+        NodeBuild {
+            release,
+            clean_install,
+        } => node::build(&sh, *clean_install, *release),
+        NodeDist { platform } => node::dist(&sh, platform.as_deref()),
         NodeClean => node::clean(&sh),
         NodeLint { fix } => node::lint(&sh, *fix),
         NodeShell => node::shell(&sh),
@@ -111,14 +115,18 @@ enum Commands {
     CIDoc,
 
     /// Build the Node native extension and compile typescript.
-    ///
-    /// Does not build a release build. To build a release build in CI, use
-    /// Cargo and npm directly.
     NodeBuild {
+        /// Build in release mode.
+        #[clap(long)]
+        release: bool,
+
         /// Run install with `npm ci` intead of `npm i`.
         #[clap(long)]
         clean_install: bool,
     },
+
+    /// Package a
+    NodeDist { platform: Option<String> },
 
     /// Clean up the current node_modules and remove any built native
     /// extensions.
@@ -338,7 +346,7 @@ mod python {
 
     pub(super) fn generate(sh: &Shell, venv: &str) -> anyhow::Result<()> {
         let generate_cmd = cmd!(sh, "cargo run -p junction-api-gen");
-        // .run() doesn't echo the command. do it ourselves
+        // .read() doesn't echo the command like .run(). do it ourselves
         //
         // https://github.com/matklad/xshell/issues/57
         eprintln!("$ {}", generate_cmd);
@@ -464,12 +472,27 @@ mod node {
         Ok(())
     }
 
-    pub(super) fn build(sh: &Shell, clean_install: bool) -> anyhow::Result<()> {
+    pub(super) fn build(sh: &Shell, clean_install: bool, release: bool) -> anyhow::Result<()> {
         let _dir = sh.push_dir("junction-node");
+        let _env = loud_env(&sh, "JUNCTION_CLIENT_SKIP_POSTINSTALL", "true");
 
         let install_cmd = if clean_install { "ci" } else { "i" };
+        let build_cmd = if release { "build-release" } else { "build" };
         cmd!(sh, "npm {install_cmd} --fund=false").run()?;
-        cmd!(sh, "npm run build").run()?;
+        cmd!(sh, "npm run {build_cmd}").run()?;
+
+        Ok(())
+    }
+
+    pub(super) fn dist(sh: &Shell, platform: Option<&str>) -> anyhow::Result<()> {
+        let _dir = sh.push_dir("junction-node");
+
+        let package = match platform {
+            Some(platform) => format!("./platforms/{platform}"),
+            None => ".".to_string(),
+        };
+
+        cmd!(sh, "npm pack {package} --pack-destination ./dist").run()?;
 
         Ok(())
     }

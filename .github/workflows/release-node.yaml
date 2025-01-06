@@ -1,0 +1,154 @@
+name: Release Node
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Git Commit SHA. Use the latest commit on main if left blank.
+        type: string
+      dry-run:
+        description: Dry run. Defaults to true. Won't release to NPM by default.
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  rust_stable: stable
+  node_lts: 20.x
+
+jobs:
+  # build the ts-only package.
+  #
+  # does not install a Rust toolchain
+  ts-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.node_lts }}
+          cache: npm
+          cache-dependency-path: junction-node/package-lock.json
+
+      - name: package
+        run: |
+          mkdir -p ./junction-node/dist
+          npm --prefix ./junction-node ci
+          npm --prefix ./junction-node pack ./junction-node --pack-destination ./junction-node/dist
+        env:
+          JUNCTION_CLIENT_SKIP_POSTINSTALL: "true"
+
+      - name: upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: "javascript"
+          path: junction-node/dist/*.tgz
+
+  # build a platform specific package on each platform we support
+  #
+  # hard codes every platform we support and its Neon platform string so we can
+  # make sure we don't accidentally lose a platform if the output of
+  # `neon show platforms` changes.
+  native-packages:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: windows-latest
+            neon_platform: win32-x64-msvc
+            target: x86_64-pc-windows-msvc
+          - runner: macos-latest
+            neon_platform: darwin-x64
+            target: x86_64-apple-darwin
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            neon_platform: darwin-arm64
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            neon_platform: linux-x64-gnu
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            neon_platform: linux-arm64-gnu
+            neon_build: cross-release
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+          targets: ${{ matrix.platform.target }}
+      - name: "install cross"
+        if: ${{ startsWith(matrix.platform.neon_build, 'cross') }}
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.node_lts }}
+
+      - name: build
+        shell: bash
+        run: |
+          npm --prefix ./junction-node ci --fund=false
+          npm --prefix ./junction-node run ${{ matrix.platform.neon_build || 'build-release' }}
+          mkdir -p ./junction-node/dist
+          npm --prefix ./junction-node pack ./junction-node/platforms/${{ matrix.platform.neon_platform }} --pack-destination ./junction-node/dist
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.platform.target }}
+          NEON_BUILD_PLATFORM: ${{ matrix.platform.neon_platform }}
+          JUNCTION_CLIENT_SKIP_POSTINSTALL: "true"
+
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform.neon_platform }}
+          path: junction-node/dist/*.tgz
+
+  npm-publish:
+    name: publish-to-npm
+    needs: [ts-package, native-packages]
+    runs-on: ubuntu-latest
+
+    environment:
+      name: release-node
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.node_lts }}
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: junction-node/package-lock.json
+      - name: download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: show artifacts
+        run: ls -lah dist/*
+      - name: publish
+        if: inputs.dry-run == false
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          for package in ./dist/*.tgz; do
+            npm publish --provenance --access public $package
+          done

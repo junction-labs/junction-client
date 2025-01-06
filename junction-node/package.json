@@ -1,18 +1,20 @@
 {
   "name": "@junction-labs/client",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "description": "",
   "main": "./lib/index.cjs",
   "scripts": {
-    "test": "tsc &&cargo test",
-    "prepack": "tsc && neon update",
-    "version": "neon bump --binaries platforms && git add .",
+    "test": "tsc && cargo test",
+    "prepack": "tsc",
     "build": "tsc && cargo build --message-format=json-render-diagnostics > cargo.log",
     "postbuild": "neon dist < cargo.log",
     "build-release": "tsc && cargo build --release --message-format=json-render-diagnostics > cargo.log",
     "postbuild-release": "neon dist < cargo.log",
+    "cross-release": "tsc && cross build --release --message-format=json-render-diagnostics > cargo.log",
+    "postcross-release": "neon dist -m /target < cargo.log",
     "lint": "biome check",
-    "fix": "biome check --write"
+    "fix": "biome check --write",
+    "postinstall": "node scripts/postinstall.js"
   },
   "author": "",
   "license": "Apache-2.0",
@@ -29,7 +31,7 @@
     }
   },
   "types": "./lib/index.d.cts",
-  "files": ["lib/**/*.?({c,m}){t,j}s"],
+  "files": ["scripts/postinstall.js", "lib/**/*.?({c,m}){t,j}s"],
   "neon": {
     "type": "library",
     "org": "@junction-node/",
@@ -49,13 +51,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "github.com/junction-labs/junction-client"
+    "url": "https://github.com/junction-labs/junction-client"
   },
   "optionalDependencies": {
-    "@junction-labs/client-darwin-arm64": "0.1.0",
-    "@junction-labs/client-darwin-x64": "0.1.0",
-    "@junction-labs/client-linux-arm64-gnu": "0.1.0",
-    "@junction-labs/client-linux-x64-gnu": "0.1.0",
-    "@junction-labs/client-win32-x64-msvc": "0.1.0"
+    "@junction-labs/client-darwin-arm64": "0.2.2",
+    "@junction-labs/client-darwin-x64": "0.2.2",
+    "@junction-labs/client-linux-arm64-gnu": "0.2.2",
+    "@junction-labs/client-linux-x64-gnu": "0.2.2",
+    "@junction-labs/client-win32-x64-msvc": "0.2.2"
   }
 }
