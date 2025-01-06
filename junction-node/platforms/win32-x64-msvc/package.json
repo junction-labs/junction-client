@@ -1,7 +1,7 @@
 {
   "name": "@junction-labs/client-win32-x64-msvc",
   "description": "Prebuilt binary package for `@junction-labs/client` on `win32-x64-msvc`.",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "os": ["win32"],
   "cpu": ["x64"],
   "main": "index.node",
@@ -17,7 +17,7 @@
   "author": "",
   "repository": {
     "type": "git",
-    "url": "github.com/junction-labs/junction-client"
+    "url": "https://github.com/junction-labs/junction-client"
   },
   "license": "Apache-2.0"
 }
