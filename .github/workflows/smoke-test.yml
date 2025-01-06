@@ -79,6 +79,7 @@ jobs:
       - name: set up kube manifests
         run: |
           kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml
+          kubectl apply -f junction-python/samples/routing-and-load-balancing/client_cluster_role_binding.yml
           kubectl apply -f junction-python/samples/routing-and-load-balancing/latest_ezbake.yml
           kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml
           kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml
@@ -88,9 +89,12 @@ jobs:
           kubectl rollout status --watch -n default deploy/jct-http-server-feature-1
           kubectl rollout status --watch -n junction deploy/ezbake
           sleep 5 # this is a load-bearing sleep, we're waiting for ezbake to settle down
-      - name: run test
+      - name: run tests static mode
         run: |
           kubectl run jct-client --image=jct_http_client:latest --image-pull-policy=IfNotPresent --env="JUNCTION_ADS_SERVER=grpc://ezbake.junction.svc.cluster.local:8008" --restart=Never --attach
+      - name: run tests gateway api mode
+        run: |
+          kubectl run jct-client2 --image=jct_http_client:latest --image-pull-policy=IfNotPresent --env="JUNCTION_ADS_SERVER=grpc://ezbake.junction.svc.cluster.local:8008" --restart=Never --attach -- --use-gateway-api
       - name: debug state
         if: ${{ ! cancelled() }}
         run: |

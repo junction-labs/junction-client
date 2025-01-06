@@ -144,27 +144,38 @@ class PoolManager(urllib3.PoolManager):
             kwargs.get("retries"), endpoint.retry_policy
         )
 
-        # set a per-request timeout (don't clobber an existing one) if there's a
-        # Junction timeout.
-        if not kwargs.get("timeout") and endpoint.timeout_policy:
-            request_timeout = min(
-                endpoint.timeout_policy.backend_request, endpoint.timeout_policy.request
-            )
-            if request_timeout > 0:
-                kwargs["timeout"] = urllib3.Timeout(total=request_timeout)
-
-        # set up an overall deadline based on the endpoint's timeout policy
         deadline = None
-        if endpoint.timeout_policy and endpoint.timeout_policy.request:
+        if endpoint.timeout_policy and endpoint.timeout_policy.request != 0:
             deadline = time.time() + endpoint.timeout_policy.request
 
         while True:
-            if deadline and time.time() > deadline:
-                # TODO: should this be a Junction timeout error instead of the
-                # more general urllib3 one?
-                raise TimeoutError("request timeout exceeded")
+            # we don't clobber a method specific timeout even when there is a
+            # backend_request value.
+            if (
+                endpoint.timeout_policy
+                and endpoint.timeout_policy.backend_request != 0
+                and kwargs.get("timeout", None) is None
+            ):
+                kwargs["timeout"] = urllib3.Timeout(
+                    total=endpoint.timeout_policy.backend_request
+                )
 
-            # make a copy of request kwargs and ovewrite retries to only allow
+            # we do clobber a method specific timeout when there is a deadline
+            # value if that deadline is smaller
+            if deadline:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise TimeoutError("request timeout exceeded")
+                if kwargs.get("timeout", None) is None:
+                    kwargs["timeout"] = urllib3.Timeout(total=remaining)
+                elif kwargs["timeout"].total is None:
+                    kwargs["timeout"].total = remaining
+                else:
+                    kwargs["timeout"] = urllib3.Timeout(
+                        total=min(remaining, kwargs["timeout"].total)
+                    )
+
+            # make a copy of request kwargs and overwrite retries to only allow
             # redirect handling.
             #
             # only setting `total=None` does weird things here
@@ -185,7 +196,7 @@ class PoolManager(urllib3.PoolManager):
                     endpoint=endpoint,
                     error=e,
                 )
-                e.junction_endpiont = endpoint
+                e.junction_endpoint = endpoint
 
                 if _is_redirect_err(e):
                     raise e
