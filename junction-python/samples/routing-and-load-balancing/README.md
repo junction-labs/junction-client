@@ -9,7 +9,6 @@ dynamic configuration capabilities.
 ```bash
 kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/experimental-install.yaml
 kubectl apply -f junction-python/samples/routing-and-load-balancing/latest_ezbake.yml
-export JUNCTION_ADS_SERVER="grpc://"`kubectl get svc ezbake --namespace junction -o jsonpath='{.spec.clusterIP}'`":8008"
 ```
 
 ## Build Server docker image and deploy it
@@ -19,10 +18,11 @@ kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_ser
 kubectl apply -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml 
 ```
 
-## Build the junction python client
+## Build the junction python client and Set up the environment
 ```bash
 cargo xtask python-build
 source .venv/bin/activate
+export JUNCTION_ADS_SERVER="grpc://"`kubectl get svc ezbake --namespace junction -o jsonpath='{.spec.clusterIP}'`":8008"
 ```
 
 ## Run client with static config
@@ -38,7 +38,6 @@ python junction-python/samples/routing-and-load-balancing/client.py --use-gatewa
 ## Clean up
 ```bash
 kubectl delete -f junction-python/samples/routing-and-load-balancing/latest_ezbake.yml
-kubectl delete -f junction-python/samples/routing-and-load-balancing/gateway.yml
 kubectl delete -f junction-python/samples/routing-and-load-balancing/jct_http_server.yml 
 kubectl delete -f junction-python/samples/routing-and-load-balancing/jct_http_server_feature_1.yml 
 ```

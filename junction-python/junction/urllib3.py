@@ -144,31 +144,36 @@ class PoolManager(urllib3.PoolManager):
             kwargs.get("retries"), endpoint.retry_policy
         )
 
-        # set up an overall deadline if we have one
         deadline = None
-        if endpoint.timeout_policy and endpoint.timeout_policy.request:
+        if endpoint.timeout_policy and endpoint.timeout_policy.request != 0:
             deadline = time.time() + endpoint.timeout_policy.request
 
         while True:
-            # set a per-request timeout (don't clobber an existing one) if there's a
-            # Junction timeout.
-            if not kwargs.get("timeout") and endpoint.timeout_policy:
-                request_timeout = 0
-                if deadline:
-                    request_timeout = deadline - time.time()
-                    if request_timeout <= 0:
-                        # TODO: should this be a Junction timeout error instead of the
-                        # more general urllib3 one?
-                        raise TimeoutError("request timeout exceeded")
-                if endpoint.timeout_policy.backend_request:
-                    if request_timeout > 0:
-                        request_timeout = min(
-                            request_timeout, endpoint.timeout_policy.backend_request
-                        )
-                    else:
-                        request_timeout = endpoint.timeout_policy.backend_request
-                if request_timeout > 0:
-                    kwargs["timeout"] = urllib3.Timeout(total=request_timeout)
+            # we don't clobber a method specific timeout even when there is a
+            # backend_request value.
+            if (
+                endpoint.timeout_policy
+                and endpoint.timeout_policy.backend_request != 0
+                and kwargs.get("timeout", None) is None
+            ):
+                kwargs["timeout"] = urllib3.Timeout(
+                    total=endpoint.timeout_policy.backend_request
+                )
+
+            # we do clobber a method specific timeout when there is a deadline
+            # value if that deadline is smaller
+            if deadline:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise TimeoutError("request timeout exceeded")
+                if kwargs.get("timeout", None) is None:
+                    kwargs["timeout"] = urllib3.Timeout(total=remaining)
+                elif kwargs["timeout"].total is None:
+                    kwargs["timeout"].total = remaining
+                else:
+                    kwargs["timeout"] = urllib3.Timeout(
+                        total=min(remaining, kwargs["timeout"].total)
+                    )
 
             # make a copy of request kwargs and overwrite retries to only allow
             # redirect handling.
