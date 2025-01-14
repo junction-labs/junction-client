@@ -611,7 +611,11 @@ impl AdsConnection<'_> {
         let (version, nonce) = (discovery_response.version_info, discovery_response.nonce);
         self.set_nonce(resource_type, nonce.clone());
 
-        let resources = match ResourceVec::from_any(resource_type, discovery_response.resources) {
+        let resources = match ResourceVec::from_any(
+            resource_type,
+            ResourceVersion::from(&version),
+            discovery_response.resources,
+        ) {
             Ok(r) => r,
             Err(e) => {
                 let error_detail = format!("protobuf decoding error: '{}'", e);
@@ -625,9 +629,7 @@ impl AdsConnection<'_> {
         };
 
         // handle the insert
-        let (changed_types, errors) = self
-            .cache
-            .insert(ResourceVersion::from(&version), resources);
+        let (changed_types, errors) = self.cache.insert(resources);
 
         if tracing::enabled!(tracing::Level::TRACE) {
             let changed_types: Vec<_> = changed_types.values().collect();
@@ -803,16 +805,16 @@ mod test_ads_conn {
             )]
         );
 
-        cache.insert(
+        cache.insert(ResourceVec::from_listeners(
             "123".into(),
-            ResourceVec::Listener(vec![xds_test::listener!(
+            vec![xds_test::listener!(
                 "nginx.default.svc.cluster.local", "nginx" => [xds_test::vhost!(
                     "default",
                     ["nginx.default.svc.cluster.local"],
                     [xds_test::route!(default "nginx.default.svc.cluster.local:80"),],
                 )],
-            )]),
-        );
+            )],
+        ));
 
         let (_, outgoing) = new_conn(&mut cache);
         assert_eq!(
@@ -829,12 +831,10 @@ mod test_ads_conn {
             ]
         );
 
-        cache.insert(
+        cache.insert(ResourceVec::from_clusters(
             "123".into(),
-            ResourceVec::Cluster(vec![xds_test::cluster!(
-                "nginx.default.svc.cluster.local:80"
-            )]),
-        );
+            vec![xds_test::cluster!("nginx.default.svc.cluster.local:80")],
+        ));
 
         let (_, outgoing) = new_conn(&mut cache);
         assert_eq!(
