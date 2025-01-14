@@ -148,23 +148,28 @@ impl ResourceType {
 
 #[derive(Debug)]
 pub(crate) enum ResourceVec {
-    Listener(Vec<xds_listener::Listener>),
-    RouteConfiguration(Vec<xds_route::RouteConfiguration>),
-    Cluster(Vec<xds_cluster::Cluster>),
-    ClusterLoadAssignment(Vec<xds_endpoint::ClusterLoadAssignment>),
+    Listener(VersionedVec<xds_listener::Listener>),
+    RouteConfiguration(VersionedVec<xds_route::RouteConfiguration>),
+    Cluster(VersionedVec<xds_cluster::Cluster>),
+    ClusterLoadAssignment(VersionedVec<xds_endpoint::ClusterLoadAssignment>),
 }
+
+type VersionedVec<T> = Vec<(ResourceVersion, T)>;
 
 impl ResourceVec {
     pub(crate) fn from_any(
-        resource_type: ResourceType,
+        rtype: ResourceType,
+        version: ResourceVersion,
         any: Vec<protobuf::Any>,
     ) -> Result<Self, prost::DecodeError> {
-        match resource_type {
-            ResourceType::Listener => from_any_vec(any).map(Self::Listener),
-            ResourceType::RouteConfiguration => from_any_vec(any).map(Self::RouteConfiguration),
-            ResourceType::Cluster => from_any_vec(any).map(Self::Cluster),
+        match rtype {
+            ResourceType::Listener => from_any_vec(version, any).map(Self::Listener),
+            ResourceType::RouteConfiguration => {
+                from_any_vec(version, any).map(Self::RouteConfiguration)
+            }
+            ResourceType::Cluster => from_any_vec(version, any).map(ResourceVec::Cluster),
             ResourceType::ClusterLoadAssignment => {
-                from_any_vec(any).map(Self::ClusterLoadAssignment)
+                from_any_vec(version, any).map(Self::ClusterLoadAssignment)
             }
         }
     }
@@ -173,7 +178,7 @@ impl ResourceVec {
     pub(crate) fn names(&self) -> Vec<String> {
         macro_rules! clone_name {
             ($v:expr, $name:ident) => {
-                $v.iter().map(|x| x.$name.clone()).collect()
+                $v.iter().map(|(_, x)| x.$name.clone()).collect()
             };
         }
 
@@ -196,14 +201,46 @@ impl ResourceVec {
     }
 }
 
+macro_rules! test_constructor {
+    ($name:ident, $variant:ident, $xds_type:ty) => {
+        impl ResourceVec {
+            #[cfg(test)]
+            pub(crate) fn $name<I: IntoIterator<Item = $xds_type>>(
+                version: ResourceVersion,
+                listeners: I,
+            ) -> Self {
+                let data = listeners
+                    .into_iter()
+                    .map(|l| (version.clone(), l))
+                    .collect();
+                Self::$variant(data)
+            }
+        }
+    };
+}
+
+test_constructor!(from_listeners, Listener, xds_listener::Listener);
+test_constructor!(
+    from_route_configs,
+    RouteConfiguration,
+    xds_route::RouteConfiguration
+);
+test_constructor!(from_clusters, Cluster, xds_cluster::Cluster);
+test_constructor!(
+    from_load_assignments,
+    ClusterLoadAssignment,
+    xds_endpoint::ClusterLoadAssignment
+);
+
 fn from_any_vec<M: Default + prost::Name>(
+    version: ResourceVersion,
     any: Vec<protobuf::Any>,
-) -> Result<Vec<M>, prost::DecodeError> {
+) -> Result<VersionedVec<M>, prost::DecodeError> {
     // TODO: if the type_url checks become a bottleneck, we can only check once
     // and then decode every value instead of calling protobuf::Any::to_msg
     let mut ms = Vec::with_capacity(any.len());
     for a in any {
-        ms.push(a.to_msg()?);
+        ms.push((version.clone(), a.to_msg()?));
     }
 
     Ok(ms)
