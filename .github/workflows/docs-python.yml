@@ -43,16 +43,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Create virtual environment
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          uv venv
-          echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
-          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> $GITHUB_ENV
-
-      - name: Install dependencies
-        run: uv pip install -r junction-python/requirements-dev.txt -r junction-python/docs/requirements.txt
-
       - name: Build and install junction python
         run: cargo xtask python-build
 
