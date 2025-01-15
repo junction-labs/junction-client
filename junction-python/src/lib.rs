@@ -550,7 +550,8 @@ impl Junction {
 struct XdsConfig {
     name: String,
 
-    version: ResourceVersion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<ResourceVersion>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     xds: Option<protobuf::Any>,

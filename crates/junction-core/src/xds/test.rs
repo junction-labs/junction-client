@@ -15,9 +15,11 @@ use xds_api::pb::{
             listener::v3 as xds_listener,
             route::v3::{self as xds_route, route_action::hash_policy::Header},
         },
-        service::discovery::v3::{DiscoveryRequest, DiscoveryResponse},
+        service::discovery::v3::{
+            self as xds_discovery, DeltaDiscoveryRequest, DeltaDiscoveryResponse,
+        },
     },
-    google::protobuf,
+    google::{protobuf, rpc},
 };
 
 use xds_api::pb::envoy::extensions::filters::{
@@ -115,47 +117,125 @@ macro_rules! route {
 pub(crate) use route;
 
 macro_rules! req {
-    (t = $ty:expr, rs = $names:expr $(,)*) => {
-        crate::xds::test::req!(t = $ty, v = "", n = "", rs = $names)
+    (t = $ty:expr $(,)*) => {
+        crate::xds::test::req!(
+            t = $ty,
+            n = "",
+            add = vec![],
+            remove = vec![],
+            init = vec![],
+            err = None
+        )
     };
-    (t = $r:expr, v = $v:expr, n = $n:expr, rs = $names:expr $(,)*) => {{
-        crate::xds::test::discovery_request($r, $v, $n, $names)
+    (t = $ty:expr, n = $n:expr $(,)*) => {
+        crate::xds::test::req!(
+            t = $ty,
+            n = $n,
+            add = vec![],
+            remove = vec![],
+            init = vec![],
+            err = None
+        )
+    };
+    (t = $ty:expr, add = $add:expr $(,)*) => {
+        crate::xds::test::req!(
+            t = $ty,
+            n = "",
+            add = $add,
+            remove = vec![],
+            init = vec![],
+            err = None
+        )
+    };
+    (t = $ty:expr, n = $n:expr, add = $add:expr $(,)*) => {
+        crate::xds::test::req!(
+            t = $ty,
+            n = $n,
+            add = $add,
+            remove = vec![],
+            init = vec![],
+            err = None
+        )
+    };
+    (t = $ty:expr, add = $add:expr, init = $init:expr $(,)*) => {
+        crate::xds::test::req!(
+            t = $ty,
+            n = "",
+            add = $add,
+            remove = vec![],
+            init = $init,
+            err = None
+        )
+    };
+    (t = $rty:expr, n = $n:expr, add = $add:expr, remove = $remove:expr, init = $init:expr, err = $err:expr $(,)*) => {{
+        crate::xds::test::delta_discovery_request($rty, $n, $add, $remove, $init, $err)
     }};
 }
 
 pub(crate) use req;
 
-pub fn discovery_request(
+use super::ResourceVec;
+
+pub fn delta_discovery_request(
     rtype: ResourceType,
-    version_info: &'static str,
     response_nonce: &'static str,
-    names: Vec<&'static str>,
-) -> DiscoveryRequest {
-    let names = names.into_iter().map(|n| n.to_string()).collect();
-    DiscoveryRequest {
+    subscribe: Vec<&'static str>,
+    unsubscribe: Vec<&'static str>,
+    versions: Vec<(&'static str, &'static str)>,
+    error: Option<&'static str>,
+) -> DeltaDiscoveryRequest {
+    let resource_names_subscribe = subscribe.into_iter().map(|n| n.to_string()).collect();
+    let resource_names_unsubscribe = unsubscribe.into_iter().map(|n| n.to_string()).collect();
+    let initial_resource_versions = versions
+        .into_iter()
+        .map(|(v, r)| (v.to_string(), r.to_string()))
+        .collect();
+
+    let error_detail = error.map(|msg| rpc::Status {
+        code: tonic::Code::InvalidArgument.into(),
+        message: msg.to_string(),
+        ..Default::default()
+    });
+
+    DeltaDiscoveryRequest {
         type_url: rtype.type_url().to_string(),
-        resource_names: names,
-        version_info: version_info.to_string(),
         response_nonce: response_nonce.to_string(),
+        resource_names_subscribe,
+        resource_names_unsubscribe,
+        initial_resource_versions,
+        error_detail,
         ..Default::default()
     }
 }
 
-pub fn discovery_response<T: prost::Name>(
-    version_info: &'static str,
+macro_rules! resp {
+    (n = $nonce:expr, add = $add:expr, remove = $remove:expr $(,)*) => {
+        crate::xds::test::delta_discovery_response($nonce, None, $add, $remove)
+    };
+}
+
+pub(crate) use resp;
+
+pub fn delta_discovery_response(
     nonce: &'static str,
-    resources: Vec<T>,
-) -> DiscoveryResponse {
-    let type_url = T::type_url();
-    let resources = resources
+    version: Option<&'static str>,
+    resources: ResourceVec,
+    removed_resources: Vec<&'static str>,
+) -> DeltaDiscoveryResponse {
+    let type_url = resources.resource_type().type_url().to_string();
+    let system_version_info = version.map(|s| s.to_string()).unwrap_or_default();
+    let resources = resources.to_resources().unwrap();
+    let removed_resources = removed_resources
         .into_iter()
-        .map(|r| protobuf::Any::from_msg(&r).unwrap())
+        .map(|s| s.to_string())
         .collect();
-    DiscoveryResponse {
+
+    DeltaDiscoveryResponse {
         type_url,
-        version_info: version_info.to_string(),
+        system_version_info,
         nonce: nonce.to_string(),
         resources,
+        removed_resources,
         ..Default::default()
     }
 }

@@ -17,6 +17,7 @@ use xds_api::{
             listener::v3 as xds_listener, route::v3 as xds_route,
         },
         extensions::filters::network::http_connection_manager::v3 as xds_http,
+        service::discovery::v3 as xds_discovery,
     },
     WellKnownTypes,
 };
@@ -100,34 +101,49 @@ impl_resource_version_from!(&String);
 impl_resource_version_from!(Arc<str>);
 impl_resource_version_from!(Box<str>);
 
+/// The type of an xDS resource we store in cache.
+///
+/// The order these are declared in is the xDS make-before-break order, so that
+/// the [enum_map] crate keeps enum maps in this order. This means any time we
+/// need to iterate an EnumMap's values, we're probably doing it in an order
+/// that keeps state updates sane.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, enum_map::Enum, Hash, PartialOrd, Ord)]
 pub(crate) enum ResourceType {
-    Listener,
-    RouteConfiguration,
     Cluster,
     ClusterLoadAssignment,
+    Listener,
+    RouteConfiguration,
 }
 
 impl ResourceType {
     fn as_well_known(&self) -> WellKnownTypes {
         match self {
-            ResourceType::Listener => WellKnownTypes::Listener,
-            ResourceType::RouteConfiguration => WellKnownTypes::RouteConfiguration,
             ResourceType::Cluster => WellKnownTypes::Cluster,
             ResourceType::ClusterLoadAssignment => WellKnownTypes::ClusterLoadAssignment,
+            ResourceType::Listener => WellKnownTypes::Listener,
+            ResourceType::RouteConfiguration => WellKnownTypes::RouteConfiguration,
         }
     }
 
     fn from_well_known(wkt: WellKnownTypes) -> Option<Self> {
         match wkt {
-            WellKnownTypes::Listener => Some(Self::Listener),
-            WellKnownTypes::RouteConfiguration => Some(Self::RouteConfiguration),
             WellKnownTypes::Cluster => Some(Self::Cluster),
             WellKnownTypes::ClusterLoadAssignment => Some(Self::ClusterLoadAssignment),
+            WellKnownTypes::Listener => Some(Self::Listener),
+            WellKnownTypes::RouteConfiguration => Some(Self::RouteConfiguration),
             _ => None,
         }
     }
 
+    pub(crate) const fn supports_wildcard(&self) -> bool {
+        match self {
+            ResourceType::Cluster => true,
+            ResourceType::Listener => true,
+            _ => false,
+        }
+    }
+
+    /// Return all of the known enum variants in xDS's make-before-break order.
     pub(crate) fn all() -> &'static [Self] {
         &[
             Self::Cluster,
@@ -146,7 +162,7 @@ impl ResourceType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum ResourceVec {
     Listener(VersionedVec<xds_listener::Listener>),
     RouteConfiguration(VersionedVec<xds_route::RouteConfiguration>),
@@ -163,13 +179,29 @@ impl ResourceVec {
         any: Vec<protobuf::Any>,
     ) -> Result<Self, prost::DecodeError> {
         match rtype {
+            ResourceType::Cluster => from_any_vec(version, any).map(ResourceVec::Cluster),
+            ResourceType::ClusterLoadAssignment => {
+                from_any_vec(version, any).map(Self::ClusterLoadAssignment)
+            }
             ResourceType::Listener => from_any_vec(version, any).map(Self::Listener),
             ResourceType::RouteConfiguration => {
                 from_any_vec(version, any).map(Self::RouteConfiguration)
             }
-            ResourceType::Cluster => from_any_vec(version, any).map(ResourceVec::Cluster),
+        }
+    }
+
+    pub(crate) fn from_resources(
+        rtype: ResourceType,
+        resources: Vec<xds_discovery::Resource>,
+    ) -> Result<Self, prost::DecodeError> {
+        match rtype {
+            ResourceType::Cluster => from_resource_vec(resources).map(Self::Cluster),
             ResourceType::ClusterLoadAssignment => {
-                from_any_vec(version, any).map(Self::ClusterLoadAssignment)
+                from_resource_vec(resources).map(Self::ClusterLoadAssignment)
+            }
+            ResourceType::Listener => from_resource_vec(resources).map(Self::Listener),
+            ResourceType::RouteConfiguration => {
+                from_resource_vec(resources).map(Self::RouteConfiguration)
             }
         }
     }
@@ -199,6 +231,16 @@ impl ResourceVec {
             ResourceVec::ClusterLoadAssignment(_) => ResourceType::ClusterLoadAssignment,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn to_resources(&self) -> Result<Vec<xds_discovery::Resource>, prost::EncodeError> {
+        match self {
+            ResourceVec::Listener(vec) => to_resource_vec(vec),
+            ResourceVec::RouteConfiguration(vec) => to_resource_vec(vec),
+            ResourceVec::Cluster(vec) => to_resource_vec(vec),
+            ResourceVec::ClusterLoadAssignment(vec) => to_resource_vec(vec),
+        }
+    }
 }
 
 macro_rules! test_constructor {
@@ -207,12 +249,9 @@ macro_rules! test_constructor {
             #[cfg(test)]
             pub(crate) fn $name<I: IntoIterator<Item = $xds_type>>(
                 version: ResourceVersion,
-                listeners: I,
+                xs: I,
             ) -> Self {
-                let data = listeners
-                    .into_iter()
-                    .map(|l| (version.clone(), l))
-                    .collect();
+                let data = xs.into_iter().map(|l| (version.clone(), l)).collect();
                 Self::$variant(data)
             }
         }
@@ -231,6 +270,39 @@ test_constructor!(
     ClusterLoadAssignment,
     xds_endpoint::ClusterLoadAssignment
 );
+
+fn from_resource_vec<M: Default + prost::Name>(
+    resources: Vec<xds_discovery::Resource>,
+) -> Result<VersionedVec<M>, prost::DecodeError> {
+    let mut ms = Vec::with_capacity(resources.len());
+    for r in resources {
+        let Some(any) = r.resource else {
+            continue;
+        };
+        ms.push((ResourceVersion::from(r.version), any.to_msg()?));
+    }
+
+    Ok(ms)
+}
+
+#[cfg(test)]
+fn to_resource_vec<M: prost::Name>(
+    xs: &VersionedVec<M>,
+) -> Result<Vec<xds_discovery::Resource>, prost::EncodeError> {
+    let mut resources = Vec::with_capacity(xs.len());
+
+    for (v, msg) in xs {
+        let as_any = protobuf::Any::from_msg(msg)?;
+
+        resources.push(xds_discovery::Resource {
+            resource: Some(as_any),
+            version: v.to_string(),
+            ..Default::default()
+        })
+    }
+
+    Ok(resources)
+}
 
 fn from_any_vec<M: Default + prost::Name>(
     version: ResourceVersion,
@@ -339,7 +411,7 @@ pub(crate) enum ApiListenerData {
     Inlined(RouteConfigData),
 }
 
-fn api_listener(
+fn http_connection_manager(
     listener: &xds_listener::Listener,
 ) -> Result<xds_http::HttpConnectionManager, ResourceError> {
     let api_listener = listener
@@ -359,7 +431,7 @@ impl ApiListener {
     pub(crate) fn from_xds(name: &str, xds: xds_listener::Listener) -> Result<Self, ResourceError> {
         use xds_http::http_connection_manager::RouteSpecifier;
 
-        let conn_manager = api_listener(&xds)?;
+        let conn_manager = http_connection_manager(&xds)?;
         let data = match &conn_manager.route_specifier {
             Some(RouteSpecifier::Rds(rds)) => {
                 let name = rds.route_config_name.clone();
@@ -485,6 +557,9 @@ pub(crate) struct Cluster {
 }
 
 impl Cluster {
+    pub(crate) fn id(&self) -> &BackendId {
+        &self.backend_lb.config.id
+    }
     pub(crate) fn from_xds(
         xds: xds_cluster::Cluster,
         default_action: Option<&xds_route::RouteAction>,

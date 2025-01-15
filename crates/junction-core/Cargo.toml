@@ -45,5 +45,6 @@ xxhash-rust = { workspace = true }
 junction-api = { workspace = true, features = ["xds"] }
 
 [dev-dependencies]
+pretty_assertions = "1.4"
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
