@@ -1,12 +1,16 @@
 FROM python:3.12
 
-# optional arg is the name of the junction python package to install with pip
+# Optional arg is the name of the junction python package to install with pip
 # this can be either a pypi package name, a wheel URL, or a local path to a
 # wheel.
+#
+# The magic [x] in the default allows the COPY to succeed even if the arg is not set.
 ARG junction_wheel=default[x]
-COPY ${junction_wheel} /app
 
 WORKDIR /app
+
+COPY ${junction_wheel} /app/
+
 COPY junction-python/requirements-dev.txt requirements-dev.txt
 RUN pip install --upgrade uv
 RUN uv pip install --system -r requirements-dev.txt
