@@ -1,67 +1,58 @@
 # https://www.mkdocs.org/user-guide/configuration/
 
-# Project information
 site_name: Junction User Guide
-site_url: https://docs.junction-labs.io/
+site_url: https://docs.junctionlabs.io/
 repo_url: https://github.com/junction-labs/junction-client
 repo_name: junction-labs/junction-client
-
 docs_dir: source
-
+strict: true
 nav:
-  - User guide:
-    - index.md
-    - user-guide/getting-started.md
-
-  - API reference: api/index.md
-
+  - "Overview":
+      - index.md
+      - overview/core-concepts.md
+  - "Getting Started":
+      - getting-started/index.md
+      - getting-started/ezbake.md
+      - getting-started/node.md
+      - getting-started/python.md
+      - getting-started/rust.md
+      - getting-started/configuring-junction.md
+  - "Reference":
+      - "reference/api.md"
 not_in_nav: |
   /_build/
 validation:
   links:
-    # Allow an absolute link to the features page for our code snippets
     absolute_links: ignore
 
-# Build directories
 theme:
   name: material
   locale: en
   custom_dir: source/_build/overrides
   palette:
-  # Palette toggle for light mode
-  - media: "(prefers-color-scheme: light)"
-    primary: deep orange
-    scheme: default
-    toggle:
-      icon: material/brightness-7
-      name: Switch to dark mode
-  # Palette toggle for dark mode
-  - media: "(prefers-color-scheme: dark)"
-    primary: deep orange
-    scheme: slate
-    toggle:
-      icon: material/brightness-4
-      name: Switch to light mode
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      primary: deep orange
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      primary: deep orange
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
   logo: _build/assets/logo.png
   features:
-    - navigation.tracking
-    - navigation.instant
+    - navigation.top
+    - navigation.sections
     - navigation.tabs
-    - navigation.tabs.sticky
-    - content.tabs.link
     - content.code.copy
   icon:
     repo: fontawesome/brands/github
 
-extra:
-  analytics:
-    provider: plausible
-    domain: guide.junctionlabs.io,combined.junctionlabs.io
-
-# Preview controls
-strict: true
-
-# Formatting options
 markdown_extensions:
   - admonition
   - pymdownx.details
@@ -73,18 +64,13 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.snippets:
-      base_path: ['.','source/src/']
+      base_path: [".", "source/src/"]
       check_paths: true
       dedent_subsections: true
-  - footnotes
-
-hooks:
-  - source/_build/scripts/people.py
 
 plugins:
   - search:
       lang: en
   - markdown-exec
-  - material-plausible
   - macros:
       module_name: source/_build/scripts/macro

@@ -214,7 +214,7 @@ impl Route {
 pub struct RouteRule {
     /// A human-readable name for this rule.
     ///
-    /// This name is compeltely optional, and will only be used in diagnostics
+    /// This name is completely optional, and will only be used in diagnostics
     /// to make it easier to debug. Diagnostics that don't have a name will be
     /// referred to by their index in a Route's list of rules.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -222,7 +222,7 @@ pub struct RouteRule {
 
     /// A list of match rules applied to an outgoing request.  Each match is
     /// independent; this rule will be matched if **any** of the listed matches
-    /// is satsified.
+    /// is satisfied.
     ///
     /// If no matches are specified, this Rule matches any outgoing request.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

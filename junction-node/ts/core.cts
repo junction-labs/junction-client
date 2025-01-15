@@ -8,9 +8,9 @@
 import * as ffi from "./load.cjs";
 
 declare module "./load.cjs" {
-  interface Runtime {}
-  interface Client {}
-  interface EndpointHandle {}
+  interface Runtime { }
+  interface Client { }
+  interface EndpointHandle { }
 
   type EndpointResult = [EndpointHandle, EndpointProps];
 
@@ -142,7 +142,7 @@ export interface SockAddr {
  * A Junction endpoint.
  */
 // TODO: this should be generated from junction-api
-interface EndpointProps {
+export interface EndpointProps {
   readonly scheme: string;
   readonly sockAddr: SockAddr;
   readonly hostname: string;

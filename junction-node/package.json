@@ -31,7 +31,10 @@
     }
   },
   "types": "./lib/index.d.cts",
-  "files": ["scripts/postinstall.js", "lib/**/*.?({c,m}){t,j}s"],
+  "files": [
+    "scripts/postinstall.js",
+    "lib/**/*.?({c,m}){t,j}s"
+  ],
   "neon": {
     "type": "library",
     "org": "@junction-node/",
@@ -43,6 +46,7 @@
     "@neon-rs/cli": "^0.1.82",
     "@tsconfig/node20": "^20.1.4",
     "@types/node": "^20.11.16",
+    "typedoc": "^0.27.3",
     "typescript": "^5.3.3"
   },
   "dependencies": {

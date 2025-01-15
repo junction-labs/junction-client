@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
         NodeDist { platform } => node::dist(&sh, platform.as_deref()),
         NodeClean => node::clean(&sh),
         NodeLint { fix } => node::lint(&sh, *fix),
+        NodeDocs => node::docs(&sh),
         NodeShell => node::shell(&sh),
         // python
         PythonBuild {
@@ -138,6 +139,9 @@ enum Commands {
         #[clap(long)]
         fix: bool,
     },
+
+    /// Docs for Node.
+    NodeDocs,
 
     /// Run a `node` repl. Builds a fresh debug version of Junction Node before
     /// starting the shell.
@@ -480,6 +484,14 @@ mod node {
         let build_cmd = if release { "build-release" } else { "build" };
         cmd!(sh, "npm {install_cmd} --fund=false").run()?;
         cmd!(sh, "npm run {build_cmd}").run()?;
+
+        Ok(())
+    }
+
+    pub(super) fn docs(sh: &Shell) -> anyhow::Result<()> {
+        let _dir = sh.push_dir("junction-node");
+        cmd!(sh, "npm install --fund=false").run()?;
+        cmd!(sh, "npx typedoc").run()?;
 
         Ok(())
     }

@@ -117,7 +117,6 @@ jobs:
           path: junction-node/dist/*.tgz
 
   npm-publish:
-    name: publish-to-npm
     needs: [ts-package, native-packages]
     runs-on: ubuntu-latest
 
@@ -152,3 +151,34 @@ jobs:
           for package in ./dist/*.tgz; do
             npm publish --provenance --access public $package
           done
+
+  publish-to-github:
+    needs: [npm-publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
+      - name: Get version from Cargo.toml
+        id: version
+        working-directory: junction-node
+        run: |
+          VERSION=$(grep -m 1 -oP 'version = "\K[^"]+' Cargo.toml)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          regex="([0-9]+\.[0-9]+)\.[0-9]+.*"
+          [[ $VERSION =~ $regex ]]
+          maj_min_version=${BASH_REMATCH[1]}
+          echo "maj_min_version=$maj_min_version" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger other workflows related to the release
+        if: inputs.dry-run == false
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          event-type: node-release
+          client-payload: >
+            {
+              "version": "${{ steps.version.outputs.version }}",
+              "maj_min_version": "${{ steps.version.outputs.maj_min_version }}",
+              "sha": "${{ inputs.sha || github.sha }}"
+            }

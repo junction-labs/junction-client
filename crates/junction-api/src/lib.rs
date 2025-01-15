@@ -1,4 +1,8 @@
-//! The Junction configuration API. This crate allows you to build configuration
+//! The core implementation for Junction - an xDS dynamically-configurable API load-balancer library.
+//!
+//! * [Getting Started](https://docs.junctionlabs.io/getting-started/rust)
+//!
+//! This crate allows you to build configuration
 //! for a dynamic HTTP client and export it to a control plane or pass it
 //! directly to an in-process client. Junction configuration is expressible as
 //! plain Rust structs, and can be serialized/deserialized with a [serde]
