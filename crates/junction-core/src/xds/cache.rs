@@ -363,7 +363,7 @@ impl CacheReader {
                 self.data.$field.iter().map(|entry| {
                     let name = entry.name().to_string();
                     let type_url = <$xds_type>::type_url();
-                    let version = entry.version().clone();
+                    let version = Some(entry.version().clone());
                     let xds = entry.data().map(|data| {
                         protobuf::Any::from_msg(data.xds()).expect("generated invalid protobuf")
                     });

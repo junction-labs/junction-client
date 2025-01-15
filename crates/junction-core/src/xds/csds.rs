@@ -21,7 +21,7 @@ use xds_api::pb::envoy::{
     },
 };
 
-use crate::xds::{CacheReader, XdsConfig};
+use crate::xds::{delta_cache::CacheReader, XdsConfig};
 
 /// Run a CSDS server listening on `localhost` at the given port.
 pub async fn local_server(cache: CacheReader, port: u16) -> Result<(), tonic::transport::Error> {
@@ -109,11 +109,12 @@ fn to_generic_config(config: XdsConfig) -> GenericXdsConfig {
         (Some(_), None) => ClientResourceStatus::Acked,
         _ => ClientResourceStatus::Unknown,
     };
+    let version_info = config.version.map(|v| v.to_string()).unwrap_or_default();
 
     GenericXdsConfig {
         type_url: config.type_url,
         name: config.name,
-        version_info: config.version.to_string(),
+        version_info,
         xds_config: config.xds,
         client_status: client_status.into(),
         ..Default::default()
