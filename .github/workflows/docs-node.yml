@@ -19,7 +19,8 @@ env:
   rust_stable: stable
 
 concurrency:
-  group: ${{ github.job }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -61,6 +62,6 @@ jobs:
         if: github.event_name == 'repository_dispatch'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: junction-python/docs/build/html
+          folder: junction-node/docs
           target-folder: api/node/stable
           single-commit: true
