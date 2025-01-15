@@ -136,20 +136,20 @@ def retry_test(args):
         "Retry Test - 502's have retries configured and will succeed, 501s do not"
     )
 
-    http_server: junction.config.Service = {
+    service: junction.config.Service = {
         "type": "kube",
-        "name": "jct-http-server",
+        "name": "jct-simple-app",
         "namespace": "default",
     }
-    http_server_feature_1: junction.config.Service = {
+    service_v2: junction.config.Service = {
         "type": "kube",
-        "name": "jct-http-server-feature-1",
+        "name": "jct-simple-app-v2",
         "namespace": "default",
     }
     routes: List[junction.config.Route] = [
         {
             "id": "retry-sample",
-            "hostnames": ["jct-http-server.default.svc.cluster.local"],
+            "hostnames": ["jct-simple-app.default.svc.cluster.local"],
             "rules": [
                 {
                     "matches": [
@@ -165,12 +165,12 @@ def retry_test(args):
                         backoff=0.001,
                     ),
                     "backends": [
-                        {**http_server_feature_1, "port": 8008},
+                        {**service_v2, "port": 8008},
                     ],
                 },
                 {
                     "backends": [
-                        {**http_server, "port": 8008},
+                        {**service, "port": 8008},
                     ]
                 },
             ],
@@ -195,31 +195,31 @@ def retry_test(args):
 def path_match_test(args):
     print_header("Header Match - 50% of /feature-1/index sent to a different backend")
 
-    http_server: junction.config.Service = {
+    service: junction.config.Service = {
         "type": "kube",
-        "name": "jct-http-server",
+        "name": "jct-simple-app",
         "namespace": "default",
     }
-    http_server_feature_1: junction.config.Service = {
+    service_v2: junction.config.Service = {
         "type": "kube",
-        "name": "jct-http-server-feature-1",
+        "name": "jct-simple-app-v2",
         "namespace": "default",
     }
     routes: List[junction.config.Route] = [
         {
             "id": "retry-sample",
-            "hostnames": ["jct-http-server.default.svc.cluster.local"],
+            "hostnames": ["jct-simple-app.default.svc.cluster.local"],
             "rules": [
                 {
                     "matches": [{"path": {"value": "/feature-1/index"}}],
                     "backends": [
                         {
-                            **http_server,
+                            **service,
                             "weight": 50,
                             "port": 8008,
                         },
                         {
-                            **http_server_feature_1,
+                            **service_v2,
                             "weight": 50,
                             "port": 8008,
                         },
@@ -227,7 +227,7 @@ def path_match_test(args):
                 },
                 {
                     "backends": [
-                        {**http_server, "port": 8008},
+                        {**service, "port": 8008},
                     ]
                 },
             ],
@@ -253,7 +253,7 @@ def path_match_test(args):
         for key, value in results[1].items():
             # unlike round robin, split is non-deterministic, so need wide bars
             # here
-            if "jct-http-server-feature-1" in key:
+            if "jct-simple-app-v2" in key:
                 assert value > 40  # should be ~100
             else:
                 assert value < 50  # should be ~ 33
@@ -268,7 +268,7 @@ def ring_hash_test(args):
         {
             "id": {
                 "type": "kube",
-                "name": "jct-http-server",
+                "name": "jct-simple-app",
                 "namespace": "default",
                 "port": 8008,
             },
@@ -310,19 +310,19 @@ def timeouts_test(args):
     }
     results = []
     for config_name, config in configs.items():
-        http_server: junction.config.Service = {
+        service: junction.config.Service = {
             "type": "kube",
-            "name": "jct-http-server",
+            "name": "jct-simple-app",
             "namespace": "default",
         }
         routes: List[junction.config.Route] = [
             {
                 "id": "timeouts-sample",
-                "hostnames": ["jct-http-server.default.svc.cluster.local"],
+                "hostnames": ["jct-simple-app.default.svc.cluster.local"],
                 "rules": [
                     {
                         "backends": [
-                            {**http_server, "port": 8008},
+                            {**service, "port": 8008},
                         ],
                         "timeouts": config,
                     }
@@ -355,19 +355,19 @@ def urllib3_test(args):
         "urllib3 - We repeat the timeouts sample, using urllib3 directly instead"
     )
 
-    http_server: junction.config.Service = {
+    service: junction.config.Service = {
         "type": "kube",
-        "name": "jct-http-server",
+        "name": "jct-simple-app",
         "namespace": "default",
     }
     default_routes: List[junction.config.Route] = [
         {
             "id": "urllib3-sample",
-            "hostnames": ["jct-http-server.default.svc.cluster.local"],
+            "hostnames": ["jct-simple-app.default.svc.cluster.local"],
             "rules": [
                 {
                     "backends": [
-                        {**http_server, "port": 8008},
+                        {**service, "port": 8008},
                     ],
                     "timeouts": {"backend_request": 0.05},
                 }
@@ -424,7 +424,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Samples for Junction")
     parser.add_argument(
         "--base-url",
-        default="http://jct-http-server.default.svc.cluster.local:8008",
+        default="http://jct-simple-app.default.svc.cluster.local:8008",
         help="The base url to send requests to",
     )
     parser.add_argument(
@@ -435,7 +435,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use-gateway-api",
         action=argparse.BooleanOptionalAction,
-        help="whether to use and a Gateway API server for configuration",
+        help="whether to use the Gateway API for dynamic configuration",
     )
 
     args = parser.parse_args()

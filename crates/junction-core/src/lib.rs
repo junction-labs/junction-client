@@ -1,4 +1,6 @@
-//! An XDS-compatible HTTP Client.
+//! The core implementation for Junction - an xDS dynamically-configurable API load-balancer library.
+//!
+//! * [Getting Started](https://docs.junctionlabs.io/getting-started/rust)
 
 mod error;
 mod url;

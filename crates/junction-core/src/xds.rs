@@ -285,8 +285,8 @@ impl AdsTask {
                 // continue, but don't wait too long on broken pipe.
                 Err(ConnectionError::Status(status)) => {
                     // FIXME: emit an event with tracing or metrics or something here
-                    let is_broken_pipe = unwrap_io_error(&status)
-                        .map_or(false, |e| e.kind() == ErrorKind::BrokenPipe);
+                    let is_broken_pipe =
+                        unwrap_io_error(&status).is_some_and(|e| e.kind() == ErrorKind::BrokenPipe);
 
                     if !is_broken_pipe {
                         debug!(err = %status, "ADS connection closed unexpectedly");

@@ -1,19 +1,19 @@
-name: Build Python documentation
+name: Build Node reference documentation
 
 on:
   pull_request:
     paths:
-      - junction-python/**
-      - .github/workflows/docs-python.yml
+      - junction-node/**
+      - .github/workflows/docs-node.yml
   push:
     branches:
       - main
     paths:
-      - junction-python/**
-      - .github/workflows/docs-python.yml
+      - junction-node/**
+      - .github/workflows/docs-node.yml
   repository_dispatch:
     types:
-      - python-release
+      - node-release
 
 env:
   rust_stable: stable
@@ -38,33 +38,23 @@ jobs:
           toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.12"
+          node-version: 22
 
-      - name: Build and install junction python
-        run: cargo xtask python-build
+      - name: Build and install junction node
+        run: cargo xtask node-build
 
       - name: Build documentation
-        env:
-          JUNCTION_VERSION: ${{ github.event.client_payload.version || 'main' }}
-        run: cargo xtask python-docs
+        run: cargo xtask node-docs
 
       - name: Deploy docs for latest development version
         if: github.event_name == 'push' && github.ref_name == 'main'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: junction-python/docs/build/html
-          target-folder: api/python/dev
-          single-commit: true
-
-      - name: Deploy docs for latest release version - versioned
-        if: github.event_name == 'repository_dispatch'
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: junction-python/docs/build/html
-          target-folder: api/python/version/${{ github.event.client_payload.maj_min_version }}
+          folder: junction-node/docs
+          target-folder: api/node/dev
           single-commit: true
 
       - name: Deploy docs for latest release version - stable
@@ -72,5 +62,5 @@ jobs:
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: junction-python/docs/build/html
-          target-folder: api/python/stable
+          target-folder: api/node/stable
           single-commit: true

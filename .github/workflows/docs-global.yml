@@ -11,9 +11,7 @@ on:
     paths:
       - docs/**
       - .github/workflows/docs-global.yml
-  repository_dispatch:
-    types:
-      - python-release-docs
+  workflow_dispatch:
 
 env:
   rust_stable: stable
@@ -57,13 +55,13 @@ jobs:
       - name: "Install Rust @ ${{ env.rust_stable }}"
         uses: dtolnay/rust-toolchain@stable
         with:
-            toolchain: ${{ env.rust_stable }}
+          toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Create virtual environment
         run: |
@@ -93,6 +91,7 @@ jobs:
           folder: docs/site
           clean-exclude: |
             api/python/
+            api/node/
             api/rust/
           single-commit: true
 

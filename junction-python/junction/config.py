@@ -221,14 +221,14 @@ class RouteRule(typing.TypedDict):
     name: str
     """A human-readable name for this rule.
 
-    This name is compeltely optional, and will only be used in diagnostics
+    This name is completely optional, and will only be used in diagnostics
     to make it easier to debug. Diagnostics that don't have a name will be
     referred to by their index in a Route's list of rules."""
 
     matches: typing.List[RouteMatch]
     """A list of match rules applied to an outgoing request.  Each match is
     independent; this rule will be matched if **any** of the listed matches
-    is satsified.
+    is satisfied.
 
     If no matches are specified, this Rule matches any outgoing request."""
 

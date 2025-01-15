@@ -11,9 +11,7 @@ on:
     paths:
       - crates/**
       - .github/workflows/docs-rust.yml
-  repository_dispatch:
-    types:
-      - rust-release
+
 env:
   rust_stable: stable
 
@@ -32,7 +30,7 @@ jobs:
       - name: "Install Rust @ ${{ env.rust_stable }}"
         uses: dtolnay/rust-toolchain@stable
         with:
-            toolchain: ${{ env.rust_stable }}
+          toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
 
       - name: Build Rust documentation

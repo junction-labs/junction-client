@@ -142,7 +142,7 @@ export interface SockAddr {
  * A Junction endpoint.
  */
 // TODO: this should be generated from junction-api
-interface EndpointProps {
+export interface EndpointProps {
   readonly scheme: string;
   readonly sockAddr: SockAddr;
   readonly hostname: string;
