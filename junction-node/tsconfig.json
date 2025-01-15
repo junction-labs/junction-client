@@ -6,29 +6,17 @@
     "removeComments": false,
     "outDir": "./lib",
     "rootDir": "./ts",
-    "lib": [
-      "es2022",
-      "DOM",
-      "DOM.Iterable"
-    ]
+    "lib": ["es2022", "DOM", "DOM.Iterable"]
   },
-  "exclude": [
-    "lib"
-  ],
+  "exclude": ["lib"],
   "typedocOptions": {
     "entryPointStrategy": "expand",
     "excludePrivate": true,
     "excludeProtected": true,
     "excludeExternals": true,
     "categorizeByGroup": false,
-    "entryPoints": [
-      "ts/core.cts",
-      "ts/fetch.cts",
-      "ts/load.cts",
-    ],
+    "entryPoints": ["ts/core.cts", "ts/fetch.cts", "ts/load.cts"],
     "out": "docs",
-    "sort": [
-      "alphabetical"
-    ]
+    "sort": ["alphabetical"]
   }
 }

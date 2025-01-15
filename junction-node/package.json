@@ -31,10 +31,7 @@
     }
   },
   "types": "./lib/index.d.cts",
-  "files": [
-    "scripts/postinstall.js",
-    "lib/**/*.?({c,m}){t,j}s"
-  ],
+  "files": ["scripts/postinstall.js", "lib/**/*.?({c,m}){t,j}s"],
   "neon": {
     "type": "library",
     "org": "@junction-node/",

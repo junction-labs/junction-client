@@ -8,9 +8,9 @@
 import * as ffi from "./load.cjs";
 
 declare module "./load.cjs" {
-  interface Runtime { }
-  interface Client { }
-  interface EndpointHandle { }
+  interface Runtime {}
+  interface Client {}
+  interface EndpointHandle {}
 
   type EndpointResult = [EndpointHandle, EndpointProps];
 
