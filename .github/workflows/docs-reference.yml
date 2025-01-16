@@ -62,15 +62,11 @@ jobs:
       - name: Build node documentation
         run: cargo xtask node-docs
 
-  deploy-docs:
-    needs: [build-docs]
-    runs-on: ubuntu-latest
-    steps:
       - name: Deploy Rust dev docs
         if: github.event_name == 'push' && github.ref_name == 'main'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: target/doc
+          folder: target/doc/
           target-folder: api/rust/dev
           single-commit: true
 
