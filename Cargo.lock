@@ -1070,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "junction-api-gen"
-version = "0.2.1"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "askama",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "junction-node"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "http 1.1.0",
  "junction-api",
