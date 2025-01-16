@@ -155,6 +155,11 @@ jobs:
   publish-to-github:
     needs: [npm-publish]
     runs-on: ubuntu-latest
+
+    #need this here for the docs publishing step to work
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
         with:

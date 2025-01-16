@@ -14,6 +14,10 @@ on:
     types:
       - python-release
       - node-release
+      ## Note if you add to this list, the job that _calls in_ must have its permissions
+      ## already set for some reason:
+      ##  permissions: 
+      ##    contents: write
 
 env:
   rust_stable: stable
