@@ -90,7 +90,7 @@ jobs:
           single-commit: true
 
       - name: Deploy Python versioned docs
-        if: github.event_name == 'repository_dispatch' && github.event.type == 'python-release'
+        if: github.event_name == 'repository_dispatch' && github.event.action == 'python-release'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: junction-python/docs/build/html
@@ -98,7 +98,7 @@ jobs:
           single-commit: true
 
       - name: Deploy Python stable docs
-        if: github.event_name == 'repository_dispatch' && github.event.type == 'python-release'
+        if: github.event_name == 'repository_dispatch' && github.event.action == 'python-release'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: junction-python/docs/build/html
@@ -106,7 +106,7 @@ jobs:
           single-commit: true
 
       - name: Deploy Node stable docs
-        if: github.event_name == 'repository_dispatch' && github.event.type == 'node-release'
+        if: github.event_name == 'repository_dispatch' && github.event.action == 'node-release'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: junction-node/docs
