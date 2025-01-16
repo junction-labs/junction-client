@@ -489,6 +489,7 @@ mod node {
 
     pub(super) fn docs(sh: &Shell) -> anyhow::Result<()> {
         let _dir = sh.push_dir("junction-node");
+        let _env = loud_env(sh, "JUNCTION_CLIENT_SKIP_POSTINSTALL", "true");
         cmd!(sh, "npm install --fund=false").run()?;
         cmd!(sh, "npx typedoc").run()?;
 
