@@ -31,10 +31,7 @@
     }
   },
   "types": "./lib/index.d.cts",
-  "files": [
-    "scripts/postinstall.js",
-    "lib/**/*.?({c,m}){t,j}s"
-  ],
+  "files": ["scripts/postinstall.js", "lib/**/*.?({c,m}){t,j}s"],
   "neon": {
     "type": "library",
     "org": "@junction-node/",
@@ -58,10 +55,10 @@
     "url": "https://github.com/junction-labs/junction-client"
   },
   "optionalDependencies": {
-    "@junction-labs/client-darwin-arm64": "0.2.2",
-    "@junction-labs/client-darwin-x64": "0.2.2",
-    "@junction-labs/client-linux-arm64-gnu": "0.2.2",
-    "@junction-labs/client-linux-x64-gnu": "0.2.2",
-    "@junction-labs/client-win32-x64-msvc": "0.2.2"
+    "@junction-labs/client-darwin-arm64": "0.2.4",
+    "@junction-labs/client-darwin-x64": "0.2.4",
+    "@junction-labs/client-linux-arm64-gnu": "0.2.4",
+    "@junction-labs/client-linux-x64-gnu": "0.2.4",
+    "@junction-labs/client-win32-x64-msvc": "0.2.4"
   }
 }

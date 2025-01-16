@@ -44,7 +44,7 @@ try {
   path = require.resolve(libName);
 } catch {
   console.error(
-    "Failed to install native libs for @junction-labs/client. Junction will not function!",
+    `Failed to install native lib ${libName} for @junction-labs/client. Junction will not function!`,
     "\n",
     "",
   );
