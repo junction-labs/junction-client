@@ -275,8 +275,7 @@ mod rust {
     fn crate_args(crates: &[impl AsRef<str>]) -> Vec<&str> {
         crates
             .iter()
-            .map(|name| ["-p", name.as_ref()])
-            .flatten()
+            .flat_map(|name| ["-p", name.as_ref()])
             .collect()
     }
 }
@@ -478,7 +477,7 @@ mod node {
 
     pub(super) fn build(sh: &Shell, clean_install: bool, release: bool) -> anyhow::Result<()> {
         let _dir = sh.push_dir("junction-node");
-        let _env = loud_env(&sh, "JUNCTION_CLIENT_SKIP_POSTINSTALL", "true");
+        let _env = loud_env(sh, "JUNCTION_CLIENT_SKIP_POSTINSTALL", "true");
 
         let install_cmd = if clean_install { "ci" } else { "i" };
         let build_cmd = if release { "build-release" } else { "build" };
