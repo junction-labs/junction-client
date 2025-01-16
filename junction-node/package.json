@@ -1,6 +1,6 @@
 {
   "name": "@junction-labs/client",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "description": "",
   "main": "./lib/index.cjs",
   "scripts": {
@@ -31,7 +31,10 @@
     }
   },
   "types": "./lib/index.d.cts",
-  "files": ["scripts/postinstall.js", "lib/**/*.?({c,m}){t,j}s"],
+  "files": [
+    "scripts/postinstall.js",
+    "lib/**/*.?({c,m}){t,j}s"
+  ],
   "neon": {
     "type": "library",
     "org": "@junction-node/",

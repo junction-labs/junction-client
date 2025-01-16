@@ -160,11 +160,11 @@ jobs:
         with:
           ref: ${{ inputs.sha }}
 
-      - name: Get version from Cargo.toml
+      - name: Get version from package.json
         id: version
         working-directory: junction-node
         run: |
-          VERSION=$(grep -m 1 -oP 'version = "\K[^"]+' Cargo.toml)
+          VERSION=$(grep -m 1 -oP 'version = "\K[^"]+' package.json)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           regex="([0-9]+\.[0-9]+)\.[0-9]+.*"
           [[ $VERSION =~ $regex ]]
