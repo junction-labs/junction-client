@@ -1,16 +1,16 @@
-name: Build global documentation
+name: Build user guide
 
 on:
   pull_request:
     paths:
       - docs/**
-      - .github/workflows/docs-global.yml
+      - .github/workflows/docs-user-guide.yml
   push:
     branches:
       - main
     paths:
       - docs/**
-      - .github/workflows/docs-global.yml
+      - .github/workflows/docs-user-guide.yml
   workflow_dispatch:
 
 env:
@@ -95,7 +95,6 @@ jobs:
             api/rust/
           single-commit: true
 
-      # Make sure documentation artifacts are not cached
+      # Make sure artifacts are not cached
       - name: Clean up documentation artifacts
-        if: ${{ github.ref_name == 'main' }}
         run: rm -rf docs/site

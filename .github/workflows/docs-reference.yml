@@ -1,0 +1,118 @@
+name: Build Reference documentation
+#
+# Why all in the one GHA? To reduce contention on github-pages-deploy-action
+# where synchronous changes have uncertain impact, and concurrency controls
+# allow a max queue depth of 1. This keeps things nice and serialized.
+#
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  repository_dispatch:
+    types:
+      - python-release
+      - node-release
+
+env:
+  rust_stable: stable
+
+permissions:
+  contents: write
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.client_payload.sha }}
+
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build Rust documentation
+        run: cargo xtask ci-doc
+
+      - name: Build python
+        run: cargo xtask python-build
+
+      - name: Build python documentation
+        env:
+          JUNCTION_VERSION: ${{ github.event.client_payload.version || 'main' }}
+        run: cargo xtask python-docs
+
+      - name: Build node
+        run: cargo xtask node-build
+
+      - name: Build node documentation
+        run: cargo xtask node-docs
+
+  deploy-docs:
+    needs: [build-docs]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy Rust dev docs
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: target/doc
+          target-folder: api/rust/dev
+          single-commit: true
+
+      - name: Clean up rust dev docs artifacts
+        run: rm -rf target/doc
+
+      - name: Deploy Python dev docs
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: junction-python/docs/build/html
+          target-folder: api/python/dev
+          single-commit: true
+
+      - name: Deploy Node dev docs
+        if: github.event_name == 'push' && github.ref_name == 'main'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: junction-node/docs
+          target-folder: api/node/dev
+          single-commit: true
+
+      - name: Deploy Python versioned docs
+        if: github.event_name == 'repository_dispatch' && github.event.type == 'python-release'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: junction-python/docs/build/html
+          target-folder: api/python/version/${{ github.event.client_payload.maj_min_version }}
+          single-commit: true
+
+      - name: Deploy Python stable docs
+        if: github.event_name == 'repository_dispatch' && github.event.type == 'python-release'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: junction-python/docs/build/html
+          target-folder: api/python/stable
+          single-commit: true
+
+      - name: Deploy Node stable docs
+        if: github.event_name == 'repository_dispatch' && github.event.type == 'node-release'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: junction-node/docs
+          target-folder: api/node/stable
+          single-commit: true
