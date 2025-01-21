@@ -21,7 +21,7 @@ use xds_api::pb::envoy::{
     },
 };
 
-use crate::xds::{delta_cache::CacheReader, XdsConfig};
+use crate::xds::{cache::CacheReader, XdsConfig};
 
 /// Run a CSDS server listening on `localhost` at the given port.
 pub async fn local_server(cache: CacheReader, port: u16) -> Result<(), tonic::transport::Error> {
