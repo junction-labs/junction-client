@@ -119,7 +119,10 @@ impl AdsClient {
         node_id: String,
         cluster: String,
     ) -> Result<(AdsClient, AdsTask), tonic::transport::Error> {
-        let endpoint = Endpoint::from_shared(address)?;
+        // FIXME: make this configurable
+        let endpoint = Endpoint::from_shared(address)?
+            .connect_timeout(Duration::from_secs(5))
+            .tcp_nodelay(true);
 
         let node_info = xds_core::Node {
             id: node_id,
