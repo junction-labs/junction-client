@@ -4,12 +4,11 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
 
-use enum_map::EnumMap;
 use junction_api::backend::Backend;
 use junction_api::backend::BackendId;
 use junction_api::http::Route;
+use junction_api::Hostname;
 use smol_str::SmolStr;
-use xds_api::pb::google::protobuf;
 use xds_api::{
     pb::envoy::{
         config::{
@@ -136,11 +135,7 @@ impl ResourceType {
     }
 
     pub(crate) const fn supports_wildcard(&self) -> bool {
-        match self {
-            ResourceType::Cluster => true,
-            ResourceType::Listener => true,
-            _ => false,
-        }
+        matches!(self, ResourceType::Cluster | ResourceType::Listener)
     }
 
     /// Return all of the known enum variants in xDS's make-before-break order.
@@ -173,23 +168,6 @@ pub(crate) enum ResourceVec {
 type VersionedVec<T> = Vec<(ResourceVersion, T)>;
 
 impl ResourceVec {
-    pub(crate) fn from_any(
-        rtype: ResourceType,
-        version: ResourceVersion,
-        any: Vec<protobuf::Any>,
-    ) -> Result<Self, prost::DecodeError> {
-        match rtype {
-            ResourceType::Cluster => from_any_vec(version, any).map(ResourceVec::Cluster),
-            ResourceType::ClusterLoadAssignment => {
-                from_any_vec(version, any).map(Self::ClusterLoadAssignment)
-            }
-            ResourceType::Listener => from_any_vec(version, any).map(Self::Listener),
-            ResourceType::RouteConfiguration => {
-                from_any_vec(version, any).map(Self::RouteConfiguration)
-            }
-        }
-    }
-
     pub(crate) fn from_resources(
         rtype: ResourceType,
         resources: Vec<xds_discovery::Resource>,
@@ -203,22 +181,6 @@ impl ResourceVec {
             ResourceType::RouteConfiguration => {
                 from_resource_vec(resources).map(Self::RouteConfiguration)
             }
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn names(&self) -> Vec<String> {
-        macro_rules! clone_name {
-            ($v:expr, $name:ident) => {
-                $v.iter().map(|(_, x)| x.$name.clone()).collect()
-            };
-        }
-
-        match self {
-            ResourceVec::Listener(vec) => clone_name!(vec, name),
-            ResourceVec::RouteConfiguration(vec) => clone_name!(vec, name),
-            ResourceVec::Cluster(vec) => clone_name!(vec, name),
-            ResourceVec::ClusterLoadAssignment(vec) => clone_name!(vec, cluster_name),
         }
     }
 
@@ -289,11 +251,12 @@ fn from_resource_vec<M: Default + prost::Name>(
 fn to_resource_vec<M: prost::Name>(
     xs: &VersionedVec<M>,
 ) -> Result<Vec<xds_discovery::Resource>, prost::EncodeError> {
+    use xds_api::pb::google::protobuf;
+
     let mut resources = Vec::with_capacity(xs.len());
 
     for (v, msg) in xs {
         let as_any = protobuf::Any::from_msg(msg)?;
-
         resources.push(xds_discovery::Resource {
             resource: Some(as_any),
             version: v.to_string(),
@@ -302,46 +265,6 @@ fn to_resource_vec<M: prost::Name>(
     }
 
     Ok(resources)
-}
-
-fn from_any_vec<M: Default + prost::Name>(
-    version: ResourceVersion,
-    any: Vec<protobuf::Any>,
-) -> Result<VersionedVec<M>, prost::DecodeError> {
-    // TODO: if the type_url checks become a bottleneck, we can only check once
-    // and then decode every value instead of calling protobuf::Any::to_msg
-    let mut ms = Vec::with_capacity(any.len());
-    for a in any {
-        ms.push((version.clone(), a.to_msg()?));
-    }
-
-    Ok(ms)
-}
-
-/// A specialized set of `ResourceType`s.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ResourceTypeSet(EnumMap<ResourceType, bool>);
-
-impl ResourceTypeSet {
-    pub(crate) fn len(&self) -> usize {
-        self.0.values().filter(|x| **x).count()
-    }
-
-    pub(crate) fn values(&self) -> impl Iterator<Item = ResourceType> {
-        self.0.into_iter().filter_map(|(k, v)| v.then_some(k))
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        !self.0.values().any(|e| *e)
-    }
-
-    pub(crate) fn insert(&mut self, resource_type: ResourceType) {
-        self.0[resource_type] = true
-    }
-
-    pub(crate) fn contains(&self, resource_type: ResourceType) -> bool {
-        self.0[resource_type]
-    }
 }
 
 /// A typed reference to another resource.
@@ -557,9 +480,14 @@ pub(crate) struct Cluster {
 }
 
 impl Cluster {
-    pub(crate) fn id(&self) -> &BackendId {
-        &self.backend_lb.config.id
+    pub(crate) fn dns_name(&self) -> Option<(Hostname, u16)> {
+        let id = &self.backend_lb.config.id;
+        match &id.service {
+            junction_api::Service::Dns(dns) => Some((dns.hostname.clone(), id.port)),
+            _ => None,
+        }
     }
+
     pub(crate) fn from_xds(
         xds: xds_cluster::Cluster,
         default_action: Option<&xds_route::RouteAction>,

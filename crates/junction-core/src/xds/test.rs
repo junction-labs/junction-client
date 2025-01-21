@@ -15,9 +15,7 @@ use xds_api::pb::{
             listener::v3 as xds_listener,
             route::v3::{self as xds_route, route_action::hash_policy::Header},
         },
-        service::discovery::v3::{
-            self as xds_discovery, DeltaDiscoveryRequest, DeltaDiscoveryResponse,
-        },
+        service::discovery::v3::{DeltaDiscoveryRequest, DeltaDiscoveryResponse},
     },
     google::{protobuf, rpc},
 };
@@ -143,6 +141,16 @@ macro_rules! req {
             n = "",
             add = $add,
             remove = vec![],
+            init = vec![],
+            err = None
+        )
+    };
+    (t = $ty:expr, remove = $remove:expr $(,)*) => {
+        crate::xds::test::req!(
+            t = $ty,
+            n = "",
+            add = vec![],
+            remove = $remove,
             init = vec![],
             err = None
         )
@@ -388,18 +396,6 @@ pub fn cluster_from_name(
         cluster.lb_policy = lb_policy.into();
     }
     cluster
-}
-
-pub fn cluster_inline(
-    name: &'static str,
-    cla: xds_endpoint::ClusterLoadAssignment,
-) -> xds_cluster::Cluster {
-    xds_cluster::Cluster {
-        name: name.to_string(),
-        cluster_discovery_type: None,
-        load_assignment: Some(cla),
-        ..Default::default()
-    }
 }
 
 pub fn cluster_load_assignment(

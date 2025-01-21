@@ -18,28 +18,28 @@
 //! The [AdsTask] returned from a client is the actual io in this module - an
 //! [AdsTask] actually does gRPC and listens on sockets and drives a new
 //! [AdsConnection] every time it reconnects.
-//!
-//!  # TODO
-//!
-//! - Figure out how to run a Client without an upstream ADS server. Right now
-//!   we don't process subscription updates until a gRPC connection gets
-//!   established which seems bad.
-//!
-//!  - XDS client features:
-//!    `envoy.lb.does_not_support_overprovisioning` and friends. See
-//!    <https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md>.
+
+//  # TODO
+//
+// - Figure out how to run a Client without an upstream ADS server. Right now
+//   we don't process subscription updates until a gRPC connection gets
+//   established which seems bad.
+//
+//  - XDS client features:
+//    `envoy.lb.does_not_support_overprovisioning` and friends. See
+//    <https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md>.
 
 use bytes::Bytes;
-use delta_cache::{Cache, CacheReader};
+use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
-use futures::TryStreamExt;
+use futures::{FutureExt, TryStreamExt};
 use junction_api::{backend::BackendId, http::Route, Hostname, Service};
 use std::{
     borrow::Cow, collections::BTreeSet, future::Future, io::ErrorKind, sync::Arc, time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, Receiver};
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::Endpoint;
+use tonic::{transport::Endpoint, Streaming};
 use tracing::debug;
 use xds_api::pb::{
     envoy::{
@@ -52,7 +52,7 @@ use xds_api::pb::{
     google::{protobuf, rpc::Status as GrpcStatus},
 };
 
-mod delta_cache;
+mod cache;
 
 mod resources;
 pub use resources::ResourceVersion;
@@ -133,21 +133,21 @@ impl AdsClient {
 
         // TODO: how should we pick this number?
         let (sub_tx, sub_rx) = mpsc::channel(10);
-        let delta_cache = Cache::default();
+        let cache = Cache::default();
 
         // FIXME: make this configurable
         let dns = StdlibResolver::new_with(Duration::from_secs(5), Duration::from_millis(500), 2);
 
         let client = AdsClient {
             subs: sub_tx,
-            cache: delta_cache.reader(),
+            cache: cache.reader(),
             dns: dns.clone(),
         };
         let task = AdsTask {
             endpoint,
             initial_channel: None,
             node_info,
-            delta_cache,
+            cache,
             dns,
             subs: sub_rx,
         };
@@ -211,11 +211,12 @@ impl ConfigCache for AdsClient {
     }
 }
 
+/// The IO-doing, gRPC adjacent part of running an ADS client.
 pub(crate) struct AdsTask {
     endpoint: tonic::transport::Endpoint,
     initial_channel: Option<tonic::transport::Channel>,
     node_info: xds_core::Node,
-    delta_cache: Cache,
+    cache: Cache,
     dns: StdlibResolver,
     subs: mpsc::Receiver<SubscriptionUpdate>,
 }
@@ -229,27 +230,39 @@ impl std::fmt::Display for ShutdownError {
     }
 }
 
-macro_rules! trace_delta_request {
+macro_rules! log_request {
     ($request:expr) => {
         tracing::debug!(
             nack = $request.error_detail.is_some(),
-            "DeltaDiscoveryRequest(n={:?}, ty={:?}, r={:?})",
+            "DeltaDiscoveryRequest(n={:?}, ty={:?}, r={:?}, init={:?})",
             $request.response_nonce,
             $request.type_url,
             $request.resource_names_subscribe,
+            $request.initial_resource_versions,
         );
     };
 }
 
-macro_rules! trace_delta_response {
+macro_rules! log_response {
     ($response:expr) => {
-        tracing::debug!(
-            "DeltaDiscoveryResponse(n={:?}, ty={:?}, r_count={:?})",
-            $response.nonce,
-            $response.type_url,
-            $response.resources.len(),
-        );
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let names_and_versions = names_and_versions(&$response);
+            tracing::debug!(
+                "DeltaDiscoveryResponse(n={:?}, ty={:?}, r={:?})",
+                $response.nonce,
+                $response.type_url,
+                names_and_versions,
+            );
+        }
     };
+}
+
+fn names_and_versions(response: &DeltaDiscoveryResponse) -> Vec<(String, String)> {
+    response
+        .resources
+        .iter()
+        .map(|r| (r.name.clone(), r.version.clone()))
+        .collect()
 }
 
 impl AdsTask {
@@ -263,7 +276,7 @@ impl AdsTask {
         }
 
         loop {
-            match self.run_delta_connection().await {
+            match self.run_connection().await {
                 Ok(()) => break,
                 // on an ADS disconnect, just reconnect
                 Err(ConnectionError::AdsDisconnected) => continue,
@@ -314,67 +327,44 @@ impl AdsTask {
     // machine - we could keep that and have a separate disconnected loop that
     // we transition into, or we could pass a "NewConnection" message into here
     // and manually manage connected vs. disconnected state.
-    async fn run_delta_connection(&mut self) -> Result<(), ConnectionError> {
+    async fn run_connection(&mut self) -> Result<(), ConnectionError> {
+        let (xds_tx, xds_rx) = tokio::sync::mpsc::channel(10);
+
+        // set up the gRPC stream
         let channel = self.new_connection().await?;
         let mut client = AggregatedDiscoveryServiceClient::new(channel);
-
-        let (xds_tx, xds_rx) = tokio::sync::mpsc::channel(10);
         let stream_response = client
             .delta_aggregated_resources(ReceiverStream::new(xds_rx))
             .await?;
-
         let mut incoming = stream_response.into_inner();
-        let (mut conn, initial_requests) =
-            DeltaAdsConnection::new(self.node_info.clone(), &mut self.delta_cache);
 
+        // set DNS names
+        self.dns.set_names(self.cache.dns_names());
+
+        // set up the xDS connection and start sending messages
+        let (mut conn, initial_requests) =
+            AdsConnection::new(self.node_info.clone(), &mut self.cache);
         for msg in initial_requests {
-            trace_delta_request!(msg);
+            log_request!(msg);
             if xds_tx.send(msg).await.is_err() {
                 return Err(ConnectionError::AdsDisconnected);
             }
         }
 
         loop {
-            tokio::select! {
-                xds_msg = incoming.try_next() => {
-                    // on GRPC status errors, the connection has died and we're
-                    // going to reconnect. pass the error up to reset things
-                    // and move on.
-                    let response = match xds_msg? {
-                        Some(response) => response,
-                        None => return Err(ConnectionError::AdsDisconnected),
-                    };
-                    trace_delta_response!(response);
-
-                    tracing::trace!("ads connection: handle_ads_message");
-                    conn.handle_ads_message(response);
-                }
-                sub_update = self.subs.recv() => {
-                    let Some(sub_update) = sub_update else {
-                        return Ok(())
-                    };
-
-                    tracing::trace!(
-                        ?sub_update,
-                        "ads connection: handle_subscription_update",
-                    );
-                    conn.handle_subscription_update(sub_update);
-                }
+            let is_eof = handle_update_batch(&mut conn, &mut self.subs, &mut incoming).await?;
+            if is_eof {
+                return Ok(());
             }
 
             let (outgoing, dns_updates) = conn.outgoing();
             for msg in outgoing {
-                trace_delta_request!(msg);
+                log_request!(msg);
                 if xds_tx.send(msg).await.is_err() {
                     return Err(ConnectionError::AdsDisconnected);
                 }
             }
-            update_dns(
-                &mut self.dns,
-                dns_updates.add,
-                dns_updates.remove,
-                None::<Vec<_>>,
-            );
+            update_dns(&self.dns, dns_updates.add, dns_updates.remove);
         }
     }
 
@@ -397,22 +387,94 @@ impl AdsTask {
     }
 }
 
+// handle a batch of incoming messages/subscriptions.
+//
+// awaits until an update is recvd from either subscriptions or xds, and then
+// immediately grabs any pending updates as well. returns as soon as there's
+// nothing to immediately do and handling updates would block.
+async fn handle_update_batch(
+    conn: &mut AdsConnection<'_>,
+    subs: &mut Receiver<SubscriptionUpdate>,
+    incoming: &mut Streaming<DeltaDiscoveryResponse>,
+) -> Result<bool, ConnectionError> {
+    // handle the next possible input. runs a biased select over gRPC and
+    // subscription inputs.
+    //
+    // this function is inlined here because:
+    // - abstracting a handle_batch method is miserable, the type system makes
+    //   it hard to abstract over a bunch of mut references like this.
+    // - there is no reason, even just testing, to run this function by
+    //   itself
+    //
+    // it's a bit weird to inline, but only a bit
+    async fn next_update(
+        conn: &mut AdsConnection<'_>,
+        subs: &mut Receiver<SubscriptionUpdate>,
+        incoming: &mut Streaming<DeltaDiscoveryResponse>,
+    ) -> Result<bool, ConnectionError> {
+        tokio::select! {
+            biased;
+
+            xds_msg = incoming.try_next() => {
+                // on GRPC status errors, the connection has died and we're
+                // going to reconnect. pass the error up to reset things
+                // and move on.
+                let response = match xds_msg? {
+                    Some(response) => response,
+                    None => return Err(ConnectionError::AdsDisconnected),
+                };
+                log_response!(response);
+
+                tracing::trace!("ads connection: handle_ads_message");
+                conn.handle_ads_message(response);
+            }
+            sub_update = subs.recv() => {
+                let Some(sub_update) = sub_update else {
+                    return Ok(true)
+                };
+
+                tracing::trace!(
+                    ?sub_update,
+                    "ads connection: handle_subscription_update",
+                );
+                conn.handle_subscription_update(sub_update);
+            }
+        }
+        Ok(false)
+    }
+
+    // await the next update
+    if next_update(conn, subs, incoming).await? {
+        return Ok(true);
+    }
+
+    // try to handle any immediately pending updates. do not await, there is
+    // probably some work to be done to handle effects now, so we should
+    // return back to the caller.
+    loop {
+        let Some(should_exit) = next_update(conn, subs, incoming).now_or_never() else {
+            break;
+        };
+
+        if should_exit? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 #[inline]
 fn update_dns(
     dns: &StdlibResolver,
     add: BTreeSet<(Hostname, u16)>,
     remove: BTreeSet<(Hostname, u16)>,
-    sync: Option<impl IntoIterator<Item = (Hostname, u16)>>,
 ) {
     for (name, port) in add {
         dns.subscribe(name, port);
     }
     for (name, port) in remove {
         dns.unsubscribe(&name, port);
-    }
-
-    if let Some(names) = sync {
-        dns.set_names(names);
     }
 }
 
@@ -450,7 +512,7 @@ fn unwrap_io_error(status: &tonic::Status) -> Option<&std::io::Error> {
     }
 }
 
-struct DeltaAdsConnection<'a> {
+struct AdsConnection<'a> {
     cache: &'a mut Cache,
     node: Option<xds_core::Node>,
     acks: EnumMap<ResourceType, Option<AckState>>,
@@ -476,7 +538,7 @@ impl AckState {
     }
 }
 
-impl<'a> DeltaAdsConnection<'a> {
+impl<'a> AdsConnection<'a> {
     fn new(node: xds_core::Node, cache: &'a mut Cache) -> (Self, Vec<DeltaDiscoveryRequest>) {
         let mut requests = Vec::with_capacity(ResourceType::all().len());
 
@@ -511,12 +573,32 @@ impl<'a> DeltaAdsConnection<'a> {
     }
 
     fn outgoing(&mut self) -> (Vec<DeltaDiscoveryRequest>, DnsUpdates) {
-        // map changes into responses. DNS updates get passed through (woo)
-        let (resources, dns) = self.cache.changes();
+        let mut responses = Vec::with_capacity(ResourceType::all().len());
+
+        // tee up invalid type messages.
+        //
+        // this should be a hyper rare ocurrence, so `take` the vec to reset the
+        // allocation to nothing instead of `drain` which keeps the capacity.
+        for (response_nonce, type_url) in std::mem::take(&mut self.unknown_types) {
+            let error_detail = Some(xds_api::pb::google::rpc::Status {
+                code: tonic::Code::InvalidArgument.into(),
+                message: "unknown type".to_string(),
+                ..Default::default()
+            });
+            responses.push(DeltaDiscoveryRequest {
+                type_url,
+                response_nonce,
+                error_detail,
+                ..Default::default()
+            })
+        }
+
+        // map changes into responses. DNS updates get passed through directly
+        let (resources, dns) = self.cache.collect();
 
         // EnumMap::into_iter will always cover all variants as keys in xDS
-        // make-before-break order.
-        let mut responses = Vec::with_capacity(ResourceType::all().len());
+        // make-before-break order, so just iterating over `resources` here gets
+        // us responses in an appropriate order.
         for (rtype, changes) in resources {
             let ack = self.get_ack(rtype);
 
@@ -540,15 +622,6 @@ impl<'a> DeltaAdsConnection<'a> {
             })
         }
 
-        // hyper rare ocurrence, take the vec to reset the allocation
-        for (response_nonce, type_url) in std::mem::take(&mut self.unknown_types) {
-            responses.push(DeltaDiscoveryRequest {
-                type_url,
-                response_nonce,
-                ..Default::default()
-            })
-        }
-
         (responses, dns)
     }
 
@@ -564,7 +637,11 @@ impl<'a> DeltaAdsConnection<'a> {
             Ok(r) => r,
             Err(e) => {
                 tracing::trace!(err = %e, "invalid proto");
-                self.set_ack(rtype, resp.nonce, Some("invalid resource".into()));
+                self.set_ack(
+                    rtype,
+                    resp.nonce,
+                    Some(format!("invalid resource: {e}").into()),
+                );
                 return;
             }
         };
@@ -597,6 +674,8 @@ impl<'a> DeltaAdsConnection<'a> {
                 for backend in backends {
                     self.cache.subscribe(ResourceType::Cluster, &backend.name());
 
+                    // TODO: should we have an explicit SubscriptionUpdate::AddEndpoints(BackendId)
+                    //       and avoid this?
                     if let Service::Dns(dns) = &backend.service {
                         self.cache.subscribe_dns(dns.hostname.clone(), backend.port);
                     }
@@ -645,9 +724,10 @@ impl DnsUpdates {
 
 #[cfg(test)]
 mod test_ads_conn {
-    use delta_cache::Cache;
+    use cache::Cache;
     use once_cell::sync::Lazy;
     use pretty_assertions::assert_eq;
+    use xds_api::pb::envoy::service::discovery::v3 as xds_discovery;
 
     use super::test as xds_test;
     use super::*;
@@ -660,8 +740,8 @@ mod test_ads_conn {
     /// create a new connection with TEST_NODE and the given cache. asserts that
     /// the first outgoing message has its Node set to TEST_NODE.
     #[track_caller]
-    fn new_conn(cache: &mut Cache) -> (DeltaAdsConnection, Vec<DeltaDiscoveryRequest>) {
-        let (conn, mut outgoing) = DeltaAdsConnection::new(TEST_NODE.clone(), cache);
+    fn new_conn(cache: &mut Cache) -> (AdsConnection, Vec<DeltaDiscoveryRequest>) {
+        let (conn, mut outgoing) = AdsConnection::new(TEST_NODE.clone(), cache);
 
         // assert the node is there
         if let Some(first) = outgoing.first_mut() {
@@ -936,6 +1016,91 @@ mod test_ads_conn {
     }
 
     #[test]
+    fn test_handle_ads_message_listener_removed() {
+        let mut cache = Cache::default();
+        assert!(cache.is_wildcard(ResourceType::Listener));
+
+        let (mut conn, _) = new_conn(&mut cache);
+
+        conn.handle_ads_message(xds_test::resp!(
+            n = "1",
+            add = ResourceVec::from_listeners(
+                "123".into(),
+                vec![xds_test::listener!("cooler.example.org", "cool-route")],
+            ),
+            remove = vec![],
+        ));
+        conn.handle_ads_message(xds_test::resp!(
+            n = "2",
+            add = ResourceVec::from_listeners(
+                "456".into(),
+                vec![xds_test::listener!("warmer.example.org", "warm-route")],
+            ),
+            remove = vec![],
+        ));
+        conn.handle_ads_message(xds_test::resp!(
+            n = "3",
+            add = ResourceVec::from_route_configs(
+                "789".into(),
+                vec![xds_test::route_config!(
+                    "cool-route",
+                    vec![xds_test::vhost!(
+                        "an-vhost",
+                        ["cooler.example.org"],
+                        [xds_test::route!(default "cooler.example.internal:8008")]
+                    )]
+                )],
+            ),
+            remove = vec![],
+        ));
+
+        let (outgoing, dns) = conn.outgoing();
+        // no dns changes until we get a cluster
+        assert!(dns.is_noop());
+
+        assert_eq!(
+            outgoing,
+            vec![
+                // new resource subs
+                xds_test::req!(
+                    t = ResourceType::Cluster,
+                    add = vec!["cooler.example.internal:8008"]
+                ),
+                // listener ack
+                xds_test::req!(t = ResourceType::Listener, n = "2"),
+                // route config acks and new sub
+                xds_test::req!(
+                    t = ResourceType::RouteConfiguration,
+                    n = "3",
+                    add = vec!["warm-route"]
+                ),
+            ],
+        );
+
+        // the server gets a delete for the listener we already have
+        conn.handle_ads_message(xds_test::resp!(
+            n = "4",
+            add = ResourceVec::from_listeners("123".into(), vec![]),
+            remove = vec!["warmer.example.org"],
+        ));
+
+        let (outgoing, dns) = conn.outgoing();
+        assert!(dns.is_noop());
+        assert_eq!(
+            outgoing,
+            vec![
+                // listener ack
+                xds_test::req!(t = ResourceType::Listener, n = "4"),
+                // route config remove
+                xds_test::req!(
+                    t = ResourceType::RouteConfiguration,
+                    remove = vec!["warm-route"],
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn test_handle_ads_message_cluster_cla() {
         let mut cache = Cache::default();
         assert!(cache.is_wildcard(ResourceType::Cluster));
@@ -1019,5 +1184,93 @@ mod test_ads_conn {
 
         let (outgoing, _) = conn.outgoing();
         assert_eq!(outgoing[0].node.as_ref(), Some(&*TEST_NODE));
+    }
+
+    #[test]
+    fn test_handle_unknown_type_url() {
+        let mut cache = Cache::default();
+        let (mut conn, _) = new_conn(&mut cache);
+
+        conn.handle_ads_message(DeltaDiscoveryResponse {
+            type_url: "made.up.type_url/Potato".to_string(),
+            ..Default::default()
+        });
+
+        let (outgoing, dns) = conn.outgoing();
+        assert!(dns.is_noop());
+        assert_eq!(
+            outgoing,
+            vec![DeltaDiscoveryRequest {
+                type_url: "made.up.type_url/Potato".to_string(),
+                error_detail: Some(xds_api::pb::google::rpc::Status {
+                    code: tonic::Code::InvalidArgument.into(),
+                    message: "unknown type".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[test]
+    fn test_handle_invalid_resource() {
+        let mut cache = Cache::default();
+        let (mut conn, _) = new_conn(&mut cache);
+
+        let node = xds_core::Node {
+            id: "some-node".to_string(),
+            ..Default::default()
+        };
+        conn.handle_ads_message(DeltaDiscoveryResponse {
+            type_url: ResourceType::Listener.type_url().to_string(),
+            resources: vec![xds_discovery::Resource {
+                resource: Some(protobuf::Any::from_msg(&node).unwrap()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let (outgoing, dns) = conn.outgoing();
+        assert!(dns.is_noop());
+        assert!(matches!(
+            &outgoing[..],
+            [DeltaDiscoveryRequest { type_url, error_detail, ..}] if
+                type_url == ResourceType::Listener.type_url() &&
+                error_detail.as_ref().is_some_and(|e| e.message.starts_with("invalid resource"))
+        ));
+    }
+
+    #[test]
+    fn test_handle_does_not_exist() {
+        let mut cache = Cache::default();
+        let (mut conn, _) = new_conn(&mut cache);
+
+        // handle a subscription update
+        let does_not_exist = Service::dns("website.internal").unwrap().name();
+        conn.handle_subscription_update(SubscriptionUpdate::AddHosts(vec![does_not_exist.clone()]));
+        let _ = conn.outgoing();
+
+        conn.handle_ads_message(DeltaDiscoveryResponse {
+            nonce: "boo".to_string(),
+            type_url: ResourceType::Listener.type_url().to_string(),
+            removed_resources: vec![does_not_exist.clone()],
+            ..Default::default()
+        });
+
+        // should generate an ACK immediately
+        let (outgoing, dns) = conn.outgoing();
+        assert!(dns.is_noop());
+        assert_eq!(
+            outgoing,
+            vec![xds_test::req!(t = ResourceType::Listener, n = "boo")],
+        );
+
+        // route should be tombstoned
+        let route = cache
+            .reader()
+            .get_route("website.internal")
+            .now_or_never()
+            .unwrap();
+        assert_eq!(route, None);
     }
 }
