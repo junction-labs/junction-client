@@ -533,7 +533,7 @@ impl Junction {
     ///
     /// This is the same as dumping config with dump_xds and filtering to only
     /// xds with a `last_error` message set.
-    fn dump_xds_erorrs(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+    fn dump_xds_errors(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut values = vec![];
 
         for config in self.core.dump_xds_errors() {
