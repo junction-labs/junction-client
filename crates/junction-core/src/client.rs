@@ -163,6 +163,13 @@ pub struct Client {
     config: Config,
 }
 
+// the entire static config thing might be a mistake and worth revisting - we
+// could insert resources into cache and let multiple clients in the same process
+// all see static resources. is that good? idk. we already have to_xds() on every
+// resource type, and it would remove a lot of code.
+//
+// revisit this when we hit the problem of static bootstrapping/fallback for
+// clients .
 #[derive(Clone)]
 enum Config {
     Static(Arc<StaticConfig>),
@@ -490,7 +497,7 @@ impl Client {
     ///
     /// The returned endpoints are a snapshot of what is currently in cache and
     /// will not update as new discovery information is pushed.
-    pub fn get_endpoints(&self, backend: &BackendId) -> Option<EndpointIter> {
+    pub fn dump_endpoints(&self, backend: &BackendId) -> Option<EndpointIter> {
         self.config
             .get_endpoints(backend)
             .now_or_never()
