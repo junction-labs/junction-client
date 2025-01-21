@@ -80,11 +80,14 @@ pub struct XdsConfig {
 enum SubscriptionUpdate {
     AddHosts(Vec<String>),
     AddBackends(Vec<BackendId>),
+    AddEndpoints(Vec<BackendId>),
 
     #[allow(unused)]
     RemoveHosts(Vec<String>),
     #[allow(unused)]
     RemoveBackends(Vec<BackendId>),
+    #[allow(unused)]
+    RemoveEndpoints(Vec<BackendId>),
 }
 
 /// A Junction ADS client that manages long-lived xDS state by connecting to a
@@ -178,6 +181,11 @@ impl AdsClient {
     }
 }
 
+// TODO: the whole add-a-subscription-on-get thing is a bit werid but we don't
+// have a better signal yet. there probably is one, but we need some way to
+// distinguish between "get_endpoints was called because client.resolve_http was
+// called and its downstream of a listener" and "get_endpoints was called
+// because there is a DNS cluster in a static config".
 impl ConfigCache for AdsClient {
     async fn get_route<S: AsRef<str>>(&self, host: S) -> Option<Arc<Route>> {
         let hosts = vec![host.as_ref().to_string()];
@@ -201,7 +209,7 @@ impl ConfigCache for AdsClient {
         backend: &junction_api::backend::BackendId,
     ) -> Option<std::sync::Arc<crate::EndpointGroup>> {
         let bs = vec![backend.clone()];
-        let _ = self.subs.send(SubscriptionUpdate::AddBackends(bs)).await;
+        let _ = self.subs.send(SubscriptionUpdate::AddEndpoints(bs)).await;
 
         match &backend.service {
             junction_api::Service::Dns(dns) => {
@@ -675,23 +683,44 @@ impl<'a> AdsConnection<'a> {
             }
             SubscriptionUpdate::AddBackends(backends) => {
                 for backend in backends {
-                    self.cache.subscribe(ResourceType::Cluster, &backend.name());
-
-                    // TODO: should we have an explicit SubscriptionUpdate::AddEndpoints(BackendId)
-                    //       and avoid this?
                     if let Service::Dns(dns) = &backend.service {
                         self.cache.subscribe_dns(dns.hostname.clone(), backend.port);
                     }
+                    self.cache.subscribe(ResourceType::Cluster, &backend.name());
                 }
             }
             SubscriptionUpdate::RemoveBackends(backends) => {
                 for backend in backends {
-                    self.cache
-                        .unsubscribe(ResourceType::Cluster, &backend.name());
-
                     if let Service::Dns(dns) = &backend.service {
                         self.cache
                             .unsubscribe_dns(dns.hostname.clone(), backend.port);
+                    }
+                    self.cache
+                        .unsubscribe(ResourceType::Cluster, &backend.name());
+                }
+            }
+            SubscriptionUpdate::AddEndpoints(backends) => {
+                for backend in backends {
+                    match &backend.service {
+                        Service::Dns(dns) => {
+                            self.cache.subscribe_dns(dns.hostname.clone(), backend.port);
+                        }
+                        _ => self
+                            .cache
+                            .subscribe(ResourceType::ClusterLoadAssignment, &backend.name()),
+                    }
+                }
+            }
+            SubscriptionUpdate::RemoveEndpoints(backends) => {
+                for backend in backends {
+                    match &backend.service {
+                        Service::Dns(dns) => {
+                            self.cache
+                                .unsubscribe_dns(dns.hostname.clone(), backend.port);
+                        }
+                        _ => self
+                            .cache
+                            .unsubscribe(ResourceType::ClusterLoadAssignment, &backend.name()),
                     }
                 }
             }
@@ -931,7 +960,7 @@ mod test_ads_conn {
         ]));
 
         let (outgoing, dns) = conn.outgoing();
-        // dns should preemptively update on dns backends
+        // dns shouldn't preemptively update on dns backends
         assert_eq!(
             dns,
             DnsUpdates {

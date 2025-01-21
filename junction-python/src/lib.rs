@@ -414,7 +414,7 @@ impl Junction {
     #[pyo3(signature = (backend))]
     fn get_endpoints(&self, backend: Bound<'_, PyAny>) -> PyResult<Vec<(IpAddr, u16)>> {
         let backend: BackendId = pythonize::depythonize_bound(backend)?;
-        let endpoint_iter = match self.core.get_endpoints(&backend) {
+        let endpoint_iter = match self.core.dump_endpoints(&backend) {
             Some(iter) => iter,
             None => return Ok(Vec::new()),
         };
