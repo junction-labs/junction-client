@@ -642,8 +642,9 @@ async fn select_endpoint(
 }
 
 async fn sleep_until(deadline: Option<Instant>) {
-    if let Some(d) = deadline {
-        tokio::time::sleep_until(d.into()).await;
+    match deadline {
+        Some(d) => tokio::time::sleep_until(d.into()).await,
+        None => std::future::pending().await,
     }
 }
 
