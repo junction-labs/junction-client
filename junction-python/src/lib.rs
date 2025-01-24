@@ -209,13 +209,13 @@ impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
 /// This function is stateless, and doesn't require connecting to a control
 /// plane. Use it to unit test your routing rules.
 #[pyfunction]
-#[pyo3(signature = (routes, method, url, headers))]
+#[pyo3(signature = (routes, url, *, method=None, headers=None))]
 fn check_route(
     py: Python<'_>,
     routes: Bound<'_, PyAny>,
-    method: &str,
     url: &str,
-    headers: &Bound<PyMapping>,
+    method: Option<&str>,
+    headers: Option<&Bound<PyMapping>>,
 ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
     let url: junction_core::Url = url
         .parse()
@@ -383,13 +383,13 @@ impl Junction {
     ///
     /// If `dynamic=False` is passed as a kwarg, the resolution happens without
     /// fetching any new routing data over the network.
-    #[pyo3(signature = (method, url, headers, timeout=None))]
+    #[pyo3(signature = (url, *, method=None, headers=None, timeout=None))]
     fn resolve_route(
         &mut self,
         py: Python<'_>,
-        method: &str,
         url: &str,
-        headers: &Bound<PyMapping>,
+        method: Option<&str>,
+        headers: Option<&Bound<PyMapping>>,
         timeout: Option<u64>,
     ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
         let method = method_from_py(method)?;
@@ -428,12 +428,12 @@ impl Junction {
     /// in to account load balancing and any prior requests. A request should be
     /// sent to all endpoints, and it's up to the caller to decide how to
     /// combine multiple responses.
-    #[pyo3(signature = (method, url, headers))]
+    #[pyo3(signature = (url, *, method=None, headers=None))]
     fn resolve_http(
         &mut self,
-        method: &str,
         url: &str,
-        headers: &Bound<PyMapping>,
+        method: Option<&str>,
+        headers: Option<&Bound<PyMapping>>,
     ) -> PyResult<Endpoint> {
         let url =
             junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
@@ -582,19 +582,26 @@ impl From<junction_core::XdsConfig> for XdsConfig {
     }
 }
 
-fn method_from_py(method: &str) -> PyResult<http::Method> {
-    http::Method::from_str(method)
-        .map_err(|_| PyValueError::new_err(format!("invalid HTTP method: '{method}'")))
+fn method_from_py(method: Option<&str>) -> PyResult<http::Method> {
+    match method {
+        Some(method) => http::Method::from_str(method)
+            .map_err(|_| PyValueError::new_err(format!("invalid HTTP method: '{method}'"))),
+        None => Ok(http::Method::GET),
+    }
 }
 
-fn headers_from_py(header_dict: &Bound<PyMapping>) -> PyResult<http::HeaderMap> {
+fn headers_from_py(header_dict: Option<&Bound<PyMapping>>) -> PyResult<http::HeaderMap> {
     macro_rules! str_value_into {
         ($value:expr) => {
             $value.str()?.to_string_lossy().as_bytes().try_into()
         };
     }
-    let items = header_dict.items()?;
 
+    let Some(header_dict) = header_dict else {
+        return Ok(http::HeaderMap::new());
+    };
+
+    let items = header_dict.items()?;
     let mut headers = http::HeaderMap::with_capacity(items.len()?);
     for item in items.iter()? {
         let item = item?;
