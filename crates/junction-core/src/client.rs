@@ -1,4 +1,5 @@
 use crate::{
+    dns,
     endpoints::{EndpointGroup, EndpointIter},
     error::Trace,
     load_balancer::BackendLb,
@@ -9,9 +10,13 @@ use futures::FutureExt;
 use junction_api::{
     backend::{Backend, BackendId},
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
+    Hostname,
 };
 use rand::distributions::WeightedError;
-use std::time::{Duration, Instant};
+use std::{
+    borrow::Cow,
+    time::{Duration, Instant},
+};
 use std::{net::SocketAddr, sync::Arc};
 
 /// An outgoing HTTP Request, before any rewrites or modifications have been
@@ -160,6 +165,17 @@ pub struct Client {
     // will survive.
     resolve_timeout: Duration,
 
+    // ndots, like dns, but for resolving junction names.
+    //
+    // like dns, names only use the search path if they contain fewer than
+    // `ndots` dots. unlike dns, names are all resolved in-order.
+    ndots: u8,
+
+    // the search list for hostname lookup. only consulted if the number of
+    // dots in a url's hostname is less than `ndots`.
+    search_path: Vec<Hostname>,
+
+    // junction data
     config: Config,
 }
 
@@ -250,7 +266,6 @@ impl Client {
         // once it's started, hand off the task to the executor in the
         // background.
         ads_task.connect().await?;
-
         let handle = tokio::spawn(async move {
             match ads_task.run().await {
                 Ok(()) => (),
@@ -260,14 +275,27 @@ impl Client {
             }
         });
 
-        let dyn_config = Arc::new(DynamicConfig {
+        // load search-path config from the system.
+        //
+        // this should eventually be configurable, but for now we're trying
+        // resolv.conf to match kube's default behavior out of the box. on other
+        // systems this may not be useful yet - that's ok.
+        let (ndots, search_path) = match dns::load_config("/etc/resolv.conf") {
+            Ok(config) => (config.ndots, config.search),
+            // ignore any errors and set this to defaults
+            Err(_) => (0, vec![]),
+        };
+
+        // wrap it all up in a dynamic config and return
+        let config = Config::Dynamic(Arc::new(DynamicConfig {
             ads_client,
             ads_task: handle,
-        });
-
+        }));
         let client = Self {
             resolve_timeout: Duration::from_secs(5),
-            config: Config::Dynamic(dyn_config),
+            config,
+            ndots,
+            search_path,
         };
 
         Ok(client)
@@ -325,10 +353,41 @@ impl Client {
     ) -> crate::Result<Endpoint> {
         let deadline = Instant::now() + self.resolve_timeout;
 
-        let request = HttpRequest::from_parts(method, url, headers)?;
+        let search_path = self.search(url);
+        assert!(
+            !search_path.is_empty(),
+            "resolve's search_path cannot be empty, this is a bug in Junction"
+        );
+
+        let mut lookups = Vec::with_capacity(search_path.len());
+        for url in search_path {
+            lookups.push(self.resolve_once(deadline, method, url, headers));
+        }
+
+        // safety: we're checking indexes immediately before calling
+        // swap_remove, and search path should never be empty.
+        //
+        // consuming a vec and returning the nth element is not a solved problem.
+        // https://github.com/rust-lang/rfcs/issues/1512
+        let mut lookup_results = futures::future::join_all(lookups).await;
+        match lookup_results.iter().position(|r| r.is_ok()) {
+            Some(idx) => lookup_results.swap_remove(idx),
+            None => lookup_results.swap_remove(0),
+        }
+    }
+
+    async fn resolve_once(
+        &self,
+        deadline: Instant,
+        method: &http::Method,
+        url: Cow<'_, crate::Url>,
+        headers: &http::HeaderMap,
+    ) -> crate::Result<Endpoint> {
+        let request = HttpRequest::from_parts(method, &url, headers)?;
+
         let resolved = self.resolve_route(request, Some(deadline)).await?;
 
-        let lb_context = LbContext::new(resolved.trace, url, headers);
+        let lb_context = LbContext::new(resolved.trace, &url, headers);
         let selected = self
             .select_endpoint(&resolved.backend, lb_context, Some(deadline))
             .await?;
@@ -342,7 +401,7 @@ impl Client {
 
         Ok(Endpoint {
             method: method.clone(),
-            url: url.clone(),
+            url: url.into_owned(),
             headers: headers.clone(),
             address,
             timeouts,
@@ -503,6 +562,20 @@ impl Client {
             .now_or_never()
             .flatten()
             .map(EndpointIter::from)
+    }
+
+    /// Return the list of URLs that will be looked up when resolving the
+    /// endpoints for this URL.
+    ///
+    /// This is called internally by `resolve_http`. It's exposed here for
+    /// debugging.
+    pub fn search<'a>(&self, url: &'a crate::Url) -> Vec<Cow<'a, crate::Url>> {
+        search(self.ndots as usize, &self.search_path, url)
+    }
+
+    /// The configured search path for this client.
+    pub fn search_path(&self) -> &[Hostname] {
+        &self.search_path
     }
 }
 
@@ -735,6 +808,47 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
     false
 }
 
+/// generate a URL search path for this url.
+///
+/// the resturned Vec will always contain either:
+///
+/// - a single element, a ref to the original URL
+///
+/// - `search_path.len() + 1` elements, where the first element is the original
+///    URl and the rest of the entries are the result of appending the URL's
+///    hostname to the suffixes in search path. the order of the suffixes in
+///    search_path is preserved.
+fn search<'a>(
+    ndots: usize,
+    search_path: &[Hostname],
+    url: &'a crate::Url,
+) -> Vec<Cow<'a, crate::Url>> {
+    // TODO: this could return an enum { Original(url), Search(url, path) } that
+    // implements Iterator and lazily generates Cow<Url>. there's no reason to
+    // do that at the moment but it'd be a little more correct.
+
+    let hostname = url.hostname();
+    let dots = hostname.as_bytes().iter().filter(|&&b| b == b'.').count();
+
+    let mut urls = vec![Cow::Borrowed(url)];
+
+    if dots < ndots {
+        for suffix in search_path {
+            let mut new_hostname = String::with_capacity(hostname.len() + hostname.len() + 1);
+            new_hostname.push_str(hostname);
+            new_hostname.push('.');
+            new_hostname.push_str(suffix);
+
+            let new_url = url
+                .with_hostname(&new_hostname)
+                .expect("search_path produced an invalid URL. this is a bug in Junction");
+            urls.push(Cow::Owned(new_url));
+        }
+    }
+
+    urls
+}
+
 // TODO: thorough tests for matching
 
 #[cfg(test)]
@@ -742,6 +856,8 @@ mod test {
     use crate::Url;
     use junction_api::{http::BackendRef, Hostname, Name, Regex, Service};
     use std::str::FromStr;
+
+    use pretty_assertions::assert_eq;
 
     use super::*;
 
@@ -752,6 +868,36 @@ mod test {
     fn assert_send_sync() {
         assert_send::<HttpRequest<'_>>();
         assert_sync::<HttpRequest<'_>>();
+    }
+
+    #[test]
+    fn test_search_path() {
+        let url = Url::from_str("https://tasty.potato.tomato:9876").unwrap();
+        let search_path = vec![
+            Hostname::from_static("foo.bar.baz"),
+            Hostname::from_static("bar.baz"),
+            Hostname::from_static("baz"),
+        ];
+
+        // with ndots < dots, should just return the original url
+        assert_eq!(search(0, &search_path, &url), vec![Cow::Borrowed(&url)]);
+        assert_eq!(search(1, &search_path, &url), vec![Cow::Borrowed(&url)]);
+        assert_eq!(search(2, &search_path, &url), vec![Cow::Borrowed(&url)]);
+
+        // with high-enough ndots should return a borrowed URL and owned URLs
+        assert_eq!(
+            search(3, &search_path, &url),
+            vec![
+                Cow::Borrowed(&url),
+                Cow::Owned(
+                    "https://tasty.potato.tomato.foo.bar.baz:9876"
+                        .parse()
+                        .unwrap()
+                ),
+                Cow::Owned("https://tasty.potato.tomato.bar.baz:9876".parse().unwrap()),
+                Cow::Owned("https://tasty.potato.tomato.baz:9876".parse().unwrap()),
+            ],
+        );
     }
 
     #[track_caller]
