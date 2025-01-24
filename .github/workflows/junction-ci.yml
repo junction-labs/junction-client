@@ -7,13 +7,13 @@ name: junction-core CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
       - "crates/**"
       - ".github/workflows/junction-ci.yml"
 
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
       - "crates/**"
       - ".github/workflows/junction-ci.yml"
@@ -21,57 +21,57 @@ on:
 env:
   CARGO_TERM_COLOR: always
   rust_stable: stable
-  rust_min: 1.79
+  rust_min: 1.80
 
 jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: "Install Rust @${{ env.rust_min }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
+      - uses: actions/checkout@v4
+      - name: "Install Rust @${{ env.rust_min }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
           toolchain: ${{ env.rust_min }}
-    - uses: Swatinem/rust-cache@v2
-    - name: check
-      run: cargo check
+      - uses: Swatinem/rust-cache@v2
+      - name: check
+        run: cargo check
 
   tests:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: "Install Rust @${{ env.rust_stable }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
+      - uses: actions/checkout@v4
+      - name: "Install Rust @${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
           toolchain: ${{ env.rust_stable }}
-    - uses: Swatinem/rust-cache@v2
-    - name: test
-      run: cargo xtask ci-test
+      - uses: Swatinem/rust-cache@v2
+      - name: test
+        run: cargo xtask ci-test
 
   clippy:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: "Install Rust @ ${{ env.rust_stable }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
+      - uses: actions/checkout@v4
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
           toolchain: ${{ env.rust_stable }}
-    - uses: Swatinem/rust-cache@v2
-    - name: clippy
-      run: cargo xtask ci-clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy
+        run: cargo xtask ci-clippy
 
   fmt:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: "Install Rust @ ${{ env.rust_stable }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
+      - uses: actions/checkout@v4
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
           toolchain: ${{ env.rust_stable }}
-    - uses: Swatinem/rust-cache@v2
-    - name: fmt
-      run: |
-        if ! rustfmt --check --edition 2021 $(git ls-files 'crates/*.rs'); then
-          echo "rustfmt found un-formatted files" >&2
-          exit 1
-        fi
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: |
+          if ! rustfmt --check --edition 2021 $(git ls-files 'crates/*.rs'); then
+            echo "rustfmt found un-formatted files" >&2
+            exit 1
+          fi
