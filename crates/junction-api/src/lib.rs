@@ -183,6 +183,17 @@ macro_rules! newtype_string {
             }
         }
 
+        impl TryFrom<&[u8]> for $name {
+            type Error = Error;
+
+            fn try_from(bs: &[u8]) -> Result<$name, Self::Error> {
+                $name::validate(bs)?;
+                // safety: validate checks that the string is valid ascii
+                let value = unsafe { std::str::from_utf8_unchecked(bs) };
+                Ok($name(smol_str::SmolStr::new(value)))
+            }
+        }
+
         impl<'a> TryFrom<&'a str> for $name {
             type Error = Error;
 

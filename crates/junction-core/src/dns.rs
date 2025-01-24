@@ -1,7 +1,24 @@
+//! DNS and DNS accessories.
+//!
+//! # Resolvers
+//!
+//! This module include the DNS resolvers that the Junction client uses to look
+//! up addresses for LOGICAL_DNS and STRICT_DNS xDS clusters. Resolution is done
+//! with an in-client resolver so that behavior is consistent between systems.
+//!
+//! See resolver documentation for details.
+//!
+//! # System Configuration
+//!
+//! This module also exposes functions for reading system resolver
+//! configuration, which is used to make Junction name resolution behavior match
+//! system resolver behavior where appropriate.
+
 use std::{
     collections::{btree_map, BTreeMap, BTreeSet},
     io,
     net::SocketAddr,
+    path::Path,
     sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
@@ -11,6 +28,112 @@ use rand::Rng;
 use tokio::sync::Notify;
 
 use crate::endpoints::EndpointGroup;
+
+/// An error that occurred while parsing a system DNS configuration.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ConfigError {
+    #[error("config not found: {path}")]
+    NotFound { path: String },
+
+    #[error("{path}:{line}: {message}")]
+    Invalid {
+        path: String,
+        line: usize,
+        message: String,
+    },
+
+    #[error(transparent)]
+    Other(#[from] std::io::Error),
+}
+
+/// An extremely simple subset of a system DNS resolver configuration.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct SystemConfig {
+    pub(crate) ndots: u8,
+    pub(crate) search: Vec<Hostname>,
+}
+
+/// Load a [SystemConfig] from the given path. You probaly want to read
+/// `/etc/resolv.conf` but the option is here just in case you don't.
+pub(crate) fn load_config<P: AsRef<Path>>(path: P) -> Result<SystemConfig, ConfigError> {
+    let content = match std::fs::read(path.as_ref()) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ConfigError::NotFound {
+                path: path.as_ref().display().to_string(),
+            })
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    parse_resolv_conf(path, &content)
+}
+
+/// An extremely simple resolv.conf parser.
+///
+/// This is included here so we don't have to take another dependency - the
+/// complexity of parsing two options out of a text file felt quite low, and as
+/// of writing, the crate(s) available for it didn't appear to be doing anything
+/// more sophisticated than this or have extensive fuzz testing regimes, etc.
+fn parse_resolv_conf(path: impl AsRef<Path>, content: &[u8]) -> Result<SystemConfig, ConfigError> {
+    // split on newline
+    let lines = content.split(|&b| b == b'\n');
+
+    let mut ndots = 1u8;
+    let mut search = vec![];
+
+    for (i, line) in lines.enumerate() {
+        let line = line.trim_ascii();
+
+        match line.first() {
+            // skip comments
+            Some(b';') | Some(b'#') => continue,
+            // skip empty lines
+            None => continue,
+            _ => (),
+        }
+
+        let parts: Vec<_> = line.split(|b| b.is_ascii_whitespace()).collect();
+        match parts.as_slice() {
+            [b"options", options @ ..] => {
+                for option in options {
+                    if let Some(n) = option.strip_prefix(b"ndots:") {
+                        ndots = parse_as_str(n).map_err(|()| ConfigError::Invalid {
+                            path: path.as_ref().display().to_string(),
+                            line: i,
+                            message: format!("invalid ndots: '{}'", String::from_utf8_lossy(n)),
+                        })?;
+                    }
+                }
+            }
+            [b"search", hostnames @ ..] => {
+                let hostnames: Result<Vec<_>, _> =
+                    hostnames.iter().map(|bs| Hostname::try_from(*bs)).collect();
+
+                match hostnames {
+                    Ok(hostnames) => search = hostnames,
+                    Err(e) => {
+                        return Err(ConfigError::Invalid {
+                            path: path.as_ref().display().to_string(),
+                            line: i,
+                            message: format!("search path contains invalid hostname: {e}"),
+                        })
+                    }
+                }
+            }
+            // ignore any other directives, even if they're badly formed. we
+            // don't care about em
+            _ => (),
+        }
+    }
+
+    Ok(SystemConfig { ndots, search })
+}
+
+fn parse_as_str<T: std::str::FromStr>(bs: &[u8]) -> Result<T, ()> {
+    let as_str = std::str::from_utf8(bs).map_err(|_| ())?;
+    as_str.parse().map_err(|_| ())
+}
 
 /// A blocking resolver that uses the stdlib to resolve hostnames to addresses.
 ///
@@ -496,6 +619,81 @@ mod test {
     use std::net::{IpAddr, Ipv4Addr};
 
     use super::*;
+
+    #[test]
+    fn test_resolv_conf_macos() {
+        let macos_resolv = b"
+#
+# macOS Notice
+#
+# This file is not consulted for DNS hostname resolution, address
+# resolution, or the DNS query routing mechanism used by most
+# processes on this system.
+#
+# To view the DNS configuration used by this system, use:
+#   scutil --dns
+#
+# SEE ALSO
+#   dns-sd(1), scutil(8)
+#
+# This file is automatically generated.
+#
+search localdomain
+nameserver 123.456.789.123
+";
+        assert_eq!(
+            SystemConfig {
+                ndots: 1,
+                search: vec![Hostname::from_static("localdomain")],
+            },
+            parse_resolv_conf("/kube/etc/resolv.conf", macos_resolv).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_resolv_conf_kube() {
+        let kube_resolv = b"
+nameserver 192.168.194.138
+; another comment
+nameserver fd07:b51a:cc66:a:8000::a # after stuff
+# a weird inline comment
+search default.svc.cluster.local svc.cluster.local cluster.local
+options extra:hello ndots:5 not-valid
+";
+
+        assert_eq!(
+            SystemConfig {
+                ndots: 5,
+                search: [
+                    "default.svc.cluster.local",
+                    "svc.cluster.local",
+                    "cluster.local",
+                ]
+                .into_iter()
+                .map(Hostname::from_static)
+                .collect()
+            },
+            parse_resolv_conf("/kube/etc/resolv.conf", kube_resolv).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_resolv_conf_invalid_search() {
+        let conf = b"
+search default.svc$$$cluster.local svc.cluster.local cluster.local
+options ndots:5";
+        let err = parse_resolv_conf("bad", conf).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid { line: 1, .. }));
+    }
+
+    #[test]
+    fn test_resolv_conf_invalid_ndots() {
+        let conf = b"
+search default.svc.cluster.local svc.cluster.local cluster.local
+options ndots:1 ndots:a-potato ndots:3";
+        let err = parse_resolv_conf("bad", conf).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid { line: 2, .. }));
+    }
 
     #[inline]
     fn update_all(

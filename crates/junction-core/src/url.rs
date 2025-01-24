@@ -18,7 +18,7 @@ use crate::Error;
 ///
 /// There are no extra restrictions on the path or query components of a valid
 /// `Url`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Url {
     scheme: http::uri::Scheme,
     authority: http::uri::Authority,
@@ -117,6 +117,22 @@ impl Url {
 
     pub fn request_uri(&self) -> &str {
         self.path_and_query.as_str()
+    }
+
+    pub(crate) fn with_hostname(&self, hostname: &str) -> Result<Self, Error> {
+        let authority: Result<http::uri::Authority, http::uri::InvalidUri> =
+            match self.authority.port() {
+                Some(port) => format!("{hostname}:{port}").parse(),
+                None => hostname.parse(),
+            };
+
+        let authority = authority.map_err(|e| Error::into_invalid_url(e.to_string()))?;
+
+        Ok(Self {
+            authority,
+            scheme: self.scheme.clone(),
+            path_and_query: self.path_and_query.clone(),
+        })
     }
 
     pub(crate) fn authority(&self) -> Cow<'_, str> {
