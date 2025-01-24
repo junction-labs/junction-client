@@ -118,9 +118,9 @@ class PoolManager(urllib3.PoolManager):
 
         # resolve the endpoint with junction-core
         endpoint = self.junction.resolve_http(
-            method,
             url,
-            kwargs["headers"],
+            method=method,
+            headers=kwargs["headers"],
         )
 
         # prep for making a request by setting up kwargs once and grabbing a
