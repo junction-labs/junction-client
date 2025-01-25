@@ -17,6 +17,7 @@ fn main() -> anyhow::Result<()> {
     match &args.command {
         InstallPrecommit => install_precommit(&sh),
         Precommit => precommit(&sh, ".venv"),
+        Version => version(),
         Core(args) => core::run(&sh, args),
         Node(args) => node::run(&sh, args),
         Python(args) => python::run(&sh, args),
@@ -29,6 +30,53 @@ fn project_root() -> PathBuf {
         .nth(1)
         .unwrap()
         .to_path_buf()
+}
+
+fn crate_version<P: AsRef<Path>>(path: P) -> anyhow::Result<semver::Version> {
+    fn package_version(manifest: &toml::Table) -> anyhow::Result<semver::Version> {
+        let Some(toml::Value::String(version)) = toml_lookup(manifest, &["package", "version"])
+        else {
+            anyhow::bail!("invalid Cargo manifest: missing package.version");
+        };
+
+        let version = version.parse()?;
+        Ok(version)
+    }
+
+    fn workspace_version(manifest: &toml::Table) -> anyhow::Result<semver::Version> {
+        let Some(toml::Value::String(version)) =
+            toml_lookup(manifest, &["workspace", "package", "version"])
+        else {
+            anyhow::bail!("invalid cargo manifest: missing workspace.package.version")
+        };
+
+        let version = version.parse()?;
+        Ok(version)
+    }
+
+    fn toml_lookup<'a>(
+        table: &'a toml::Table,
+        key_path: &[&'static str],
+    ) -> Option<&'a toml::Value> {
+        match key_path {
+            [] => None,
+            [k] => table.get(*k),
+            [keys @ .., last] => {
+                let mut table = table;
+                for key in keys {
+                    match table.get(*key) {
+                        Some(toml::Value::Table(t)) => table = t,
+                        _ => return None,
+                    }
+                }
+                table.get(*last)
+            }
+        }
+    }
+    let cargo_toml = std::fs::read_to_string(path)?;
+    let manifest: toml::Table = cargo_toml.parse()?;
+
+    package_version(&manifest).or_else(|_| workspace_version(&manifest))
 }
 
 /// Cargo xtasks for development.
@@ -54,6 +102,9 @@ enum Commands {
     /// every commit. Heavier tasks like full builds and tests will only run in
     /// CI.
     Precommit,
+
+    /// Print the versions of Junction client crates.
+    Version,
 
     /// junction-core tasks
     Core(core::Args),
@@ -82,6 +133,17 @@ fn precommit(sh: &Shell, venv: &str) -> anyhow::Result<()> {
     // run per-language lints
     python::lint(sh, venv, false)?;
     node::lint(sh, false)?;
+
+    Ok(())
+}
+
+fn version() -> anyhow::Result<()> {
+    let core_version = crate_version("Cargo.toml")?;
+    let python_version = crate_version("junction-python/Cargo.toml")?;
+    let node_version = crate_version("junction-node/Cargo.toml")?;
+    eprintln!("  junction-core: {core_version}");
+    eprintln!("junction-python: {python_version}");
+    eprintln!("  junction-node: {node_version}");
 
     Ok(())
 }
@@ -165,10 +227,10 @@ mod core {
 
     pub(super) fn run(sh: &Shell, args: &Args) -> anyhow::Result<()> {
         match &args.command {
-            Commands::Clippy { fix, allow_staged } => clippy(&sh, *fix, *allow_staged),
+            Commands::Clippy { fix, allow_staged } => clippy(sh, *fix, *allow_staged),
             Commands::Fmt => fmt(sh),
-            Commands::Test => test(&sh),
-            Commands::Doc => doc(&sh),
+            Commands::Test => test(sh),
+            Commands::Doc => doc(sh),
         }
     }
 
@@ -204,7 +266,7 @@ mod core {
     }
 
     pub(super) fn clippy(sh: &Shell, fix: bool, allow_staged: bool) -> anyhow::Result<()> {
-        super::clippy(sh, &vec![], fix, allow_staged)
+        super::clippy(sh, &[], fix, allow_staged)
     }
 
     pub(super) fn fmt(sh: &Shell) -> anyhow::Result<()> {
@@ -277,12 +339,12 @@ mod python {
             Commands::Build {
                 maturin,
                 skip_stubs,
-            } => python::build(&sh, &venv, maturin, !*skip_stubs),
-            Commands::Clean => python::clean(&sh, &venv),
-            Commands::Docs => python::docs(&sh, &venv),
-            Commands::Lint { fix } => python::lint(&sh, &venv, *fix),
-            Commands::Test => python::test(&sh, &venv),
-            Commands::Shell => python::shell(&sh, &venv),
+            } => python::build(sh, &venv, maturin, !*skip_stubs),
+            Commands::Clean => python::clean(sh, &venv),
+            Commands::Docs => python::docs(sh, &venv),
+            Commands::Lint { fix } => python::lint(sh, &venv, *fix),
+            Commands::Test => python::test(sh, &venv),
+            Commands::Shell => python::shell(sh, &venv),
         }
     }
 
@@ -453,6 +515,7 @@ mod node {
 
     #[derive(clap::Subcommand)]
     pub(super) enum Commands {
+        /// Build the junction-node client.
         Build {
             /// Build in release mode.
             #[clap(long)]
@@ -463,8 +526,12 @@ mod node {
             clean_install: bool,
         },
 
-        /// Package a
-        Dist { platform: Option<String> },
+        /// Create a tarball ready for uploading to npm.
+        Dist {
+            /// Build the tarball for the given platform. If not specified,
+            /// build the top level cross-platform package.
+            platform: Option<String>,
+        },
 
         /// Clean up the current node_modules and remove any built native
         /// extensions.
@@ -477,12 +544,15 @@ mod node {
             fix: bool,
         },
 
-        /// Docs for .
+        /// Build typescript docs.
         Docs,
 
-        /// Run a `node` repl. Builds a fresh debug version of Junction  before
+        /// Run a `node` repl. Builds a fresh debug version of Junction before
         /// starting the shell.
         Shell,
+
+        /// Update npm package versions from the Cargo manifest.
+        Version,
     }
 
     pub(super) fn run(sh: &Shell, args: &Args) -> anyhow::Result<()> {
@@ -496,6 +566,7 @@ mod node {
             Commands::Lint { fix } => lint(sh, *fix),
             Commands::Docs => docs(sh),
             Commands::Shell => shell(sh),
+            Commands::Version => version(sh),
         }
     }
 
@@ -562,5 +633,45 @@ mod node {
 
         let mut cmd: std::process::Command = cmd!(sh, "node").into();
         Err(cmd.exec().into())
+    }
+
+    fn version(sh: &Shell) -> anyhow::Result<()> {
+        let crate_version = crate_version("junction-node/Cargo.toml")?;
+        let platform_package_dirs = cmd!(sh, "ls junction-node/platforms/").read()?;
+
+        let platform_packages: Vec<_> = platform_package_dirs
+            .split_whitespace()
+            .map(|dir| format!("junction-node/platforms/{dir}/package.json"))
+            .collect();
+
+        write_package_version("junction-node/package.json", &crate_version)?;
+        for path in &platform_packages {
+            write_package_version(path, &crate_version)?;
+        }
+
+        // run lint to clean this shit up again
+        lint(sh, true)?;
+
+        Ok(())
+    }
+
+    fn write_package_version<P: AsRef<Path>>(
+        path: P,
+        version: &semver::Version,
+    ) -> anyhow::Result<()> {
+        let content = std::fs::read_to_string(&path)?;
+        let serde_json::Value::Object(mut package) = serde_json::from_str(&content)? else {
+            anyhow::bail!(
+                "{path} was not a json object",
+                path = path.as_ref().display()
+            );
+        };
+
+        package["version"] = serde_json::Value::String(version.to_string());
+
+        let output = serde_json::to_string_pretty(&package)?;
+        std::fs::write(path, output)?;
+
+        Ok(())
     }
 }
