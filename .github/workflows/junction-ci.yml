@@ -46,7 +46,7 @@ jobs:
           toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
       - name: test
-        run: cargo xtask ci-test
+        run: cargo xtask core test
 
   clippy:
     runs-on: ubuntu-latest
@@ -58,7 +58,7 @@ jobs:
           toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
       - name: clippy
-        run: cargo xtask ci-clippy
+        run: cargo xtask core lint
 
   fmt:
     runs-on: ubuntu-latest

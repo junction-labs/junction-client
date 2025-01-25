@@ -13,40 +13,13 @@ fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let venv = env::var("VIRTUAL_ENV").unwrap_or_else(|_| ".venv".to_string());
-
     use Commands::*;
     match &args.command {
         InstallPrecommit => install_precommit(&sh),
-        Precommit => precommit(&sh, &venv),
-        // rust
-        CITest => rust::ci_test(&sh),
-        CIDoc => rust::ci_doc(&sh),
-        CIClippy {
-            crates,
-            fix,
-            allow_staged,
-        } => rust::ci_clippy(&sh, crates, *fix, *allow_staged),
-        // node
-        NodeBuild {
-            release,
-            clean_install,
-        } => node::build(&sh, *clean_install, *release),
-        NodeDist { platform } => node::dist(&sh, platform.as_deref()),
-        NodeClean => node::clean(&sh),
-        NodeLint { fix } => node::lint(&sh, *fix),
-        NodeDocs => node::docs(&sh),
-        NodeShell => node::shell(&sh),
-        // python
-        PythonBuild {
-            maturin,
-            skip_stubs,
-        } => python::build(&sh, &venv, maturin, !*skip_stubs),
-        PythonClean => python::clean(&sh, &venv),
-        PythonDocs => python::docs(&sh, &venv),
-        PythonLint { fix } => python::lint(&sh, &venv, *fix),
-        PythonTest => python::test(&sh, &venv),
-        PythonShell => python::shell(&sh, &venv),
+        Precommit => precommit(&sh, ".venv"),
+        Core(args) => core::run(&sh, args),
+        Node(args) => node::run(&sh, args),
+        Python(args) => python::run(&sh, args),
     }
 }
 
@@ -70,15 +43,6 @@ struct Args {
     command: Commands,
 }
 
-#[derive(ValueEnum, Clone, Default)]
-enum MaturinOption {
-    None,
-    #[default]
-    Develop,
-    Build,
-}
-
-#[allow(clippy::enum_variant_names)]
 #[derive(Subcommand)]
 enum Commands {
     /// Install xtask precommit hooks in the local git repo.
@@ -91,96 +55,14 @@ enum Commands {
     /// CI.
     Precommit,
 
-    /// Run `cargo clippy` with some extra lints, and deny all default warnings.
-    CIClippy {
-        /// The crates to check. Defaults to the workspace defaults.
-        #[clap(long, num_args=0..)]
-        crates: Vec<String>,
+    /// junction-core tasks
+    Core(core::Args),
 
-        /// Automatically fix any errors when possible. See `cargo clippy --fix`
-        /// for more detail.
-        #[clap(long)]
-        fix: bool,
+    /// junction-node tasks
+    Node(node::Args),
 
-        /// Allows `ci-clippy --fix` to make changes even if there are staged
-        /// changes in the current repo.
-        #[clap(long)]
-        allow_staged: bool,
-    },
-
-    /// Run tests for all core crates with appropriate features enabled.
-    CITest,
-
-    /// Run `cargo doc` for junction-core and junction-api with the appropriate
-    /// features set for public docs.
-    CIDoc,
-
-    /// Build the Node native extension and compile typescript.
-    NodeBuild {
-        /// Build in release mode.
-        #[clap(long)]
-        release: bool,
-
-        /// Run install with `npm ci` intead of `npm i`.
-        #[clap(long)]
-        clean_install: bool,
-    },
-
-    /// Package a
-    NodeDist { platform: Option<String> },
-
-    /// Clean up the current node_modules and remove any built native
-    /// extensions.
-    NodeClean,
-
-    /// Lint and format Typescript and Javascript.
-    NodeLint {
-        /// Try to automatically fix any linter/formatter errors.
-        #[clap(long)]
-        fix: bool,
-    },
-
-    /// Docs for Node.
-    NodeDocs,
-
-    /// Run a `node` repl. Builds a fresh debug version of Junction Node before
-    /// starting the shell.
-    NodeShell,
-
-    /// Build and install junction-python in a .venv.
-    ///
-    /// Does not build a release build. In CI, use maturin directly.
-    PythonBuild {
-        /// Skip rebuilding the junction-python wheel. Useful for working on
-        /// generating config type information.
-        #[clap(long, default_value_t, value_enum)]
-        maturin: MaturinOption,
-
-        /// Skip regenerating API stubs. Useful if you're not changing Junction
-        /// API types and want to skip calls to `ruff`.
-        #[clap(long)]
-        skip_stubs: bool,
-    },
-
-    /// Clean the current virtualenv and any Python caches.
-    PythonClean,
-
-    /// Build Python docs with sphinx.
-    PythonDocs,
-
-    /// Lint and format Python code.
-    PythonLint {
-        /// Try to automatically fix any linter/formatter errors.
-        #[clap(long)]
-        fix: bool,
-    },
-
-    /// Run a `python` repl in the current virtual environment. Builds a fresh
-    /// version of Junction Python and installs it before starting.
-    PythonShell,
-
-    /// Run junction-python's Python tests.
-    PythonTest,
+    /// junction-python tasks
+    Python(python::Args),
 }
 
 fn install_precommit(sh: &Shell) -> anyhow::Result<()> {
@@ -190,24 +72,107 @@ fn install_precommit(sh: &Shell) -> anyhow::Result<()> {
 }
 
 fn precommit(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-    // clippy everything
-    rust::ci_clippy::<&'static str>(sh, &[], false, false)?;
-    rust::ci_clippy(sh, &["junction-python", "junction-node"], false, false)?;
+    // build and clippy junction-core
+    core::clippy(sh, false, false)?;
+    core::fmt(sh)?;
 
-    // regenerate SDKs and lint. verify that they're not going to cause a diff.
+    // regenerate SDKs and verify that they're not going to cause a diff.
     python::generate(sh, venv)?;
 
-    // per-language lints
+    // run per-language lints
     python::lint(sh, venv, false)?;
     node::lint(sh, false)?;
 
     Ok(())
 }
 
-mod rust {
+fn clippy(sh: &Shell, crates: &[&str], fix: bool, allow_staged: bool) -> anyhow::Result<()> {
+    let crate_args: Vec<_> = crates.iter().flat_map(|name| ["-p", name]).collect();
+
+    let mut options = vec![
+        "--tests",
+        "-F",
+        "junction-api/xds",
+        "-F",
+        "junction-api/kube",
+        "--no-deps",
+    ];
+    if fix {
+        options.push("--fix");
+    }
+    if allow_staged {
+        options.push("--allow-staged");
+    }
+
+    let args = vec!["-D", "warnings", "-D", "clippy::dbg_macro"];
+
+    cmd!(sh, "cargo clippy {crate_args...} {options...} -- {args...}").run()?;
+
+    Ok(())
+}
+
+fn rustfmt_check(sh: &Shell, path_prefix: &str) -> anyhow::Result<()> {
+    let ls_files = cmd!(sh, "git ls-files {path_prefix}/*.rs").read()?;
+    let rust_files: Vec<_> = ls_files.split_whitespace().collect();
+    cmd!(sh, "cargo fmt --check -- {rust_files...}").run()?;
+
+    Ok(())
+}
+
+fn loud_env<K: AsRef<OsStr>, V: AsRef<OsStr>>(sh: &Shell, key: K, value: V) -> xshell::PushEnv<'_> {
+    eprintln!(
+        "env: {k}={v}",
+        k = key.as_ref().to_string_lossy(),
+        v = value.as_ref().to_string_lossy()
+    );
+    sh.push_env(key, value)
+}
+
+mod core {
     use super::*;
 
-    pub(super) fn ci_test(sh: &Shell) -> anyhow::Result<()> {
+    #[derive(Parser)]
+    pub(super) struct Args {
+        #[command(subcommand)]
+        pub(super) command: Commands,
+    }
+
+    #[derive(Subcommand)]
+    pub(super) enum Commands {
+        /// Run `cargo clippy` with some extra lints, and deny all default warnings.
+        Clippy {
+            /// Automatically fix any errors when possible. See `cargo clippy --fix`
+            /// for more detail.
+            #[clap(long)]
+            fix: bool,
+
+            /// Allows `ci-clippy --fix` to make changes even if there are staged
+            /// changes in the current repo.
+            #[clap(long)]
+            allow_staged: bool,
+        },
+
+        /// Check that all core code is formatted with rustfmt.
+        Fmt,
+
+        /// Run tests for all core crates with appropriate features enabled.
+        Test,
+
+        /// Run `cargo doc` for junction-core and junction-api with the appropriate
+        /// features set for public docs.
+        Doc,
+    }
+
+    pub(super) fn run(sh: &Shell, args: &Args) -> anyhow::Result<()> {
+        match &args.command {
+            Commands::Clippy { fix, allow_staged } => clippy(&sh, *fix, *allow_staged),
+            Commands::Fmt => fmt(sh),
+            Commands::Test => test(&sh),
+            Commands::Doc => doc(&sh),
+        }
+    }
+
+    pub(super) fn test(sh: &Shell) -> anyhow::Result<()> {
         #[rustfmt::skip]
         let default_features = [
             "-F", "junction-api/kube", "-F", "junction-api/xds",
@@ -220,7 +185,7 @@ mod rust {
         Ok(())
     }
 
-    pub(super) fn ci_doc(sh: &Shell) -> anyhow::Result<()> {
+    pub(super) fn doc(sh: &Shell) -> anyhow::Result<()> {
         let _rustdoc_flags = loud_env(
             sh,
             "RUSTDOCFLAGS",
@@ -238,61 +203,88 @@ mod rust {
         Ok(())
     }
 
-    pub(super) fn ci_clippy<S: AsRef<str>>(
-        sh: &Shell,
-        crates: &[S],
-        fix: bool,
-        allow_staged: bool,
-    ) -> anyhow::Result<()> {
-        let crate_args = crate_args(crates);
-
-        let mut options = vec![
-            "--tests",
-            "-F",
-            "junction-api/xds",
-            "-F",
-            "junction-api/kube",
-            "--no-deps",
-        ];
-        if fix {
-            options.push("--fix");
-        }
-        if allow_staged {
-            options.push("--allow-staged");
-        }
-
-        #[rustfmt::skip]
-        let args = vec![
-            "-D", "warnings",
-            "-D", "clippy::dbg_macro",
-        ];
-
-        cmd!(sh, "cargo clippy {crate_args...} {options...} -- {args...}").run()?;
-
-        Ok(())
+    pub(super) fn clippy(sh: &Shell, fix: bool, allow_staged: bool) -> anyhow::Result<()> {
+        super::clippy(sh, &vec![], fix, allow_staged)
     }
 
-    fn crate_args(crates: &[impl AsRef<str>]) -> Vec<&str> {
-        crates
-            .iter()
-            .flat_map(|name| ["-p", name.as_ref()])
-            .collect()
+    pub(super) fn fmt(sh: &Shell) -> anyhow::Result<()> {
+        rustfmt_check(sh, "crates/")
     }
-}
-
-fn loud_env<K: AsRef<OsStr>, V: AsRef<OsStr>>(sh: &Shell, key: K, value: V) -> xshell::PushEnv<'_> {
-    eprintln!(
-        "env: {k}={v}",
-        k = key.as_ref().to_string_lossy(),
-        v = value.as_ref().to_string_lossy()
-    );
-    sh.push_env(key, value)
 }
 
 mod python {
     use std::os::unix::process::CommandExt;
 
     use super::*;
+
+    #[derive(Parser)]
+    pub(super) struct Args {
+        #[command(subcommand)]
+        pub(super) command: Commands,
+    }
+
+    #[derive(Subcommand)]
+    pub(super) enum Commands {
+        /// Build and install junction-python in a .venv.
+        ///
+        /// Does not build a release build. In CI, use maturin directly.
+        Build {
+            /// Skip rebuilding the junction-python wheel. Useful for working on
+            /// generating config type information.
+            #[clap(long, default_value_t, value_enum)]
+            maturin: Maturin,
+
+            /// Skip regenerating API stubs. Useful if you're not changing Junction
+            /// API types and want to skip calls to `ruff`.
+            #[clap(long)]
+            skip_stubs: bool,
+        },
+
+        /// Clean the current virtualenv and any  caches.
+        Clean,
+
+        /// Build  docs with sphinx.
+        Docs,
+
+        /// Lint and format  code.
+        Lint {
+            /// Try to automatically fix any linter/formatter errors.
+            #[clap(long)]
+            fix: bool,
+        },
+
+        /// Run a `python` repl in the current virtual environment. Builds a fresh
+        /// version of Junction  and installs it before starting.
+        Shell,
+
+        /// Run junction-python's  tests.
+        Test,
+    }
+
+    #[derive(ValueEnum, Clone, Default)]
+    pub(super) enum Maturin {
+        #[default]
+        Develop,
+        Build,
+        Skip,
+    }
+
+    pub(super) fn run(sh: &Shell, args: &Args) -> anyhow::Result<()> {
+        // TODO: venv arg?
+        let venv = env::var("VIRTUAL_ENV").unwrap_or_else(|_| ".venv".to_string());
+
+        match &args.command {
+            Commands::Build {
+                maturin,
+                skip_stubs,
+            } => python::build(&sh, &venv, maturin, !*skip_stubs),
+            Commands::Clean => python::clean(&sh, &venv),
+            Commands::Docs => python::docs(&sh, &venv),
+            Commands::Lint { fix } => python::lint(&sh, &venv, *fix),
+            Commands::Test => python::test(&sh, &venv),
+            Commands::Shell => python::shell(&sh, &venv),
+        }
+    }
 
     pub(super) fn clean(sh: &Shell, venv: &str) -> anyhow::Result<()> {
         cmd!(sh, "rm -rf .ruff_cache/").run()?;
@@ -305,15 +297,15 @@ mod python {
     pub(super) fn build(
         sh: &Shell,
         venv: &str,
-        maturin: &MaturinOption,
+        maturin: &Maturin,
         stubs: bool,
     ) -> anyhow::Result<()> {
-        ensure_venv(sh, venv)?;
+        mk_venv(sh, venv)?;
 
         match maturin {
-            MaturinOption::Develop => maturin_develop(sh, venv)?,
-            MaturinOption::Build => maturin_build(sh, venv)?,
-            MaturinOption::None => (),
+            Maturin::Develop => maturin_develop(sh, venv)?,
+            Maturin::Build => maturin_build(sh, venv)?,
+            Maturin::Skip => (),
         }
 
         if stubs {
@@ -324,8 +316,8 @@ mod python {
     }
 
     pub(super) fn shell(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-        ensure_venv(sh, venv)?;
-        build(sh, venv, &MaturinOption::Develop, true)?;
+        mk_venv(sh, venv)?;
+        build(sh, venv, &Maturin::Develop, true)?;
 
         let mut cmd: std::process::Command = cmd!(sh, "{venv}/bin/python").into();
         Err(cmd.exec().into())
@@ -373,16 +365,16 @@ mod python {
     }
 
     pub(super) fn test(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-        ensure_venv(sh, venv)?;
-        build(sh, venv, &MaturinOption::Develop, true)?;
+        mk_venv(sh, venv)?;
 
+        build(sh, venv, &Maturin::Develop, true)?;
         cmd!(sh, "{venv}/bin/pytest").run()?;
 
         Ok(())
     }
 
     pub(super) fn docs(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-        ensure_venv(sh, venv)?;
+        mk_venv(sh, venv)?;
 
         cmd!(
             sh,
@@ -400,7 +392,9 @@ mod python {
     }
 
     pub(super) fn lint(sh: &Shell, venv: &str, fix: bool) -> anyhow::Result<()> {
-        ensure_venv(sh, venv)?;
+        mk_venv(sh, venv)?;
+
+        rustfmt_check(sh, "junction-python")?;
 
         if !fix {
             // when not fixing, always run both checks and return an error if either
@@ -434,37 +428,76 @@ mod python {
         Ok(())
     }
 
-    fn ensure_venv(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-        if !std::fs::metadata(venv).is_ok_and(|m| m.is_dir()) {
-            mk_venv(sh, venv)?;
-            install_packages(sh, venv)?;
-        }
-
-        Ok(())
-    }
-
     fn mk_venv(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-        cmd!(sh, "python3 -m venv {venv}").run()?;
-
-        Ok(())
-    }
-
-    fn install_packages(sh: &Shell, venv: &str) -> anyhow::Result<()> {
-        cmd!(sh, "{venv}/bin/python -m pip install --upgrade uv").run()?;
-        cmd!(
-            sh,
-            "{venv}/bin/uv pip install --upgrade --compile-bytecode -r junction-python/requirements-dev.txt"
-        )
-        .run()?;
+        if !std::fs::metadata(venv).is_ok_and(|m| m.is_dir()) {
+            cmd!(sh, "python3 -m venv {venv}").run()?;
+            cmd!(sh, "{venv}/bin/python -m pip install --upgrade uv").run()?;
+            cmd!(sh, "{venv}/bin/uv pip install --upgrade --compile-bytecode -r junction-python/requirements-dev.txt").run()?;
+        }
 
         Ok(())
     }
 }
 
+/// Node and Node Accessories
 mod node {
     use std::os::unix::process::CommandExt;
 
     use super::*;
+
+    #[derive(Parser)]
+    pub(super) struct Args {
+        #[command(subcommand)]
+        pub(super) command: Commands,
+    }
+
+    #[derive(clap::Subcommand)]
+    pub(super) enum Commands {
+        Build {
+            /// Build in release mode.
+            #[clap(long)]
+            release: bool,
+
+            /// Run install with `npm ci` intead of `npm i`.
+            #[clap(long)]
+            clean_install: bool,
+        },
+
+        /// Package a
+        Dist { platform: Option<String> },
+
+        /// Clean up the current node_modules and remove any built native
+        /// extensions.
+        Clean,
+
+        /// Lint and format Typescript and Javascript.
+        Lint {
+            /// Try to automatically fix any linter/formatter errors.
+            #[clap(long)]
+            fix: bool,
+        },
+
+        /// Docs for .
+        Docs,
+
+        /// Run a `node` repl. Builds a fresh debug version of Junction  before
+        /// starting the shell.
+        Shell,
+    }
+
+    pub(super) fn run(sh: &Shell, args: &Args) -> anyhow::Result<()> {
+        match &args.command {
+            Commands::Build {
+                release,
+                clean_install,
+            } => build(sh, *clean_install, *release),
+            Commands::Dist { platform } => dist(sh, platform.as_deref()),
+            Commands::Clean => clean(sh),
+            Commands::Lint { fix } => lint(sh, *fix),
+            Commands::Docs => docs(sh),
+            Commands::Shell => shell(sh),
+        }
+    }
 
     pub(super) fn clean(sh: &Shell) -> anyhow::Result<()> {
         cmd!(sh, "rm -rf junction-node/node_modules/").run()?;

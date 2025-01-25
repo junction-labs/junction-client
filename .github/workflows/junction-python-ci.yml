@@ -2,13 +2,13 @@ name: junction-python CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
       - "junction-python/**"
       - ".github/workflows/junction-python-ci.yml"
 
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
       - "junction-python/**"
       - ".github/workflows/junction-python-ci.yml"
@@ -26,42 +26,14 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: "Install Rust @${{ env.rust_min }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
+      - uses: actions/checkout@v4
+      - name: "Install Rust @${{ env.rust_min }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
           toolchain: ${{ env.rust_min }}
-    - uses: Swatinem/rust-cache@v2
-    - name: check
-      run: cargo check -p junction-python
-
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: "Install Rust @ ${{ env.rust_stable }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
-          toolchain: ${{ env.rust_stable }}
-    - uses: Swatinem/rust-cache@v2
-    - name: clippy
-      run: cargo xtask ci-clippy --crates junction-python
-
-  rustfmt:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: "Install Rust @ ${{ env.rust_stable }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
-          toolchain: ${{ env.rust_stable }}
-    - uses: Swatinem/rust-cache@v2
-    - name: fmt
-      run: |
-        if ! rustfmt --check --edition 2021 $(git ls-files 'junction-python/*.rs'); then
-          echo "rustfmt found un-formatted files" >&2
-          exit 1
-        fi
+      - uses: Swatinem/rust-cache@v2
+      - name: check
+        run: cargo check -p junction-python
 
   # Python CI steps
   #
@@ -69,44 +41,44 @@ jobs:
   test-python:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: "Install Rust @ ${{ env.rust_stable }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
           toolchain: ${{ env.rust_stable }}
-    - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-    - name: build python
-      run: cargo xtask python-build
+      - name: build python
+        run: cargo xtask python build
 
-    - name: check for uncommitted changes
-      run: |
+      - name: check for uncommitted changes
+        run: |
           if [[ -n $(git status --porcelain) ]]; then
               echo "Found uncomitted changes after running codegen:"
               git diff
               exit 1
           fi
 
-    - name: run rust tests
-      run: cargo test -p junction-python
+      - name: run rust tests
+        run: cargo test -p junction-python
 
-    - name: run python tests
-      run: cargo xtask python-test
+      - name: run python tests
+        run: cargo xtask python test
 
   lint-python:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: "Install Rust @ ${{ env.rust_stable }}"
-      uses: dtolnay/rust-toolchain@stable
-      with:
+      - uses: actions/checkout@v4
+      - name: "Install Rust @ ${{ env.rust_stable }}"
+        uses: dtolnay/rust-toolchain@stable
+        with:
           toolchain: ${{ env.rust_stable }}
-    - uses: Swatinem/rust-cache@v2
-    - name: lint
-      run: cargo xtask python-lint
+      - uses: Swatinem/rust-cache@v2
+      - name: lint
+        run: cargo xtask python lint
