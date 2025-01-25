@@ -16,7 +16,7 @@ on:
       - node-release
       ## Note if you add to this list, the job that _calls in_ must have its permissions
       ## already set for some reason:
-      ##  permissions: 
+      ##  permissions:
       ##    contents: write
 
 env:
@@ -50,21 +50,21 @@ jobs:
           node-version: 22
 
       - name: Build Rust documentation
-        run: cargo xtask ci-doc
+        run: cargo xtask core doc
 
       - name: Build python
-        run: cargo xtask python-build
+        run: cargo xtask python build
 
       - name: Build python documentation
         env:
           JUNCTION_VERSION: ${{ github.event.client_payload.version || 'main' }}
-        run: cargo xtask python-docs
+        run: cargo xtask python docs
 
       - name: Build node
-        run: cargo xtask node-build
+        run: cargo xtask node build
 
       - name: Build node documentation
-        run: cargo xtask node-docs
+        run: cargo xtask node docs
 
       - name: Deploy Rust dev docs
         if: github.event_name == 'push' && github.ref_name == 'main'
