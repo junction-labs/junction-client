@@ -16,7 +16,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   rust_stable: stable
-  rust_min: 1.79
+  rust_min: 1.81
   node_lts: 20.x
 
 jobs:
