@@ -36,7 +36,7 @@ serde = { version = "1.0", default-features = false }
 serde_json = "1.0"
 serde_yml = "0.0.12"
 smol_str = "0.3"
-thiserror = "1.0"
+thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 xds-api = { version = "0.1", default-features = false }
