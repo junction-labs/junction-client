@@ -638,6 +638,7 @@ mod node {
         Pack {
             /// Build the tarball for the given platform. If not specified,
             /// builds the top level cross-platform package.
+            #[clap(long)]
             platform: Option<String>,
         },
 
@@ -731,14 +732,14 @@ mod node {
     fn pack(sh: &Shell, npm_args: NpmArgs, platform: Option<&str>) -> anyhow::Result<()> {
         let dest_dir = "junction-node/dist";
         let package = match platform {
-            Some(platform) => format!("./platforms/{platform}"),
-            None => ".".to_string(),
+            Some(platform) => format!("./junction-node/platforms/{platform}"),
+            None => "./junction-node".to_string(),
         };
 
         cmd!(sh, "mkdir -p {dest_dir}").run()?;
         cmd!(
             sh,
-            "npm {npm_args...} pack {package} --pack-destination ./dist"
+            "npm {npm_args...} pack {package} --pack-destination {dest_dir}"
         )
         .run()?;
 
