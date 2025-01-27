@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "junction-api"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "arbitrary",
  "arbtest",
@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "junction-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1158,7 +1158,7 @@ dependencies = [
 
 [[package]]
 name = "junction-typeinfo"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "junction-typeinfo-derive",
  "serde",
@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "junction-typeinfo-derive"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "proc-macro2",
  "quote",

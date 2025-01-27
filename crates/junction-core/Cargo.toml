@@ -1,11 +1,10 @@
 [package]
 name = "junction-core"
-version = "0.2.1"
 edition = "2021"
 description = """
 The core implementation for Junction - an xDS dynamically-configurable API load-balancer library.
 """
-readme = "../README.md"
+version.workspace = true
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true

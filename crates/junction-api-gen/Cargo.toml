@@ -7,7 +7,7 @@ repository.workspace = true
 license.workspace = true
 description = """
 cross-language API generation for Junction
-""""
+"""
 
 [dependencies]
 anyhow = "1.0"
