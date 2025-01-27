@@ -38,6 +38,11 @@ jobs:
           cache: npm
           cache-dependency-path: junction-node/package-lock.json
 
+      - name: check versions
+        run: |
+          cargo xtask node version
+          cargo xtask check diffs
+
       - name: package
         run: |
           cargo xtask node build --clean-install
