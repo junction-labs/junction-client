@@ -5,6 +5,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 use xshell::{cmd, Shell};
 
 fn main() -> anyhow::Result<()> {
@@ -17,7 +18,8 @@ fn main() -> anyhow::Result<()> {
     match &args.command {
         InstallPrecommit => install_precommit(&sh),
         Precommit => precommit(&sh, ".venv"),
-        Version => version(),
+        Version { package, json } => version(&sh, *json, package.as_deref()),
+        CheckDiffs => check_diffs(&sh),
         Core(args) => core::run(&sh, args),
         Node(args) => node::run(&sh, args),
         Python(args) => python::run(&sh, args),
@@ -32,7 +34,24 @@ fn project_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn crate_version<P: AsRef<Path>>(path: P) -> anyhow::Result<semver::Version> {
+#[derive(Debug, Serialize)]
+struct CrateInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    version: semver::Version,
+    maj_min_version: String,
+    sha: String,
+}
+
+fn crate_info<P: AsRef<Path>>(sh: &Shell, path: P) -> anyhow::Result<CrateInfo> {
+    fn crate_name(manifest: &toml::Table) -> anyhow::Result<Option<String>> {
+        match toml_lookup(manifest, &["package", "name"]) {
+            Some(toml::Value::String(name)) => Ok(Some(name.clone())),
+            Some(_) => anyhow::bail!("invalid Cargo manifest: package.name is not a string"),
+            None => Ok(None),
+        }
+    }
+
     fn package_version(manifest: &toml::Table) -> anyhow::Result<semver::Version> {
         let Some(toml::Value::String(version)) = toml_lookup(manifest, &["package", "version"])
         else {
@@ -76,15 +95,28 @@ fn crate_version<P: AsRef<Path>>(path: P) -> anyhow::Result<semver::Version> {
     let cargo_toml = std::fs::read_to_string(path)?;
     let manifest: toml::Table = cargo_toml.parse()?;
 
-    package_version(&manifest).or_else(|_| workspace_version(&manifest))
+    let name = crate_name(&manifest)?;
+    let version = package_version(&manifest).or_else(|_| workspace_version(&manifest))?;
+    let maj_min_version = format!("{}.{}", version.major, version.minor);
+
+    let mut sha = cmd!(sh, "git rev-parse HEAD").read()?.trim().to_string();
+    if check_diffs(sh).is_err() {
+        sha.push_str(" (dirty)");
+    }
+
+    Ok(CrateInfo {
+        name,
+        version,
+        maj_min_version,
+        sha,
+    })
 }
 
 /// Cargo xtasks for development.
 ///
-///
-/// xtasks are here anything common that takes more than a single, standard
-/// cargo command. If a cargo default isn't working, try running `cargo xtask
-/// --help` to see if there's an equivalent here.
+/// Three build systems in a trenchcoat, and your one stop shop for Junction
+/// dev. See xtask help <command> for a detailed description of how we build
+/// individual client libraries.
 #[derive(Parser)]
 struct Args {
     #[command(subcommand)]
@@ -93,7 +125,7 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Install xtask precommit hooks in the local git repo.
+    /// Install `xtask precommit` as a precommit hooks in the local git repo.
     InstallPrecommit,
 
     /// Run xtask precommit hooks.
@@ -103,16 +135,49 @@ enum Commands {
     /// CI.
     Precommit,
 
-    /// Print the versions of Junction client crates.
-    Version,
+    /// Print the versions of all Junction client crates.
+    ///
+    /// Lists all versions of Junction crates. Core crates are versioned
+    /// together in lockstep using the repo root's Cargo.toml, and individual
+    /// client libraries are versioned independently. The Cargo.toml in each
+    /// client should be treated as the authoritative version number - ecosystem
+    /// tools and xtasks should use that version number where possible.
+    Version {
+        #[clap(short, long)]
+        package: Option<String>,
 
-    /// junction-core tasks
+        #[clap(short, long, default_value_t = false)]
+        json: bool,
+    },
+
+    /// Check the repo to see if there are any uncomitted changes.
+    ///
+    /// Uses git status to check if anything has been modified or added to the
+    /// repo. Fails if any changes have been made.
+    CheckDiffs,
+
+    /// junction-core tasks. See xtask help junction-core for details.
     Core(core::Args),
 
-    /// junction-node tasks
+    /// junction-node tasks.
+    ///
+    /// junction-node is built with neon-rs and npm. To keep things looking like
+    /// a simple Neon project, junction-node/package.json contains the steps for
+    /// building and packaging the Node library. The end result of that is that
+    /// node xtasks tend to call npm, which often calls right back into Cargo.
+    /// This is slightly confusing, but ultimately fine.
     Node(node::Args),
 
-    /// junction-python tasks
+    /// junction-python tasks. See xtask help junction-python for details.
+    ///
+    /// junction-python is built as a standard PyO3 project, and relies on
+    /// maturin to build and package wheels.
+    ///
+    /// python xtasks manage up a virtualenv named .venv at the root of this
+    /// repo and use it to build and manage python dependencies. You should
+    /// never have to create or activate your own virtualenv. If you want to use
+    /// a completely separate env, python xtasks respect the VIRTUAL_ENV
+    /// environment variable and treat it as a path to a virtualenv.
     Python(python::Args),
 }
 
@@ -132,18 +197,55 @@ fn precommit(sh: &Shell, venv: &str) -> anyhow::Result<()> {
 
     // run per-language lints
     python::lint(sh, venv, false)?;
-    node::lint(sh, false)?;
+    node::lint(sh, &["--prefix", "junction-node"], false)?;
 
     Ok(())
 }
 
-fn version() -> anyhow::Result<()> {
-    let core_version = crate_version("Cargo.toml")?;
-    let python_version = crate_version("junction-python/Cargo.toml")?;
-    let node_version = crate_version("junction-node/Cargo.toml")?;
-    eprintln!("  junction-core: {core_version}");
-    eprintln!("junction-python: {python_version}");
-    eprintln!("  junction-node: {node_version}");
+fn version(sh: &Shell, json: bool, only: Option<&str>) -> anyhow::Result<()> {
+    match only {
+        Some(prefix) => {
+            let info = crate_info(sh, format!("{prefix}/Cargo.toml"))?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&info).unwrap());
+            } else {
+                println!(
+                    "{}: {}",
+                    info.name.unwrap_or("workspace".to_string()),
+                    info.version
+                );
+            }
+        }
+        None => {
+            let info = [
+                crate_info(sh, "Cargo.toml")?,
+                crate_info(sh, "junction-python/Cargo.toml")?,
+                crate_info(sh, "junction-node/Cargo.toml")?,
+            ];
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&info).unwrap());
+            } else {
+                for info in info {
+                    println!(
+                        "{name:>20}: {version}",
+                        name = info.name.unwrap_or("workspace".to_string()),
+                        version = info.version
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn check_diffs(sh: &Shell) -> anyhow::Result<()> {
+    let changed = cmd!(sh, "git status --porcelain").read()?;
+    if !changed.is_empty() {
+        anyhow::bail!("found uncomitted changes: \n\n{changed}");
+    }
 
     Ok(())
 }
@@ -183,7 +285,7 @@ fn rustfmt_check(sh: &Shell, path_prefix: &str) -> anyhow::Result<()> {
 
 fn loud_env<K: AsRef<OsStr>, V: AsRef<OsStr>>(sh: &Shell, key: K, value: V) -> xshell::PushEnv<'_> {
     eprintln!(
-        "env: {k}={v}",
+        "+env: {k}={v}",
         k = key.as_ref().to_string_lossy(),
         v = value.as_ref().to_string_lossy()
     );
@@ -302,24 +404,26 @@ mod python {
             skip_stubs: bool,
         },
 
-        /// Clean the current virtualenv and any  caches.
+        /// Clean the current virtualenv and any caches.
         Clean,
 
-        /// Build  docs with sphinx.
+        /// Build docs with sphinx.
         Docs,
 
-        /// Lint and format  code.
+        /// Lint and format junction-python.
         Lint {
             /// Try to automatically fix any linter/formatter errors.
             #[clap(long)]
             fix: bool,
         },
 
-        /// Run a `python` repl in the current virtual environment. Builds a fresh
-        /// version of Junction  and installs it before starting.
+        /// Run a `python` shell.
+        ///
+        /// Builds a fresh version of Junction and installs it before running
+        /// python.
         Shell,
 
-        /// Run junction-python's  tests.
+        /// Test junction-python.
         Test,
     }
 
@@ -517,19 +621,21 @@ mod node {
     pub(super) enum Commands {
         /// Build the junction-node client.
         Build {
-            /// Build in release mode.
-            #[clap(long)]
-            release: bool,
+            /// Build mode. dev builds a normal cargo build. release uses cargo
+            /// build --release, and cross cross-compiles a release build with
+            /// cargo-cross, using CARGO_BUILD_TARGET and NEON_BUILD_PLATFORM.
+            #[clap(long, default_value_t, value_enum)]
+            mode: BuildMode,
 
             /// Run install with `npm ci` intead of `npm i`.
             #[clap(long)]
             clean_install: bool,
         },
 
-        /// Create a tarball ready for uploading to npm.
-        Dist {
+        /// Run npm pack to create tarball ready for uploading to npm.
+        Pack {
             /// Build the tarball for the given platform. If not specified,
-            /// build the top level cross-platform package.
+            /// builds the top level cross-platform package.
             platform: Option<String>,
         },
 
@@ -555,18 +661,22 @@ mod node {
         Version,
     }
 
+    type NpmArgs<'a> = &'a [&'static str];
+
     pub(super) fn run(sh: &Shell, args: &Args) -> anyhow::Result<()> {
+        let npm_args = ["--prefix", "./junction-node"];
+
         match &args.command {
             Commands::Build {
-                release,
+                mode,
                 clean_install,
-            } => build(sh, *clean_install, *release),
-            Commands::Dist { platform } => dist(sh, platform.as_deref()),
+            } => build(sh, &npm_args, *clean_install, *mode),
+            Commands::Pack { platform } => pack(sh, &npm_args, platform.as_deref()),
             Commands::Clean => clean(sh),
-            Commands::Lint { fix } => lint(sh, *fix),
-            Commands::Docs => docs(sh),
-            Commands::Shell => shell(sh),
-            Commands::Version => version(sh),
+            Commands::Lint { fix } => lint(sh, &npm_args, *fix),
+            Commands::Docs => docs(sh, &npm_args),
+            Commands::Shell => shell(sh, &npm_args),
+            Commands::Version => version(sh, &npm_args),
         }
     }
 
@@ -579,64 +689,87 @@ mod node {
         Ok(())
     }
 
-    pub(super) fn build(sh: &Shell, clean_install: bool, release: bool) -> anyhow::Result<()> {
-        let _dir = sh.push_dir("junction-node");
+    #[derive(ValueEnum, Clone, Copy, Default)]
+    pub(crate) enum BuildMode {
+        #[default]
+        Dev,
+        Release,
+        Cross,
+    }
+
+    fn build(
+        sh: &Shell,
+        npm_args: NpmArgs,
+        clean_install: bool,
+        mode: BuildMode,
+    ) -> anyhow::Result<()> {
         let _env = loud_env(sh, "JUNCTION_CLIENT_SKIP_POSTINSTALL", "true");
 
         let install_cmd = if clean_install { "ci" } else { "i" };
-        let build_cmd = if release { "build-release" } else { "build" };
-        cmd!(sh, "npm {install_cmd} --fund=false").run()?;
-        cmd!(sh, "npm run {build_cmd}").run()?;
+        cmd!(sh, "npm {npm_args...} {install_cmd} --fund=false").run()?;
+
+        let build_cmd = match mode {
+            BuildMode::Dev => "build",
+            BuildMode::Release => "build-release",
+            BuildMode::Cross => "cross-release",
+        };
+        cmd!(sh, "npm {npm_args...} run {build_cmd}").run()?;
 
         Ok(())
     }
 
-    pub(super) fn docs(sh: &Shell) -> anyhow::Result<()> {
-        let _dir = sh.push_dir("junction-node");
-        let _env = loud_env(sh, "JUNCTION_CLIENT_SKIP_POSTINSTALL", "true");
-        cmd!(sh, "npm install --fund=false").run()?;
-        cmd!(sh, "npx typedoc").run()?;
+    fn docs(sh: &Shell, npm_args: NpmArgs) -> anyhow::Result<()> {
+        build(sh, npm_args, true, BuildMode::Dev)?;
+
+        cmd!(sh, "npm {npm_args...} run doc").run()?;
 
         Ok(())
     }
 
-    pub(super) fn dist(sh: &Shell, platform: Option<&str>) -> anyhow::Result<()> {
-        let _dir = sh.push_dir("junction-node");
-
+    fn pack(sh: &Shell, npm_args: NpmArgs, platform: Option<&str>) -> anyhow::Result<()> {
+        let dest_dir = "junction-node/dist";
         let package = match platform {
             Some(platform) => format!("./platforms/{platform}"),
             None => ".".to_string(),
         };
 
-        cmd!(sh, "npm pack {package} --pack-destination ./dist").run()?;
+        cmd!(sh, "mkdir -p {dest_dir}").run()?;
+        cmd!(
+            sh,
+            "npm {npm_args...} pack {package} --pack-destination ./dist"
+        )
+        .run()?;
 
         Ok(())
     }
 
-    pub(super) fn lint(sh: &Shell, fix: bool) -> anyhow::Result<()> {
-        let _dir = sh.push_dir("junction-node");
-        let _env = loud_env(sh, "JUNCTION_CLIENT_SKIP_POSTINSTALL", "true");
+    pub(super) fn lint(sh: &Shell, npm_args: NpmArgs, fix: bool) -> anyhow::Result<()> {
+        // rustfmt
+        rustfmt_check(sh, "junction-node")?;
 
-        cmd!(sh, "npm install --fund=false").run()?;
-
+        // run npm lint/fix
         let lint_cmd = if fix { "fix" } else { "lint" };
-        cmd!(sh, "npm run {lint_cmd}").run()?;
+        cmd!(sh, "npm {npm_args...} ci --fund=false")
+            .env("JUNCTION_CLIENT_SKIP_POSTINSTALL", "true")
+            .run()?;
+        cmd!(sh, "npm {npm_args...} run {lint_cmd}").run()?;
 
         Ok(())
     }
 
-    pub(super) fn shell(sh: &Shell) -> anyhow::Result<()> {
-        let _dir = sh.push_dir("junction-node");
+    fn shell(sh: &Shell, npm_args: NpmArgs) -> anyhow::Result<()> {
+        build(sh, npm_args, true, BuildMode::Dev)?;
 
-        cmd!(sh, "npm install --fund=false").run()?;
-        cmd!(sh, "npm run build").run()?;
-
+        // change dir and exec. we're not coming back to xtasks, we're either
+        // going to exec or exit, so don't have to worry about resetting the dir
+        // when we're done.
+        sh.change_dir("junction-node");
         let mut cmd: std::process::Command = cmd!(sh, "node").into();
         Err(cmd.exec().into())
     }
 
-    fn version(sh: &Shell) -> anyhow::Result<()> {
-        let crate_version = crate_version("junction-node/Cargo.toml")?;
+    fn version(sh: &Shell, npm_args: NpmArgs) -> anyhow::Result<()> {
+        let crate_info = crate_info(sh, "junction-node/Cargo.toml")?;
         let platform_package_dirs = cmd!(sh, "ls junction-node/platforms/").read()?;
 
         let platform_packages: Vec<_> = platform_package_dirs
@@ -644,13 +777,13 @@ mod node {
             .map(|dir| format!("junction-node/platforms/{dir}/package.json"))
             .collect();
 
-        write_package_version("junction-node/package.json", &crate_version)?;
+        write_package_version("junction-node/package.json", &crate_info.version)?;
         for path in &platform_packages {
-            write_package_version(path, &crate_version)?;
+            write_package_version(path, &crate_info.version)?;
         }
 
-        // run lint to clean this shit up again
-        lint(sh, true)?;
+        // run lint to clean up again
+        lint(sh, npm_args, true)?;
 
         Ok(())
     }

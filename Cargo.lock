@@ -2057,6 +2057,9 @@ name = "semver"
 version = "1.0.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f79dfe2d285b0488816f30e700a7438c5a73d816b5b7d3ac72fbc48b0d185e03"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "send_wrapper"
@@ -2891,6 +2894,7 @@ dependencies = [
  "anyhow",
  "clap",
  "semver",
+ "serde",
  "serde_json",
  "toml",
  "xshell",
