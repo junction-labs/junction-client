@@ -76,7 +76,7 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             neon_platform: linux-arm64-gnu
-            neon_build: cross
+            neon_build: cross-release
 
     steps:
       - uses: actions/checkout@v4
@@ -92,16 +92,22 @@ jobs:
         if: ${{ startsWith(matrix.platform.neon_build, 'cross') }}
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
+
       - name: Install Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.node_lts }}
 
+      # this step doesn't use xtask because we haven't yet figured out how to
+      # make xtask commands work well on windows. if you are reading this and
+      # bothered by this, i wish you the best of luck.
       - name: build
         shell: bash
         run: |
-          cargo xtask node build --clean-install --mode=${{ matrix.platform.neon_build || 'release '}}
-          cargo xtask node pack --platform ${{ matrix.platform.neon_platform }}
+          npm --prefix ./junction-node ci --fund=false
+          npm --prefix ./junction-node run ${{ matrix.platform.neon_build || 'build-release' }}
+          mkdir -p ./junction-node/dist
+          npm --prefix ./junction-node pack ./junction-node/platforms/${{ matrix.platform.neon_platform }} --pack-destination ./junction-node/dist
         env:
           CARGO_BUILD_TARGET: ${{ matrix.platform.target }}
           NEON_BUILD_PLATFORM: ${{ matrix.platform.neon_platform }}

@@ -377,8 +377,6 @@ mod core {
 }
 
 mod python {
-    use std::os::unix::process::CommandExt;
-
     use super::*;
 
     #[derive(Parser)]
@@ -421,6 +419,7 @@ mod python {
         ///
         /// Builds a fresh version of Junction and installs it before running
         /// python.
+        #[cfg(unix)]
         Shell,
 
         /// Test junction-python.
@@ -448,6 +447,7 @@ mod python {
             Commands::Docs => python::docs(sh, &venv),
             Commands::Lint { fix } => python::lint(sh, &venv, *fix),
             Commands::Test => python::test(sh, &venv),
+            #[cfg(unix)]
             Commands::Shell => python::shell(sh, &venv),
         }
     }
@@ -481,7 +481,10 @@ mod python {
         Ok(())
     }
 
+    #[cfg(unix)]
     pub(super) fn shell(sh: &Shell, venv: &str) -> anyhow::Result<()> {
+        use std::os::unix::process::CommandExt;
+
         mk_venv(sh, venv)?;
         build(sh, venv, &Maturin::Develop, true)?;
 
@@ -609,7 +612,6 @@ mod python {
 
 /// Node and Node Accessories
 mod node {
-    use std::os::unix::process::CommandExt;
 
     use super::*;
 
@@ -658,6 +660,7 @@ mod node {
 
         /// Run a `node` repl. Builds a fresh debug version of Junction before
         /// starting the shell.
+        #[cfg(unix)]
         Shell,
 
         /// Update npm package versions from the Cargo manifest.
@@ -678,8 +681,9 @@ mod node {
             Commands::Clean => clean(sh),
             Commands::Lint { fix } => lint(sh, &npm_args, *fix),
             Commands::Docs => docs(sh, &npm_args),
-            Commands::Shell => shell(sh, &npm_args),
             Commands::Version => version(sh, &npm_args),
+            #[cfg(unix)]
+            Commands::Shell => shell(sh, &npm_args),
         }
     }
 
@@ -716,6 +720,16 @@ mod node {
             BuildMode::Release => "build-release",
             BuildMode::Cross => "cross-release",
         };
+
+        let _build_env = if matches!(mode, BuildMode::Cross) {
+            let build_target = env::var("XTASK_BUILD_TARGET").map_err(|_| {
+                anyhow::anyhow!("can't cross compile without XTASK_BUILD_TARGET set")
+            })?;
+            Some(loud_env(sh, "CARGO_BUILD_TARGET", build_target))
+        } else {
+            None
+        };
+
         cmd!(sh, "npm {npm_args...} run {build_cmd}").run()?;
 
         Ok(())
@@ -760,7 +774,10 @@ mod node {
         Ok(())
     }
 
+    #[cfg(unix)]
     fn shell(sh: &Shell, npm_args: NpmArgs) -> anyhow::Result<()> {
+        use std::os::unix::process::CommandExt;
+
         build(sh, npm_args, true, BuildMode::Dev)?;
 
         // change dir and exec. we're not coming back to xtasks, we're either
