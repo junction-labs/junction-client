@@ -40,9 +40,8 @@ jobs:
 
       - name: package
         run: |
-          mkdir -p ./junction-node/dist
-          npm --prefix ./junction-node ci
-          npm --prefix ./junction-node pack ./junction-node --pack-destination ./junction-node/dist
+          cargo xtask node build --clean-install
+          cargo xtask node pack
         env:
           JUNCTION_CLIENT_SKIP_POSTINSTALL: "true"
 
@@ -77,7 +76,7 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             neon_platform: linux-arm64-gnu
-            neon_build: cross-release
+            neon_build: cross
 
     steps:
       - uses: actions/checkout@v4
@@ -101,10 +100,8 @@ jobs:
       - name: build
         shell: bash
         run: |
-          npm --prefix ./junction-node ci --fund=false
-          npm --prefix ./junction-node run ${{ matrix.platform.neon_build || 'build-release' }}
-          mkdir -p ./junction-node/dist
-          npm --prefix ./junction-node pack ./junction-node/platforms/${{ matrix.platform.neon_platform }} --pack-destination ./junction-node/dist
+          cargo xtask node build --clean-install --mode=${{ matrix.platform.neon_build || 'release '}}
+          cargo xtask node pack --platform ${{ matrix.platform.neon_platform }}
         env:
           CARGO_BUILD_TARGET: ${{ matrix.platform.target }}
           NEON_BUILD_PLATFORM: ${{ matrix.platform.neon_platform }}
@@ -169,21 +166,12 @@ jobs:
         id: version
         working-directory: junction-node
         run: |
-          VERSION=$(grep -m 1 -oP 'version = "\K[^"]+' Cargo.toml)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          regex="([0-9]+\.[0-9]+)\.[0-9]+.*"
-          [[ $VERSION =~ $regex ]]
-          maj_min_version=${BASH_REMATCH[1]}
-          echo "maj_min_version=$maj_min_version" >> "$GITHUB_OUTPUT"
+          echo "payload=$(cargo xtask version --json -p junction-node)" >> "$GITHUB_OUTPUT"
 
       - name: Trigger other workflows related to the release
         if: inputs.dry-run == false
         uses: peter-evans/repository-dispatch@v3
         with:
           event-type: node-release
-          client-payload: >
-            {
-              "version": "${{ steps.version.outputs.version }}",
-              "maj_min_version": "${{ steps.version.outputs.maj_min_version }}",
-              "sha": "${{ inputs.sha || github.sha }}"
-            }
+          client-payload: |
+            "${{ steps.version.outputs.payload }}"

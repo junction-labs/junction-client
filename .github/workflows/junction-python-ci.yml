@@ -58,7 +58,7 @@ jobs:
         run: cargo xtask python build
 
       - name: check for uncommitted changes
-        run: xargo xtask check-diffs
+        run: cargo xtask check-diffs
 
       - name: lint
         run: cargo xtask python lint
