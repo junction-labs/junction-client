@@ -4,6 +4,7 @@
   "description": "",
   "main": "./lib/index.cjs",
   "scripts": {
+    "doc": "npx typedoc",
     "test": "tsc && cargo test",
     "prepack": "tsc",
     "build": "tsc && cargo build --message-format=json-render-diagnostics > cargo.log",
