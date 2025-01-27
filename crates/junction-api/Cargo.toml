@@ -30,7 +30,7 @@ xds-api = { workspace = true, default-features = false, optional = true }
 # k8s-openapi and the gateway-api crates have to be kept in sync, or we'll have
 # a bad time with multiple versions of types and feature flags won't be set.
 k8s-openapi = { version = "=0.23", optional = true }
-gateway-api = { version = "=0.14.0", optional = true }
+gateway-api = { version = "=0.14.2", optional = true }
 kube = { version = "0.96", optional = true }
 
 [dev-dependencies]
