@@ -171,7 +171,7 @@ jobs:
         with:
           verbose: true
 
-  publish-to-github:
+  docs-publish:
     needs: [pypi-publish]
     runs-on: ubuntu-latest
     steps:
@@ -183,21 +183,12 @@ jobs:
         id: version
         working-directory: junction-python
         run: |
-          VERSION=$(grep -m 1 -oP 'version = "\K[^"]+' Cargo.toml)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          regex="([0-9]+\.[0-9]+)\.[0-9]+.*"
-          [[ $VERSION =~ $regex ]]
-          maj_min_version=${BASH_REMATCH[1]}
-          echo "maj_min_version=$maj_min_version" >> "$GITHUB_OUTPUT"
+          echo "payload=$(cargo xtask version --json -p junction-python)" >> "$GITHUB_OUTPUT"
 
       - name: Trigger other workflows related to the release
         if: inputs.dry-run == false
         uses: peter-evans/repository-dispatch@v3
         with:
           event-type: python-release
-          client-payload: >
-            {
-              "version": "${{ steps.version.outputs.version }}",
-              "maj_min_version": "${{ steps.version.outputs.maj_min_version }}",
-              "sha": "${{ inputs.sha || github.sha }}"
-            }
+          client-payload: |
+            "${{ steps.version.outputs.payload }}"
