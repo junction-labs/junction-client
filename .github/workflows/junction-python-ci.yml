@@ -33,7 +33,7 @@ jobs:
           toolchain: ${{ env.rust_min }}
       - uses: Swatinem/rust-cache@v2
       - name: check
-        run: cargo check -p junction-python
+        run: cargo xtask python build
 
   # Python CI steps
   #
@@ -58,27 +58,10 @@ jobs:
         run: cargo xtask python build
 
       - name: check for uncommitted changes
-        run: |
-          if [[ -n $(git status --porcelain) ]]; then
-              echo "Found uncomitted changes after running codegen:"
-              git diff
-              exit 1
-          fi
+        run: xargo xtask check-diffs
 
-      - name: run rust tests
-        run: cargo test -p junction-python
-
-      - name: run python tests
-        run: cargo xtask python test
-
-  lint-python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: "Install Rust @ ${{ env.rust_stable }}"
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
-      - uses: Swatinem/rust-cache@v2
       - name: lint
         run: cargo xtask python lint
+
+      - name: run tests
+        run: cargo xtask python test

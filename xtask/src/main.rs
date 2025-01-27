@@ -533,6 +533,8 @@ mod python {
     pub(super) fn test(sh: &Shell, venv: &str) -> anyhow::Result<()> {
         mk_venv(sh, venv)?;
 
+        cmd!(sh, "cargo test -p junction-python").run()?;
+
         build(sh, venv, &Maturin::Develop, true)?;
         cmd!(sh, "{venv}/bin/pytest").run()?;
 
