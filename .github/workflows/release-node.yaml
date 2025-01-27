@@ -46,7 +46,7 @@ jobs:
       - name: check versions
         run: |
           cargo xtask node version
-          cargo xtask check diffs
+          cargo xtask check-diffs
 
       - name: package
         run: |
