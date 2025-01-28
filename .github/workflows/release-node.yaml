@@ -180,7 +180,6 @@ jobs:
 
       - name: Get version from Cargo.toml
         id: version
-        working-directory: junction-node
         run: |
           echo "payload=$(cargo xtask version --json -p junction-node)" >> "$GITHUB_OUTPUT"
 
