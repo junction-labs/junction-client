@@ -1,0 +1,62 @@
+name: "Publish Node Reference Docs"
+description: |
+  Publish Node stable and dev reference docs for Node.
+inputs:
+  node-version:
+    description: "The version of node used to build the docs. Passed to actions/setup-node."
+    required: true
+  doc-version:
+    description: |
+      The Junction version that docs are being built at. This may
+      be a a string like dev or a semver version.
+    required: true
+  build-dev:
+    description: "Build dev docs"
+    required: false
+    default: ""
+  build-stable:
+    description: "Build stable docs"
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Build node
+      shell: bash
+      run: cargo xtask node build
+
+    - name: Build node documentation
+      shell: bash
+      run: cargo xtask node docs
+
+    - name: Deploy Node dev docs
+      uses: JamesIves/github-pages-deploy-action@v4
+      if: ${{ inputs.build-dev == 'true' }}
+      with:
+        folder: junction-node/docs
+        target-folder: api/node/dev
+        single-commit: true
+
+    # NOTE: we're deploying a per-version copy of the docs here, but we're not
+    # DOING anything with it. there's no way to switch to them, but they're
+    # there.
+    - name: Deploy versioned docs
+      uses: JamesIves/github-pages-deploy-action@v4
+      if: ${{ inputs.doc-version && inputs.build-stable == 'true' }}
+      with:
+        folder: junction-node/docs
+        target-folder: api/node/${{ inputs.doc-version }}
+        single-commit: true
+
+    - name: Deploy Node stable docs
+      uses: JamesIves/github-pages-deploy-action@v4
+      if: ${{ inputs.build-stable == 'true' }}
+      with:
+        folder: junction-node/docs
+        target-folder: api/node/stable
+        single-commit: true

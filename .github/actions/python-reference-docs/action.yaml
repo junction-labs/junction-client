@@ -1,0 +1,64 @@
+name: "Publish Python Reference Docs"
+description: |
+  Publish versioned and dev reference docs for Python.
+inputs:
+  doc-version:
+    description: |
+      The Junction version that docs are being built at. This may
+      be a a string like dev or a semver version.
+    required: true
+  python-version:
+    description: "The version of Python to build docs with."
+    required: true
+    default: "3.13"
+  build-dev:
+    description: "Build dev docs"
+    required: false
+    default: ""
+  build-stable:
+    description: "Build stable docs"
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Build python
+      shell: bash
+      run: cargo xtask python build
+
+    - name: Build python documentation
+      shell: bash
+      run: cargo xtask python docs
+      env:
+        JUNCTION_VERSION: ${{ inputs.doc-version }}
+
+    - name: Deploy Python dev docs
+      if: ${{ inputs.build-dev == 'true' }}
+      uses: JamesIves/github-pages-deploy-action@v4
+      with:
+        folder: junction-python/docs/build/html
+        target-folder: api/python/dev
+        single-commit: true
+
+    # NOTE: we're deploying a per-version copy of the docs here, but we're not
+    # DOING anything with it. the sphinx version switcher is still broken.
+    - name: Deploy versioned docs
+      uses: JamesIves/github-pages-deploy-action@v4
+      if: ${{ inputs.doc-version && inputs.build-stable == 'true' }}
+      with:
+        folder: junction-python/docs/build/html
+        target-folder: api/python/${{ inputs.doc-version }}
+        single-commit: true
+
+    - name: Deploy Python stable docs
+      uses: JamesIves/github-pages-deploy-action@v4
+      if: ${{ inputs.build-stable == 'true' }}
+      with:
+        folder: junction-python/docs/build/html
+        target-folder: api/python/stable
+        single-commit: true
