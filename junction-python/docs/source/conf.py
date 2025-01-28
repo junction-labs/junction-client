@@ -106,14 +106,14 @@ github_root = "https://github.com/junction-labs/junction-client"
 web_root = "https://docs.junctionlabs.io"
 
 # Specify version for version switcher dropdown menu
-git_ref = os.environ.get("JUNCTION_VERSION", "main")
-version_match = re.fullmatch(r"py-(\d+)\.\d+\.\d+.*", git_ref)
-switcher_version = version_match.group(1) if version_match is not None else "dev"
+junction_version = os.environ.get("JUNCTION_VERSION", "main")
+version_match = re.fullmatch(r"\d+\.\d+\.\d+.*", junction_version)
+switcher_version = junction_version if version_match is not None else "dev"
 
 html_js_files = [
     (
         "https://plausible.io/js/script.js",
-        {"data-domain": "docs.junction-labs,combined.junction-labs", "defer": "defer"},
+        {"data-domain": "docs.junctionlabs", "defer": "defer"},
     ),
 ]
 
@@ -135,11 +135,6 @@ html_theme_options = {
             "url": "https://discord.gg/9Uq9FwnW3y",
             "icon": "fa-brands fa-discord",
         },
-        # {
-        #     "name": "Twitter",
-        #     "url": "https://twitter.com/DataPolars",
-        #     "icon": "fa-brands fa-twitter",
-        # },
     ],
     "logo": {
         "image_light": f"{static_assets_root}/67099720085278dbb34eccb2_logo-closed-orange-grey.svg",
@@ -225,7 +220,9 @@ def linkcode_resolve(domain: str, info: dict[str, Any]) -> str | None:
     junction_client_root = (conf_dir_path.parent.parent / "junction").absolute()
 
     fn = os.path.relpath(fn, start=junction_client_root)
-    return f"{github_root}/blob/{git_ref}/junction-python/junction/{fn}{linespec}"
+    return (
+        f"{github_root}/blob/{junction_version}/junction-python/junction/{fn}{linespec}"
+    )
 
 
 def process_signature(  # noqa: D103
