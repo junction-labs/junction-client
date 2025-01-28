@@ -199,5 +199,4 @@ jobs:
         uses: peter-evans/repository-dispatch@v3
         with:
           event-type: python-release
-          client-payload: |
-            "${{ steps.version.outputs.payload }}"
+          client-payload: "${{ steps.version.outputs.payload }}"
