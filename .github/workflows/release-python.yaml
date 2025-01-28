@@ -10,6 +10,14 @@ on:
         description: Dry run. Defaults to true. Won't release to PyPI by default.
         type: boolean
         default: true
+      include-docs:
+        description: Publish docs to the Junction Labs website
+        type: boolean
+        default: true
+      include-pypi:
+        description: Publish packages to PyPI
+        type: boolean
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -54,6 +62,7 @@ jobs:
           path: dist/*.whl
 
   musllinux:
+    if: ${{ inputs.include-pypi }}
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -147,7 +156,7 @@ jobs:
           path: dist
 
   pypi-publish:
-    name: publish-to-pypi
+    if: ${{ inputs.include-pypi }}
     needs: [linux, musllinux, windows, macos, sdist]
     environment:
       name: release-python
@@ -172,7 +181,8 @@ jobs:
           verbose: true
 
   docs-publish:
-    needs: [pypi-publish]
+    if: ${{ inputs.include-docs }}
+    needs: [linux, musllinux, windows, macos, sdist]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
