@@ -510,9 +510,15 @@ impl Client {
     ///
     /// This is a programmatic view of the same data that you can fetch over
     /// gRPC by starting a [Client::csds_server].
-    pub fn dump_xds(&self) -> Vec<crate::XdsConfig> {
+    pub fn dump_xds(&self, not_found: bool) -> Vec<crate::XdsConfig> {
         match self.config.ads() {
-            Some(ads) => ads.iter_xds().collect(),
+            Some(ads) => {
+                if not_found {
+                    ads.iter_xds().collect()
+                } else {
+                    ads.iter_xds().filter(|c| c.xds.is_some()).collect()
+                }
+            }
             None => Vec::new(),
         }
     }
