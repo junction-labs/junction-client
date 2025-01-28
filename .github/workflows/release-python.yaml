@@ -62,7 +62,6 @@ jobs:
           path: dist/*.whl
 
   musllinux:
-    if: ${{ inputs.include-pypi }}
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
