@@ -203,7 +203,7 @@ fn version(sh: &Shell, json: bool, only: Option<&str>) -> anyhow::Result<()> {
             let info = crate_info(sh, format!("{prefix}/Cargo.toml"))?;
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&info).unwrap());
+                println!("{}", serde_json::to_string(&info).unwrap());
             } else {
                 println!(
                     "{}: {}",
@@ -220,7 +220,7 @@ fn version(sh: &Shell, json: bool, only: Option<&str>) -> anyhow::Result<()> {
             ];
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&info).unwrap());
+                println!("{}", serde_json::to_string(&info).unwrap());
             } else {
                 for info in info {
                     println!(
