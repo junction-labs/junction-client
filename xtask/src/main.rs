@@ -9,20 +9,22 @@ use serde::Serialize;
 use xshell::{cmd, Shell};
 
 fn main() -> anyhow::Result<()> {
+    // set the current dir BEFORE opening a new shell so that both the
+    // shell and things like std::fs::read_to_string act as if they're
+    // operating from the repo root.
+    let project_root = project_root();
+    std::env::set_current_dir(&project_root)?;
+
     let sh = Shell::new()?;
-    sh.change_dir(project_root());
-
     let args = Args::parse();
-
-    use Commands::*;
     match &args.command {
-        InstallPrecommit => install_precommit(&sh),
-        Precommit => precommit(&sh, ".venv"),
-        Version { package, json } => version(&sh, *json, package.as_deref()),
-        CheckDiffs => check_diffs(&sh),
-        Core(args) => core::run(&sh, args),
-        Node(args) => node::run(&sh, args),
-        Python(args) => python::run(&sh, args),
+        Commands::InstallPrecommit => install_precommit(&sh),
+        Commands::Precommit => precommit(&sh, ".venv"),
+        Commands::Version { package, json } => version(&sh, *json, package.as_deref()),
+        Commands::CheckDiffs => check_diffs(&sh),
+        Commands::Core(args) => core::run(&sh, args),
+        Commands::Node(args) => node::run(&sh, args),
+        Commands::Python(args) => python::run(&sh, args),
     }
 }
 
