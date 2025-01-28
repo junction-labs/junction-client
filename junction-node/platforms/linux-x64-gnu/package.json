@@ -1,7 +1,7 @@
 {
   "name": "@junction-labs/client-linux-x64-gnu",
   "description": "Prebuilt binary package for `@junction-labs/client` on `linux-x64-gnu`.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "os": ["linux"],
   "cpu": ["x64"],
   "main": "index.node",
