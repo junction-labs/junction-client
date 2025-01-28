@@ -517,10 +517,11 @@ impl Junction {
     ///
     /// The xDS config will contain the latest values for all resources and any
     /// errors encountered while trying to fetch updated versions.
-    fn dump_xds(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+    #[pyo3(signature = (not_found=false))]
+    fn dump_xds(&self, py: Python<'_>, not_found: bool) -> PyResult<Vec<Py<PyAny>>> {
         let mut values = vec![];
 
-        for config in self.core.dump_xds() {
+        for config in self.core.dump_xds(not_found) {
             let config: XdsConfig = config.into();
             let as_py = pythonize::pythonize(py, &config)?;
             values.push(as_py);
@@ -550,6 +551,8 @@ impl Junction {
 struct XdsConfig {
     name: String,
 
+    type_url: String,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<ResourceVersion>,
 
@@ -575,6 +578,7 @@ impl From<junction_core::XdsConfig> for XdsConfig {
 
         Self {
             name: value.name,
+            type_url: value.type_url,
             version: value.version,
             xds: value.xds,
             error_info,
