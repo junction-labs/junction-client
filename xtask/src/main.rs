@@ -766,9 +766,6 @@ mod node {
 
         // run npm lint/fix
         let lint_cmd = if fix { "fix" } else { "lint" };
-        cmd!(sh, "npm {npm_args...} ci --fund=false")
-            .env("JUNCTION_CLIENT_SKIP_POSTINSTALL", "true")
-            .run()?;
         cmd!(sh, "npm {npm_args...} run {lint_cmd}").run()?;
 
         Ok(())
@@ -792,23 +789,60 @@ mod node {
         let crate_info = crate_info(sh, "junction-node/Cargo.toml")?;
         let platform_package_dirs = cmd!(sh, "ls junction-node/platforms/").read()?;
 
-        let platform_packages: Vec<_> = platform_package_dirs
+        let platforms: Vec<_> = platform_package_dirs
             .split_whitespace()
-            .map(|dir| format!("junction-node/platforms/{dir}/package.json"))
+            .map(|s| s.trim().to_string())
             .collect();
 
-        write_package_version("junction-node/package.json", &crate_info.version)?;
-        for path in &platform_packages {
-            write_package_version(path, &crate_info.version)?;
+        update_ts_package(
+            "junction-node/package.json",
+            &crate_info.version,
+            &platforms,
+        )?;
+        for platform in &platforms {
+            let pkg_path = format!("junction-node/platforms/{platform}/package.json");
+            update_platform_package(pkg_path, &crate_info.version)?;
         }
 
         // run lint to clean up again
+        build(sh, npm_args, false, BuildMode::Dev)?;
         lint(sh, npm_args, true)?;
 
         Ok(())
     }
 
-    fn write_package_version<P: AsRef<Path>>(
+    fn update_ts_package<P: AsRef<Path>>(
+        path: P,
+        version: &semver::Version,
+        platforms: &[String],
+    ) -> anyhow::Result<()> {
+        let content = std::fs::read_to_string(&path)?;
+        let serde_json::Value::Object(mut package) = serde_json::from_str(&content)? else {
+            anyhow::bail!(
+                "{path} was not a json object",
+                path = path.as_ref().display()
+            );
+        };
+
+        let platform_versions: serde_json::Map<_, _> = platforms
+            .iter()
+            .map(|platform| {
+                let platform_pkg = format!("@junction-labs/client-{platform}");
+                let pkg_version = serde_json::Value::String(version.to_string());
+                (platform_pkg, pkg_version)
+            })
+            .collect();
+
+        package["version"] = serde_json::Value::String(version.to_string());
+        package["optionalDependencies"] = serde_json::Value::Object(platform_versions);
+
+        let output = serde_json::to_string_pretty(&package)?;
+        std::fs::write(path, output)?;
+
+        Ok(())
+    }
+
+    fn update_platform_package<P: AsRef<Path>>(
         path: P,
         version: &semver::Version,
     ) -> anyhow::Result<()> {
