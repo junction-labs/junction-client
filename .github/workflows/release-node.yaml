@@ -175,7 +175,7 @@ jobs:
           done
 
   publish-to-github:
-    needs: [npm-publish]
+    needs: [ts-package]
     runs-on: ubuntu-latest
     if: ${{ inputs.include-docs }}
 
