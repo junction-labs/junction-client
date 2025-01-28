@@ -26,8 +26,27 @@ permissions:
   contents: write
 
 jobs:
+  what:
+    name: doc vars
+    runs-on: ubuntu-latest
+    outputs:
+      dev: ${{ steps.vars.outputs.dev }}
+      version: ${{ steps.vars.outputs.version }}
+      node: ${{ steps.vars.outputs.node}}
+      python: ${{ steps.vars.outputs.python }}
+    steps:
+      - name: handle inputs
+        id: vars
+        shell: bash
+        run: |
+          echo "dev=${{ github.event_name == 'push' && github.ref_name == 'main' }}" >> $GITHUB_OUTPUT
+          echo "version=${{ github.event.client_payload.version || 'dev' }}" >> $GITHUB_OUTPUT
+          echo "node=${{ github.event_name == 'repository_dispatch' && github.event.action == 'node-release' }}" >> $GITHUB_OUTPUT
+          echo "python=${{ github.event_name == 'repository_dispatch' && github.event.action == 'python-release' }}" >> $GITHUB_OUTPUT
+
   build-docs:
     runs-on: ubuntu-latest
+    needs: [what]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,32 +58,28 @@ jobs:
           toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - name: node reference docs
+        uses: ./.github/actions/node-reference-docs
         with:
           node-version: 22
+          doc-version: ${{ needs.what.outputs.version }}
+          build-dev: ${{ needs.what.outputs.dev }}
+          build-stable: ${{ needs.what.outputs.node }}
 
+      - name: Python reference docs
+        uses: ./.github/actions/python-reference-docs
+        with:
+          python-version: 3.12
+          doc-version: ${{ needs.what.outputs.version }}
+          build-dev: ${{ needs.what.outputs.dev }}
+          build-stable: ${{ needs.what.outputs.python }}
+
+      # Rustdoc only deploys to dev, since the stable versions are all hosted on
+      # docs.rs when we release.
+      #
+      # TODO: move this into a composite action?
       - name: Build Rust documentation
         run: cargo xtask core doc
-
-      - name: Build python
-        run: cargo xtask python build
-
-      - name: Build python documentation
-        env:
-          JUNCTION_VERSION: ${{ github.event.client_payload.version || 'main' }}
-        run: cargo xtask python docs
-
-      - name: Build node
-        run: cargo xtask node build
-
-      - name: Build node documentation
-        run: cargo xtask node docs
 
       - name: Deploy Rust dev docs
         if: github.event_name == 'push' && github.ref_name == 'main'
@@ -76,43 +91,3 @@ jobs:
 
       - name: Clean up rust dev docs artifacts
         run: rm -rf target/doc
-
-      - name: Deploy Python dev docs
-        if: github.event_name == 'push' && github.ref_name == 'main'
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: junction-python/docs/build/html
-          target-folder: api/python/dev
-          single-commit: true
-
-      - name: Deploy Node dev docs
-        if: github.event_name == 'push' && github.ref_name == 'main'
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: junction-node/docs
-          target-folder: api/node/dev
-          single-commit: true
-
-      - name: Deploy Python versioned docs
-        if: github.event_name == 'repository_dispatch' && github.event.action == 'python-release'
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: junction-python/docs/build/html
-          target-folder: api/python/version/${{ github.event.client_payload.maj_min_version }}
-          single-commit: true
-
-      - name: Deploy Python stable docs
-        if: github.event_name == 'repository_dispatch' && github.event.action == 'python-release'
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: junction-python/docs/build/html
-          target-folder: api/python/stable
-          single-commit: true
-
-      - name: Deploy Node stable docs
-        if: github.event_name == 'repository_dispatch' && github.event.action == 'node-release'
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: junction-node/docs
-          target-folder: api/node/stable
-          single-commit: true
