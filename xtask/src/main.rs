@@ -41,7 +41,6 @@ struct CrateInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     version: semver::Version,
-    maj_min_version: String,
     sha: String,
 }
 
@@ -99,19 +98,13 @@ fn crate_info<P: AsRef<Path>>(sh: &Shell, path: P) -> anyhow::Result<CrateInfo> 
 
     let name = crate_name(&manifest)?;
     let version = package_version(&manifest).or_else(|_| workspace_version(&manifest))?;
-    let maj_min_version = format!("{}.{}", version.major, version.minor);
 
     let mut sha = cmd!(sh, "git rev-parse HEAD").read()?.trim().to_string();
     if check_diffs(sh).is_err() {
         sha.push_str(" (dirty)");
     }
 
-    Ok(CrateInfo {
-        name,
-        version,
-        maj_min_version,
-        sha,
-    })
+    Ok(CrateInfo { name, version, sha })
 }
 
 /// Cargo xtasks for development.
