@@ -80,7 +80,7 @@ the xds configuration to drive the Junction Client.
 
 ## Getting started
 
-[See here](https://docs.junctionlabs.io/getting-started/index.md)
+[See here](https://docs.junctionlabs.io/getting-started/)
 
 ## Project status
 
