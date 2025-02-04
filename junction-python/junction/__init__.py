@@ -14,8 +14,8 @@ from . import config, requests, urllib3
 
 
 def _default_client(
-    static_routes: typing.List[config.Route] | None,
-    static_backends: typing.List[config.Backend] | None,
+    static_routes: typing.Optional[typing.List[config.Route]],
+    static_backends: typing.Optional[typing.List[config.Backend]],
 ) -> Junction:
     """
     Return a Junction client with default Routes and Backends.

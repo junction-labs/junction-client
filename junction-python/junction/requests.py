@@ -1,5 +1,5 @@
 import os
-from typing import List, Mapping
+from typing import List, Mapping, Union, Optional
 
 import requests
 
@@ -58,10 +58,10 @@ class HTTPAdapter(requests.adapters.HTTPAdapter):
         self,
         request: requests.PreparedRequest,
         stream: bool = False,
-        timeout: None | float | tuple[float, float] | tuple[float, None] = None,
-        verify: bool | str = True,
-        cert: None | bytes | str | tuple[bytes | str, bytes | str] = None,
-        proxies: Mapping[str, str] | None = None,
+        timeout: Union[None, float, tuple[float, float], tuple[float, None]] = None,
+        verify: Union[bool, str] = True,
+        cert: Union[None, bytes, str, tuple[bytes, str, Union[bytes, str]]] = None,
+        proxies: Optional[Mapping[str, str]] = None,
     ) -> requests.Response:
         """Sends PreparedRequest object. Returns Response object.
 
@@ -205,9 +205,9 @@ class Session(requests.Session):
 
     def __init__(
         self,
-        static_routes: List[junction.config.Route] | None = None,
-        static_backends: List[junction.config.Backend] | None = None,
-        junction_client: junction.Junction | None = None,
+        static_routes: Optional[List["junction.config.Route"]] = None,
+        static_backends: Optional[List["junction.config.Backend"]] = None,
+        junction_client: Optional[junction.Junction] = None,
     ) -> None:
         super().__init__()
 

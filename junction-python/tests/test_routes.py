@@ -18,7 +18,7 @@ def test_check_basic_route_url_port(nginx):
     route: config.Route = {
         "id": "test-route",
         "hostnames": [
-            f"{nginx["name"]}.{nginx["namespace"]}.svc.cluster.local",
+            f"{nginx['name']}.{nginx['namespace']}.svc.cluster.local",
         ],
         "rules": [{"backends": [nginx]}],
     }
@@ -35,7 +35,7 @@ def test_check_basic_route_backend_port(nginx):
     route: config.Route = {
         "id": "test-route",
         "hostnames": [
-            f"{nginx["name"]}.{nginx["namespace"]}.svc.cluster.local",
+            f"{nginx['name']}.{nginx['namespace']}.svc.cluster.local",
         ],
         "rules": [{"backends": [{**nginx, "port": 8888}]}],
     }
@@ -70,7 +70,7 @@ def test_check_basic_route_ports_match(nginx):
     route: config.Route = {
         "id": "test-route",
         "hostnames": [
-            f"{nginx["name"]}.{nginx["namespace"]}.svc.cluster.local",
+            f"{nginx['name']}.{nginx['namespace']}.svc.cluster.local",
         ],
         "ports": [1234],
         "rules": [{"backends": [{**nginx, "port": 1234}]}],
@@ -112,7 +112,7 @@ def test_check_empty_rules(nginx, nginx_staging):
     route: config.Route = {
         "id": "test-route",
         "hostnames": [
-            f"{nginx["name"]}.{nginx["namespace"]}.svc.cluster.local",
+            f"{nginx['name']}.{nginx['namespace']}.svc.cluster.local",
         ],
         "rules": [
             # /users hits staging

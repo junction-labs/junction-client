@@ -1,6 +1,6 @@
 from collections import defaultdict
 from time import sleep
-from typing import List
+from typing import List, Optional
 import subprocess
 import tempfile
 import argparse
@@ -34,8 +34,8 @@ class SessionFactory:
     def __init__(
         self,
         args,
-        routes: List[junction.config.Route] | None = None,
-        backends: List[junction.config.Backend] | None = None,
+        routes: Optional[List[junction.config.Route]] = None,
+        backends: Optional[List[junction.config.Backend]] = None,
     ):
         self.args = args
         self.delete_resources = []

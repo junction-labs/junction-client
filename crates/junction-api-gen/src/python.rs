@@ -112,10 +112,11 @@ struct PyTypedDict {
 #[derive(Debug, Template)]
 #[template(
     source = r#"
-{{name}} =
-{%- for type in types -%}
-    {{ type }} {% if !loop.last -%}|{%- endif %}
-{%- endfor -%}
+{{name}} = typing.Union[
+    {%- for type in types -%}
+        {{ type }} {% if !loop.last -%},{%- endif %}
+    {%- endfor -%}
+]
 {%- match doc -%}
 {%- when Some with (doc) %}
 """{{ doc|doc_pad(4) }}"""
@@ -283,7 +284,10 @@ impl std::fmt::Display for PyType {
                         .map(|t| format!("typing.Literal[\"{}\"]", t.as_literal_str().unwrap()))
                         .collect();
 
-                    write!(f, "{}", lit_types.join(" | "))
+                    match lit_types.as_slice() {
+                        [t] => write!(f, "{t}"),
+                        _ => write!(f, "typing.Union[{}]", lit_types.join(", ")),
+                    }
                 } else {
                     write!(f, "{name}")
                 }

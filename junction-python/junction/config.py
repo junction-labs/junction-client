@@ -4,7 +4,7 @@
 import typing
 
 
-Duration = str | int | float
+Duration = typing.Union[str, int, float]
 """A duration expressed as a total number of seconds. Durations should never be negative."""
 
 
@@ -24,7 +24,7 @@ class ServiceKube(typing.TypedDict):
     specified, and won't be inferred from context."""
 
 
-Service = ServiceDns | ServiceKube
+Service = typing.Union[ServiceDns, ServiceKube]
 
 
 class Fraction(typing.TypedDict):
@@ -45,7 +45,7 @@ class BackendRef(typing.TypedDict):
     """The namespace of the Kubernetes service to target. This must be explicitly
     specified, and won't be inferred from context."""
 
-    type: typing.Literal["Dns"] | typing.Literal["Kube"]
+    type: typing.Union[typing.Literal["Dns"], typing.Literal["Kube"]]
     port: int
     """The port to route traffic to, used in combination with
     [service][Self::service] to identify the
@@ -119,7 +119,7 @@ class HeaderMatchExact(typing.TypedDict):
     value: str
 
 
-HeaderMatch = HeaderMatchRegularExpression | HeaderMatchExact
+HeaderMatch = typing.Union[HeaderMatchRegularExpression, HeaderMatchExact]
 
 
 class QueryParamMatchRegularExpression(typing.TypedDict):
@@ -134,7 +134,7 @@ class QueryParamMatchExact(typing.TypedDict):
     value: str
 
 
-QueryParamMatch = QueryParamMatchRegularExpression | QueryParamMatchExact
+QueryParamMatch = typing.Union[QueryParamMatchRegularExpression, QueryParamMatchExact]
 
 
 class PathMatchPrefix(typing.TypedDict):
@@ -152,7 +152,7 @@ class PathMatchExact(typing.TypedDict):
     value: str
 
 
-PathMatch = PathMatchPrefix | PathMatchRegularExpression | PathMatchExact
+PathMatch = typing.Union[PathMatchPrefix, PathMatchRegularExpression, PathMatchExact]
 
 
 class RouteMatch(typing.TypedDict):
@@ -283,7 +283,7 @@ class BackendId(typing.TypedDict):
     """The namespace of the Kubernetes service to target. This must be explicitly
     specified, and won't be inferred from context."""
 
-    type: typing.Literal["Dns"] | typing.Literal["Kube"]
+    type: typing.Union[typing.Literal["Dns"], typing.Literal["Kube"]]
     port: int
     """The port backend traffic is sent on."""
 
@@ -298,7 +298,7 @@ class RequestHashPolicy(typing.TypedDict):
     name: str
     """The name of the header to use as hash input."""
 
-    type: typing.Literal["Header"] | typing.Literal["QueryParam"]
+    type: typing.Union[typing.Literal["Header"], typing.Literal["QueryParam"]]
 
 
 class LbPolicyRoundRobin(typing.TypedDict):
@@ -327,7 +327,7 @@ class LbPolicyUnspecified(typing.TypedDict):
     type: typing.Literal["Unspecified"]
 
 
-LbPolicy = LbPolicyRoundRobin | LbPolicyRingHash | LbPolicyUnspecified
+LbPolicy = typing.Union[LbPolicyRoundRobin, LbPolicyRingHash, LbPolicyUnspecified]
 
 
 class Backend(typing.TypedDict):
