@@ -17,42 +17,39 @@ env:
   CARGO_TERM_COLOR: always
   rust_stable: stable
   rust_min: 1.81
+  python_stable: 3.12
+  python_min: 3.9
 
 jobs:
-  # Rust CI steps
-  #
-  # These should be largely the same as the steps in junction-core-ci.yml but
-  # testing a different package.
-  msrv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: "Install Rust @${{ env.rust_min }}"
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_min }}
-      - uses: Swatinem/rust-cache@v2
-      - name: check
-        run: cargo xtask python build
-
   # Python CI steps
   #
   # these lean on xtask tasks so they're similar to what you'd run locally
   test-python:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version:
+          - python: 3.12
+            rust: stable
+          - python: 3.12
+            rust: 1.81
+          - python: 3.9
+            rust: stable
     steps:
       - uses: actions/checkout@v4
 
-      - name: "Install Rust @ ${{ env.rust_stable }}"
+      - name: "Install Rust @ ${{ matrix.version.rust }}"
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ env.rust_stable }}
+          toolchain: ${{ matrix.version.rust }}
+          components: clippy, rustfmt
+
       - uses: Swatinem/rust-cache@v2
 
-      - name: Set up Python
+      - name: "Set up Python @ ${{ matrix.version.python }}"
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.version.python }}
 
       - name: build python
         run: cargo xtask python build
