@@ -43,8 +43,8 @@ def _is_redirect_err(e: MaxRetryError) -> bool:
 
 
 def _configure_retries(
-    retries: urllib3.Retry | None, policy: RetryPolicy
-) -> typing.Tuple[urllib3.Retry, int | bool]:
+    retries: typing.Optional[urllib3.Retry], policy: RetryPolicy
+) -> typing.Tuple[urllib3.Retry, typing.Union[int, bool]]:
     """
     Merge Junction retries with callsite specific urilib3.Retry objects.
 
@@ -89,11 +89,11 @@ class PoolManager(urllib3.PoolManager):
         # urrlib3
         self,
         num_pools: int = 10,
-        headers: typing.Mapping[str, str] | None = None,
+        headers: typing.Optional[typing.Mapping[str, str]] = None,
         # junction
-        static_routes: typing.List[junction.config.Route] | None = None,
-        static_backends: typing.List[junction.config.Backend] | None = None,
-        junction_client: junction.Junction | None = None,
+        static_routes: typing.Optional[typing.List["junction.config.Route"]] = None,
+        static_backends: typing.Optional[typing.List["junction.config.Backend"]] = None,
+        junction_client: typing.Optional[junction.Junction] = None,
         # kwargs
         **kwargs: typing.Any,
     ) -> None:
