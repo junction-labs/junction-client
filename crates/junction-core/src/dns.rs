@@ -475,7 +475,7 @@ impl ResolverState {
 
             match state.resolved_at {
                 Some(t) => {
-                    if t <= before && min.as_ref().map_or(true, |(_, s)| s.resolved_before(t)) {
+                    if t <= before && min.as_ref().is_none_or(|(_, s)| s.resolved_before(t)) {
                         min = Some((name, state))
                     }
                 }

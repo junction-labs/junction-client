@@ -346,7 +346,7 @@ impl Client {
     /// full URL and hostname, the complete set of headers, and retry and timeout
     /// policy the client should use to make a request.
     pub async fn resolve_http(
-        &mut self,
+        &self,
         method: &http::Method,
         url: &crate::Url,
         headers: &http::HeaderMap,
@@ -424,7 +424,7 @@ impl Client {
     /// history information, but request details will remain the same. Clients
     /// may use that value for status or error reporting.
     pub async fn report_status(
-        &mut self,
+        &self,
         endpoint: Endpoint,
         response: HttpResult,
     ) -> crate::Result<Endpoint> {

@@ -385,7 +385,7 @@ impl Junction {
     /// fetching any new routing data over the network.
     #[pyo3(signature = (url, *, method=None, headers=None, timeout=None))]
     fn resolve_route(
-        &mut self,
+        &self,
         py: Python<'_>,
         url: &str,
         method: Option<&str>,
@@ -430,7 +430,7 @@ impl Junction {
     /// combine multiple responses.
     #[pyo3(signature = (url, *, method=None, headers=None))]
     fn resolve_http(
-        &mut self,
+        &self,
         url: &str,
         method: Option<&str>,
         headers: Option<&Bound<PyMapping>>,
@@ -448,7 +448,7 @@ impl Junction {
 
     #[pyo3(signature = (*, endpoint, status_code=None, error=None))]
     fn report_status(
-        &mut self,
+        &self,
         endpoint: Endpoint,
         status_code: Option<u16>,
         error: Option<Bound<PyAny>>,
