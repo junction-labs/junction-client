@@ -110,7 +110,7 @@ fn resolve_http(mut cx: FunctionContext) -> JsResult<JsPromise> {
     // have to wrap the client.resolve_http call in an async move block so it
     // takes ownership of the client. otherwise it would be nice to make the
     // whole thing just a call to client.resolve_http
-    let mut client = client.cloned();
+    let client = client.cloned();
     let resolve_http = async move { client.resolve_http(&method, &url, &headers).await };
 
     Ok(
@@ -146,7 +146,7 @@ fn report_status(mut cx: FunctionContext) -> JsResult<JsPromise> {
     // make an async block here so that it captures client, endpoint, and
     // http_result. it'd be nice to just pass `client.report_status(e, r)` but
     // that doesn't move anything into the capture, it just takes references.
-    let mut client = client.cloned();
+    let client = client.cloned();
     let endpoint = endpoint.cloned();
     let report_status = async move { client.report_status(endpoint, http_result).await };
 

@@ -73,7 +73,7 @@ async fn main() {
             lb: LbPolicy::Unspecified,
         },
     ];
-    let mut client = client.with_static_config(routes, backends);
+    let client = client.with_static_config(routes, backends);
 
     let url: junction_core::Url = "https://nginx.default.svc.cluster.local".parse().unwrap();
     let prod_headers = http::HeaderMap::new();
