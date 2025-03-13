@@ -587,27 +587,34 @@ pub(crate) async fn resolve_routes(
         "resolve's search_path cannot be empty, this is a bug in Junction"
     );
 
-    let mut lookup_results = match deadline {
-        Some(deadline) => {
-            let mut lookups = Vec::with_capacity(search_path.len());
-            for url in search_path {
-                let route =
-                    tokio::time::timeout_at(deadline, cache.get_route(request.url.authority()));
-                lookups.push(route);
-            }
+    //let mut lookup_results = match deadline {
+    //    Some(deadline) => {
+    //        let mut lookups = Vec::with_capacity(search_path.len());
+    //        for url in search_path {
+    //            let route =
+    //                tokio::time::timeout_at(deadline, cache.get_route(request.url.authority()));
+    //            lookups.push(route);
+    //        }
 
-            futures::future::join_all(lookups).await
-        }
-        None => {
-            let mut lookups = Vec::with_capacity(search_path.len());
-            for url in search_path {
-                let route = cache.get_route(request.url.authority());
-                lookups.push(route);
-            }
+    //        futures::future::join_all(lookups).await
+    //    }
+    //    None => {
+    //        let mut lookups = Vec::with_capacity(search_path.len());
+    //        for url in search_path {
+    //            let route = cache.get_route(request.url.authority());
+    //            lookups.push(route);
+    //        }
 
-            futures::future::join_all(lookups).await
-        }
-    };
+    //        futures::future::join_all(lookups).await
+    //    }
+    //};
+
+    let futures_ordered = FuturesOrdered::new();
+    for url in search_path {
+        futures_ordered.push(cache.get_route(request.url.authority()));
+    }
+
+    futures_ordered.
 
     // safety: we're checking indexes immediately before calling
     // swap_remove, and search path should never be empty.
