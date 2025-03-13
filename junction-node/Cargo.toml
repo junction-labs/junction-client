@@ -9,6 +9,7 @@ homepage.workspace = true
 repository.workspace = true
 license.workspace = true
 categories = ["api-bindings", "network-programming"]
+rust-version.workspace = true
 
 exclude = ["index.node"]
 
