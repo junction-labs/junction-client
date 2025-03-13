@@ -31,6 +31,26 @@ def test_check_basic_route_url_port(nginx):
     assert matched_backend == {**nginx, "port": 80}
 
 
+def test_check_basic_route_url_port_with_ndots(nginx):
+    search_config: config.SearchConfig = {
+        "ndots": 5,
+        "search": ["svc.cluster.local"],
+    }
+    route: config.Route = {
+        "id": "test-route",
+        "hostnames": [
+            f"{nginx['name']}.{nginx['namespace']}.svc.cluster.local",
+        ],
+        "rules": [{"backends": [nginx]}],
+    }
+
+    (_, _, matched_backend) = junction.check_route(
+        [route], "http://nginx.default", search_config=search_config
+    )
+
+    assert matched_backend == {**nginx, "port": 80}
+
+
 def test_check_basic_route_backend_port(nginx):
     route: config.Route = {
         "id": "test-route",

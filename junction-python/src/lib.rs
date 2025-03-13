@@ -32,6 +32,7 @@ fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Junction>()?;
     m.add_class::<Endpoint>()?;
     m.add_class::<RetryPolicy>()?;
+    m.add_class::<SearchConfig>()?;
     m.add_function(wrap_pyfunction!(default_client, m)?)?;
     m.add_function(wrap_pyfunction!(check_route, m)?)?;
     m.add_function(wrap_pyfunction!(dump_kube_route, m)?)?;
@@ -205,6 +206,45 @@ impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
     }
 }
 
+/// Configuration for searching for a route with check_route.
+#[derive(Clone, Debug)]
+#[pyclass]
+pub struct SearchConfig {
+    #[pyo3(get)]
+    ndots: u8,
+
+    #[pyo3(get)]
+    search: Vec<String>,
+}
+
+#[pymethods]
+impl SearchConfig {
+    #[new]
+    fn new(ndots: Option<u8>, search: Option<Vec<String>>) -> Self {
+        Self {
+            ndots: ndots.unwrap_or_default(),
+            search: search.unwrap_or_default(),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SearchConfig({ndots}, {search:#?})",
+            ndots = self.ndots,
+            search = self.search,
+        )
+    }
+}
+
+impl From<junction_core::SearchConfig> for SearchConfig {
+    fn from(value: junction_core::SearchConfig) -> Self {
+        Self {
+            ndots: value.ndots,
+            search: value.search.into_iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
 /// Check route resolution.
 ///
 /// Resolve a request against a routing table. Returns the full route that was
@@ -214,23 +254,28 @@ impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
 /// This function is stateless, and doesn't require connecting to a control
 /// plane. Use it to unit test your routing rules.
 #[pyfunction]
-#[pyo3(signature = (routes, url, *, method=None, headers=None))]
+#[pyo3(signature = (routes, url, *, method=None, headers=None, search_config=None))]
 fn check_route(
     py: Python<'_>,
     routes: Bound<'_, PyAny>,
     url: &str,
     method: Option<&str>,
     headers: Option<&Bound<PyMapping>>,
+    search_config: Option<Bound<'_, PyAny>>,
 ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
     let url: junction_core::Url = url
         .parse()
         .map_err(|e| PyValueError::new_err(format!("{e}")))?;
     let method = method_from_py(method)?;
     let headers = headers_from_py(headers)?;
+    let search_config = search_config
+        .map(|search_config| pythonize::depythonize_bound(search_config))
+        .transpose()?;
 
     let routes: Vec<Route> = pythonize::depythonize_bound(routes)?;
-    let resolved = junction_core::check_route(routes, &method, &url, &headers)
-        .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
+    let resolved =
+        junction_core::check_route(routes, &method, &url, &headers, search_config.as_ref())
+            .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
     let route = pythonize::pythonize(py, &resolved.route)?;
     let backend = pythonize::pythonize(py, &resolved.backend)?;
