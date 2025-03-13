@@ -1,0 +1,2 @@
+# NOTE: keep this in-line with Cargo.toml's rust-version
+msrv = "1.81"
