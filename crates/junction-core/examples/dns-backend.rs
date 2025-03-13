@@ -38,7 +38,7 @@ async fn main() {
         },
     ];
 
-    let mut client = client.with_static_config(vec![], backends);
+    let client = client.with_static_config(vec![], backends);
 
     eprintln!("{:?}", client.dump_routes());
 
