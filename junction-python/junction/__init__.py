@@ -1,6 +1,8 @@
 import typing
 
 from junction.junction import (
+    _version,
+    _build,
     Junction,
     Endpoint,
     RetryPolicy,
@@ -11,6 +13,9 @@ from junction.junction import (
 )
 
 from . import config, requests, urllib3
+
+__version__ = _version
+__build__ = _build
 
 
 def _default_client(
