@@ -12,6 +12,7 @@ from junction.junction import (
 
 from . import config, requests, urllib3
 
+__version__ = "oh-no"
 
 def _default_client(
     static_routes: typing.Optional[typing.List[config.Route]],
