@@ -16,6 +16,9 @@ declare module "./load.cjs" {
 
   type Headers = Array<[string, string]>;
 
+  const version: string;
+  const build: string;
+
   function newRuntime(): Runtime;
 
   function newClient(
@@ -43,6 +46,9 @@ declare module "./load.cjs" {
 }
 
 const defaultRuntime: ffi.Runtime = ffi.newRuntime();
+
+export const _VERSION = ffi.version;
+export const _BUILD = ffi.build;
 
 /**
  * An error in the Junction client.
