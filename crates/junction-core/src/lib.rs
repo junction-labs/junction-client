@@ -48,6 +48,7 @@ pub fn check_route(
     method: &http::Method,
     url: &crate::Url,
     headers: &http::HeaderMap,
+    route_search_config: &Option<RouteSearchConfig>,
 ) -> Result<ResolvedRoute> {
     let request = client::HttpRequest::from_parts(method, url, headers)?;
     // resolve with an empty cache and the passed config used as defaults and a
@@ -60,9 +61,15 @@ pub fn check_route(
     // resolve_routes is async but we know that with StaticConfig, fetching
     // config should NEVER block. now-or-never just calls Poll with a noop
     // waker and unwraps the result ASAP.
-    client::resolve_routes(&config, Trace::new(), request, None)
-        .now_or_never()
-        .expect("check_route yielded unexpectedly. this is a bug in Junction, please file an issue")
+    client::resolve_routes(
+        &config,
+        Trace::new(),
+        request,
+        None,
+        route_search_config.unwrap_or_default(),
+    )
+    .now_or_never()
+    .expect("check_route yielded unexpectedly. this is a bug in Junction, please file an issue")
 }
 
 pub(crate) trait ConfigCache {
@@ -203,4 +210,86 @@ fn route_matches(route: &Route, host: &str, port: u16) -> bool {
     }
 
     true
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use junction_api::{
+        http::{BackendRef, RouteRule},
+        Hostname, Service,
+    };
+    use std::str::FromStr;
+
+    #[test]
+    fn test_check_routes_resolves_ndots() {
+        let backend = Service::kube("web", "svc1").unwrap();
+
+        let route = Route {
+            id: Name::from_static("ndots-match"),
+            hostnames: vec![Hostname::from_static("example.foo.bar.com").into()],
+            ports: vec![],
+            tags: Default::default(),
+            rules: vec![RouteRule {
+                matches: vec![],
+                backends: vec![BackendRef {
+                    weight: 1,
+                    service: backend.clone(),
+                    port: Some(8910),
+                }],
+                ..Default::default()
+            }],
+        };
+
+        let routes = vec![route];
+
+        let wont_match = ["http://not.example.com", "http://notexample.com"];
+
+        for url in wont_match {
+            let url = crate::Url::from_str(url).unwrap();
+            let headers = &http::HeaderMap::default();
+
+            let resolved_route = check_route(
+                routes.clone(),
+                &http::Method::GET,
+                &url,
+                headers,
+                RouteSearchConfig::default(),
+            );
+
+            match resolved_route {
+                Ok(_) => panic!("succeeded for {} should have failed.", url.authority()),
+                Err(e) => assert_eq!(
+                    format!("{}", e),
+                    format!("no route matched: '{}'", url.authority())
+                ),
+            }
+        }
+
+        let will_match = [
+            "http://example.com",
+            "http://example.foo.com",
+            "http://example.foo.bar.com",
+        ];
+
+        for url in will_match {
+            let url = crate::Url::from_str(url).unwrap();
+            let headers = &http::HeaderMap::default();
+
+            let resolved = check_route(
+                routes.clone(),
+                &http::Method::GET,
+                &url,
+                headers,
+                RouteSearchConfig::default(),
+            )
+            .unwrap();
+            // should match one of the query matches
+            assert_eq!(
+                (resolved.rule, &resolved.backend),
+                (0, &backend.as_backend_id(8910)),
+                "should match the first rule: {url}"
+            );
+        }
+    }
 }

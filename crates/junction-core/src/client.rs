@@ -165,20 +165,32 @@ pub struct Client {
     // will survive.
     resolve_timeout: Duration,
 
-    // ndots, like dns, but for resolving junction names.
-    //
-    // like dns, names only use the search path if they contain fewer than
-    // `ndots` dots. unlike dns, names are all resolved in-order.
-    ndots: u8,
-
-    // the search list for hostname lookup. only consulted if the number of
-    // dots in a url's hostname is less than `ndots`.
-    search_path: Vec<Hostname>,
+    // configuration used when searching for additional possible resolved routes currently by
+    // expanding the search over the set of possible authority matches.
+    route_search_config: RouteSearchConfig,
 
     // junction data
     config: Config,
 }
 
+#[derive(Clone, Default)]
+pub struct RouteSearchConfig {
+    // ndots, like dns, but for resolving junction names.
+    //
+    // like dns, names only use the search path if they contain fewer than
+    // `ndots` dots. unlike dns, names are all resolved in-order.
+    pub(crate) ndots: u8,
+
+    // the search list for hostname lookup. only consulted if the number of
+    // dots in a url's hostname is less than `ndots`.
+    pub(crate) search_path: Vec<Hostname>,
+}
+
+impl RouteSearchConfig {
+    pub fn new(ndots: u8, search_path: Vec<Hostname>) -> Self {
+        Self { ndots, search_path }
+    }
+}
 // the entire static config thing might be a mistake and worth revisting - we
 // could insert resources into cache and let multiple clients in the same process
 // all see static resources. is that good? idk. we already have to_xds() on every
@@ -280,10 +292,10 @@ impl Client {
         // this should eventually be configurable, but for now we're trying
         // resolv.conf to match kube's default behavior out of the box. on other
         // systems this may not be useful yet - that's ok.
-        let (ndots, search_path) = match dns::load_config("/etc/resolv.conf") {
-            Ok(config) => (config.ndots, config.search),
+        let route_search_config = match dns::load_config("/etc/resolv.conf") {
+            Ok(config) => RouteSearchConfig::new(config.ndots, config.search),
             // ignore any errors and set this to defaults
-            Err(_) => (0, vec![]),
+            Err(_) => RouteSearchConfig::new(0, vec![]),
         };
 
         // wrap it all up in a dynamic config and return
@@ -294,8 +306,7 @@ impl Client {
         let client = Self {
             resolve_timeout: Duration::from_secs(5),
             config,
-            ndots,
-            search_path,
+            route_search_config,
         };
 
         Ok(client)
@@ -353,36 +364,6 @@ impl Client {
     ) -> crate::Result<Endpoint> {
         let deadline = Instant::now() + self.resolve_timeout;
 
-        let search_path = self.search(url);
-        assert!(
-            !search_path.is_empty(),
-            "resolve's search_path cannot be empty, this is a bug in Junction"
-        );
-
-        let mut lookups = Vec::with_capacity(search_path.len());
-        for url in search_path {
-            lookups.push(self.resolve_once(deadline, method, url, headers));
-        }
-
-        // safety: we're checking indexes immediately before calling
-        // swap_remove, and search path should never be empty.
-        //
-        // consuming a vec and returning the nth element is not a solved problem.
-        // https://github.com/rust-lang/rfcs/issues/1512
-        let mut lookup_results = futures::future::join_all(lookups).await;
-        match lookup_results.iter().position(|r| r.is_ok()) {
-            Some(idx) => lookup_results.swap_remove(idx),
-            None => lookup_results.swap_remove(0),
-        }
-    }
-
-    async fn resolve_once(
-        &self,
-        deadline: Instant,
-        method: &http::Method,
-        url: Cow<'_, crate::Url>,
-        headers: &http::HeaderMap,
-    ) -> crate::Result<Endpoint> {
         let request = HttpRequest::from_parts(method, &url, headers)?;
 
         let resolved = self.resolve_route(request, Some(deadline)).await?;
@@ -401,7 +382,7 @@ impl Client {
 
         Ok(Endpoint {
             method: method.clone(),
-            url: url.into_owned(),
+            url: url.to_owned(),
             headers: headers.clone(),
             address,
             timeouts,
@@ -476,7 +457,14 @@ impl Client {
         deadline: Option<Instant>,
     ) -> crate::Result<ResolvedRoute> {
         let trace = Trace::new();
-        resolve_routes(&self.config, trace, request, deadline).await
+        resolve_routes(
+            &self.config,
+            trace,
+            request,
+            deadline,
+            &self.route_search_config,
+        )
+        .await
     }
 
     /// Select an endpoint address for this backend from the set of currently
@@ -569,20 +557,6 @@ impl Client {
             .flatten()
             .map(EndpointIter::from)
     }
-
-    /// Return the list of URLs that will be looked up when resolving the
-    /// endpoints for this URL.
-    ///
-    /// This is called internally by `resolve_http`. It's exposed here for
-    /// debugging.
-    pub fn search<'a>(&self, url: &'a crate::Url) -> Vec<Cow<'a, crate::Url>> {
-        search(self.ndots as usize, &self.search_path, url)
-    }
-
-    /// The configured search path for this client.
-    pub fn search_path(&self) -> &[Hostname] {
-        &self.search_path
-    }
 }
 
 macro_rules! with_deadline {
@@ -603,16 +577,48 @@ pub(crate) async fn resolve_routes(
     mut trace: Trace,
     request: HttpRequest<'_>,
     deadline: Option<Instant>,
+    route_search_config: &RouteSearchConfig,
 ) -> crate::Result<ResolvedRoute> {
     use rand::seq::SliceRandom;
 
-    // look up the route, grabbing the first route that returns from cache.
-    let route = with_deadline!(
-        cache.get_route(request.url.authority()),
-        deadline,
-        "timed out fetching route",
-        trace,
+    let search_path = search(route_search_config, request.url);
+    assert!(
+        !search_path.is_empty(),
+        "resolve's search_path cannot be empty, this is a bug in Junction"
     );
+
+    let mut lookup_results = match deadline {
+        Some(deadline) => {
+            let mut lookups = Vec::with_capacity(search_path.len());
+            for url in search_path {
+                let route =
+                    tokio::time::timeout_at(deadline, cache.get_route(request.url.authority()));
+                lookups.push(route);
+            }
+
+            futures::future::join_all(lookups).await
+        }
+        None => {
+            let mut lookups = Vec::with_capacity(search_path.len());
+            for url in search_path {
+                let route = cache.get_route(request.url.authority());
+                lookups.push(route);
+            }
+
+            futures::future::join_all(lookups).await
+        }
+    };
+
+    // safety: we're checking indexes immediately before calling
+    // swap_remove, and search path should never be empty.
+    //
+    // consuming a vec and returning the nth element is not a solved problem.
+    // https://github.com/rust-lang/rfcs/issues/1512
+    let route = match lookup_results.iter().position(|r| r.is_ok()) {
+        Some(idx) => lookup_results.swap_remove(idx),
+        None => lookup_results.swap_remove(0),
+    };
+
     let Some(route) = route else {
         return Err(Error::no_route_matched(
             request.url.authority().to_string(),
@@ -662,7 +668,7 @@ pub(crate) async fn resolve_routes(
     trace.select_backend(&backend);
 
     Ok(ResolvedRoute {
-        route: route.clone(),
+        route: Arc::new(route),
         rule,
         backend,
         trace,
@@ -825,8 +831,7 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
 ///    hostname to the suffixes in search path. the order of the suffixes in
 ///    search_path is preserved.
 fn search<'a>(
-    ndots: usize,
-    search_path: &[Hostname],
+    route_search_config: &RouteSearchConfig,
     url: &'a crate::Url,
 ) -> Vec<Cow<'a, crate::Url>> {
     // TODO: this could return an enum { Original(url), Search(url, path) } that
@@ -838,16 +843,16 @@ fn search<'a>(
 
     let mut urls = vec![Cow::Borrowed(url)];
 
-    if dots < ndots {
-        for suffix in search_path {
+    if dots < route_search_config.ndots as usize {
+        for suffix in route_search_config.search_path.clone() {
             let mut new_hostname = String::with_capacity(hostname.len() + hostname.len() + 1);
             new_hostname.push_str(hostname);
             new_hostname.push('.');
-            new_hostname.push_str(suffix);
+            new_hostname.push_str(&suffix);
 
-            let new_url = url
-                .with_hostname(&new_hostname)
-                .expect("search_path produced an invalid URL. this is a bug in Junction");
+            let new_url = url.with_hostname(&new_hostname).expect(
+                "RouteSearchConfig search_path produced an invalid URL. this is a bug in Junction",
+            );
             urls.push(Cow::Owned(new_url));
         }
     }
@@ -879,20 +884,29 @@ mod test {
     #[test]
     fn test_search_path() {
         let url = Url::from_str("https://tasty.potato.tomato:9876").unwrap();
-        let search_path = vec![
+        let search_path: Vec<Hostname> = vec![
             Hostname::from_static("foo.bar.baz"),
             Hostname::from_static("bar.baz"),
             Hostname::from_static("baz"),
         ];
 
         // with ndots < dots, should just return the original url
-        assert_eq!(search(0, &search_path, &url), vec![Cow::Borrowed(&url)]);
-        assert_eq!(search(1, &search_path, &url), vec![Cow::Borrowed(&url)]);
-        assert_eq!(search(2, &search_path, &url), vec![Cow::Borrowed(&url)]);
+        assert_eq!(
+            search(&RouteSearchConfig::new(0, search_path.clone()), &url),
+            vec![Cow::Borrowed(&url)]
+        );
+        assert_eq!(
+            search(&RouteSearchConfig::new(1, search_path.clone()), &url),
+            vec![Cow::Borrowed(&url)]
+        );
+        assert_eq!(
+            search(&RouteSearchConfig::new(2, search_path.clone()), &url),
+            vec![Cow::Borrowed(&url)]
+        );
 
         // with high-enough ndots should return a borrowed URL and owned URLs
         assert_eq!(
-            search(3, &search_path, &url),
+            search(&RouteSearchConfig::new(3, search_path), &url),
             vec![
                 Cow::Borrowed(&url),
                 Cow::Owned(
@@ -908,18 +922,30 @@ mod test {
 
     #[track_caller]
     fn assert_resolve_routes(cache: &impl ConfigCache, request: HttpRequest<'_>) -> ResolvedRoute {
-        resolve_routes(cache, Trace::new(), request, None)
-            .now_or_never()
-            .unwrap()
-            .unwrap()
+        resolve_routes(
+            cache,
+            Trace::new(),
+            request,
+            None,
+            &RouteSearchConfig::default(),
+        )
+        .now_or_never()
+        .unwrap()
+        .unwrap()
     }
 
     #[track_caller]
     fn assert_resolve_err(cache: &impl ConfigCache, request: HttpRequest<'_>) -> crate::Error {
-        resolve_routes(cache, Trace::new(), request, None)
-            .now_or_never()
-            .unwrap()
-            .unwrap_err()
+        resolve_routes(
+            cache,
+            Trace::new(),
+            request,
+            None,
+            &RouteSearchConfig::default(),
+        )
+        .now_or_never()
+        .unwrap()
+        .unwrap_err()
     }
 
     #[test]
@@ -1153,6 +1179,49 @@ mod test {
             assert_eq!(
                 (resolved.rule, &resolved.backend),
                 (0, &backend_one.as_backend_id(8910)),
+                "should match the first rule: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_routes_resolves_ndots() {
+        let backend = Service::kube("web", "svc1").unwrap();
+
+        let route = Route {
+            id: Name::from_static("ndots-match"),
+            hostnames: vec![Hostname::from_static("example.foo.bar.com").into()],
+            ports: vec![],
+            tags: Default::default(),
+            rules: vec![RouteRule {
+                matches: vec![],
+                backends: vec![BackendRef {
+                    weight: 1,
+                    service: backend.clone(),
+                    port: Some(8910),
+                }],
+                ..Default::default()
+            }],
+        };
+
+        let routes = StaticConfig::new(vec![route], vec![]);
+
+        let will_match = [
+            "http://example.com",
+            "http://example.foo.com",
+            "http://example.foo.bar.com",
+        ];
+
+        for url in will_match {
+            let url = crate::Url::from_str(url).unwrap();
+            let headers = &http::HeaderMap::default();
+            let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
+
+            let resolved = assert_resolve_routes(&routes, request);
+            // should match one of the query matches
+            assert_eq!(
+                (resolved.rule, &resolved.backend),
+                (0, &backend.as_backend_id(8910)),
                 "should match the first rule: {url}"
             );
         }
