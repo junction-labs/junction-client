@@ -228,13 +228,26 @@ mod test {
     fn test_check_routes_resolves_ndots() {
         let backend = Service::kube("web", "svc1").unwrap();
 
+        let wont_match = ["http://not.example.com", "http://notexample.com"];
+
+        let will_match = [
+            "http://example.com",
+            "http://example.foo.com",
+            "http://example.foo.bar.com",
+        ];
+        let will_match_hostnames = vec![
+            Hostname::from_static("example.com"),
+            Hostname::from_static("example.foo.com"),
+            Hostname::from_static("example.foo.bar.com"),
+        ];
+
         let route = Route {
             id: Name::from_static("ndots-match"),
-            hostnames: vec![
-                Hostname::from_static("example.com").into(),
-                Hostname::from_static("example.foo.com").into(),
-                Hostname::from_static("example.foo.bar.com").into(),
-            ],
+            hostnames: will_match_hostnames
+                .clone()
+                .into_iter()
+                .map(|h| h.into())
+                .collect(),
             ports: vec![],
             tags: Default::default(),
             rules: vec![RouteRule {
@@ -249,19 +262,6 @@ mod test {
         };
 
         let routes = vec![route];
-
-        let wont_match = ["http://not.example.com", "http://notexample.com"];
-
-        let will_match = [
-            "http://example.com",
-            "http://example.foo.com",
-            "http://example.foo.bar.com",
-        ];
-        let will_match_hostnames = vec![
-            Hostname::from_static("example.com"),
-            Hostname::from_static("example.foo.com"),
-            Hostname::from_static("example.foo.bar.com"),
-        ];
 
         for url in wont_match {
             let url = crate::Url::from_str(url).unwrap();
