@@ -990,6 +990,37 @@ mod test {
     }
 
     #[test]
+    fn test_resolve_route_no_rules_with_route_search_config() {
+        let route = Route {
+            id: Name::from_static("no-rules"),
+            hostnames: vec![Hostname::from_static("example.com").into()],
+            ports: vec![],
+            tags: Default::default(),
+            rules: vec![],
+        };
+
+        let routes = StaticConfig::new(vec![route], vec![]);
+
+        let url = Url::from_str("http://example.com:3214/users/123").unwrap();
+        let headers = http::HeaderMap::default();
+        let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
+
+        let err = resolve_routes(
+            &routes,
+            Trace::new(),
+            request,
+            None,
+            &RouteSearchConfig::new(2, vec![Hostname::from_static("example.com")]),
+        )
+        .now_or_never()
+        .unwrap()
+        .unwrap_err();
+
+        assert!(err.to_string().contains("no rules matched the request"));
+        assert!(!err.is_temporary());
+    }
+
+    #[test]
     fn test_resolve_route_no_backends() {
         let route = Route {
             id: Name::from_static("no-backends"),
