@@ -214,22 +214,26 @@ impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
 /// This function is stateless, and doesn't require connecting to a control
 /// plane. Use it to unit test your routing rules.
 #[pyfunction]
-#[pyo3(signature = (routes, url, *, method=None, headers=None))]
+#[pyo3(signature = (routes, url, *, method=None, headers=None, search_config=None))]
 fn check_route(
     py: Python<'_>,
     routes: Bound<'_, PyAny>,
     url: &str,
     method: Option<&str>,
     headers: Option<&Bound<PyMapping>>,
+    search_config: Option<Bound<'_, PyAny>>,
 ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
     let url: junction_core::Url = url
         .parse()
         .map_err(|e| PyValueError::new_err(format!("{e}")))?;
     let method = method_from_py(method)?;
     let headers = headers_from_py(headers)?;
+    let search_config = search_config
+        .map(|search_config| pythonize::depythonize_bound(search_config))
+        .transpose()?;
 
     let routes: Vec<Route> = pythonize::depythonize_bound(routes)?;
-    let resolved = junction_core::check_route(routes, &method, &url, &headers)
+    let resolved = junction_core::check_route(routes, &method, &url, &headers, &search_config)
         .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
     let route = pythonize::pythonize(py, &resolved.route)?;

@@ -253,7 +253,7 @@ impl Error {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum ErrorImpl {
+pub enum ErrorImpl {
     #[error("timed out: {0}")]
     TimedOut(Cow<'static, str>),
 
