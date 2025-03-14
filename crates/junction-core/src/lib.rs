@@ -265,7 +265,7 @@ mod test {
     }
 
     #[test]
-    fn test_check_routes_resolves_ndots_match_without_search_path() {
+    fn test_check_routes_resolves_ndots_match_without_suffixes() {
         let backend = Service::kube("web", "svc1").unwrap();
 
         let route = Route {

@@ -182,14 +182,14 @@ pub struct SearchConfig {
     // `ndots` dots. unlike dns, names are all resolved in-order.
     pub(crate) ndots: u8,
 
-    // the search list for hostname lookup. only consulted if the number of
+    // the list of suffixes searched during hostname lookup. only consulted if the number of
     // dots in a url's hostname is less than `ndots`.
-    pub(crate) search_path: Vec<Hostname>,
+    pub(crate) suffixes: Vec<Hostname>,
 }
 
 impl SearchConfig {
-    pub fn new(ndots: u8, search_path: Vec<Hostname>) -> Self {
-        Self { ndots, search_path }
+    pub fn new(ndots: u8, suffixes: Vec<Hostname>) -> Self {
+        Self { ndots, suffixes }
     }
 }
 // the entire static config thing might be a mistake and worth revisting - we
@@ -575,14 +575,14 @@ pub(crate) async fn resolve_routes(
 ) -> crate::Result<ResolvedRoute> {
     use rand::seq::SliceRandom;
 
-    let search_path = search(search_config, request.url);
+    let suffixes = search(search_config, request.url);
     assert!(
-        !search_path.is_empty(),
-        "resolve's search_path cannot be empty, this is a bug in Junction"
+        !suffixes.is_empty(),
+        "resolve's suffixes cannot be empty, this is a bug in Junction"
     );
 
     let mut futures_ordered = FuturesOrdered::new();
-    for url in search_path {
+    for url in suffixes {
         futures_ordered.push_back(cache.get_route(url.authority().to_string()));
     }
 
@@ -809,10 +809,10 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
 ///
 /// - a single element, a ref to the original URL
 ///
-/// - `search_path.len() + 1` elements, where the first element is the original
+/// - `suffixes.len() + 1` elements, where the first element is the original
 ///    URl and the rest of the entries are the result of appending the URL's
 ///    hostname to the suffixes in search path. the order of the suffixes in
-///    search_path is preserved.
+///    suffixes is preserved.
 fn search<'a>(search_config: &SearchConfig, url: &'a crate::Url) -> Vec<Cow<'a, crate::Url>> {
     // TODO: this could return an enum { Original(url), Search(url, path) } that
     // implements Iterator and lazily generates Cow<Url>. there's no reason to
@@ -824,15 +824,15 @@ fn search<'a>(search_config: &SearchConfig, url: &'a crate::Url) -> Vec<Cow<'a, 
     let mut urls = vec![Cow::Borrowed(url)];
 
     if dots < search_config.ndots as usize {
-        for suffix in search_config.search_path.clone() {
+        for suffix in search_config.suffixes.clone() {
             let mut new_hostname = String::with_capacity(hostname.len() + hostname.len() + 1);
             new_hostname.push_str(hostname);
             new_hostname.push('.');
             new_hostname.push_str(&suffix);
 
-            let new_url = url.with_hostname(&new_hostname).expect(
-                "SearchConfig search_path produced an invalid URL. this is a bug in Junction",
-            );
+            let new_url = url
+                .with_hostname(&new_hostname)
+                .expect("SearchConfig suffixes produced an invalid URL. this is a bug in Junction");
             urls.push(Cow::Owned(new_url));
         }
     }
@@ -862,9 +862,9 @@ mod test {
     }
 
     #[test]
-    fn test_search_path() {
+    fn test_suffixes() {
         let url = Url::from_str("https://tasty.potato.tomato:9876").unwrap();
-        let search_path: Vec<Hostname> = vec![
+        let suffixes: Vec<Hostname> = vec![
             Hostname::from_static("foo.bar.baz"),
             Hostname::from_static("bar.baz"),
             Hostname::from_static("baz"),
@@ -872,21 +872,21 @@ mod test {
 
         // with ndots < dots, should just return the original url
         assert_eq!(
-            search(&SearchConfig::new(0, search_path.clone()), &url),
+            search(&SearchConfig::new(0, suffixes.clone()), &url),
             vec![Cow::Borrowed(&url)]
         );
         assert_eq!(
-            search(&SearchConfig::new(1, search_path.clone()), &url),
+            search(&SearchConfig::new(1, suffixes.clone()), &url),
             vec![Cow::Borrowed(&url)]
         );
         assert_eq!(
-            search(&SearchConfig::new(2, search_path.clone()), &url),
+            search(&SearchConfig::new(2, suffixes.clone()), &url),
             vec![Cow::Borrowed(&url)]
         );
 
         // with high-enough ndots should return a borrowed URL and owned URLs
         assert_eq!(
-            search(&SearchConfig::new(3, search_path), &url),
+            search(&SearchConfig::new(3, suffixes), &url),
             vec![
                 Cow::Borrowed(&url),
                 Cow::Owned(
@@ -1243,7 +1243,7 @@ mod test {
     }
 
     #[test]
-    fn test_resolve_routes_resolves_ndots_no_search_path() {
+    fn test_resolve_routes_resolves_ndots_no_suffixes() {
         let backend = Service::kube("web", "svc1").unwrap();
 
         let will_match = [

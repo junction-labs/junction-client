@@ -43,7 +43,7 @@ def test_check_basic_route_url_port_with_ndots(nginx):
     (_, _, matched_backend) = junction.check_route(
         [route],
         "http://nginx.default",
-        search_config={"ndots": 5, "search_path": ["svc.cluster.local"]}
+        search_config={"ndots": 5, "suffixes": ["svc.cluster.local"]}
     )
 
     assert matched_backend == {**nginx, "port": 80}
