@@ -1187,25 +1187,9 @@ mod test {
     fn test_resolve_routes_resolves_ndots() {
         let backend = Service::kube("web", "svc1").unwrap();
 
-        let will_match = [
-            "http://example.com",
-            "http://example.foo.com",
-            "http://example.foo.bar.com",
-        ];
-
-        let will_match_hostnames = vec![
-            Hostname::from_static("example.com"),
-            Hostname::from_static("example.foo.com"),
-            Hostname::from_static("example.foo.bar.com"),
-        ];
-
         let route = Route {
             id: Name::from_static("ndots-match"),
-            hostnames: will_match_hostnames
-                .clone()
-                .into_iter()
-                .map(|h| h.into())
-                .collect(),
+            hostnames: vec![Hostname::from_static("example.foo.bar.com").into()],
             ports: vec![],
             tags: Default::default(),
             rules: vec![RouteRule {
@@ -1220,6 +1204,18 @@ mod test {
         };
 
         let routes = StaticConfig::new(vec![route], vec![]);
+
+        let will_match = [
+            "http://example",
+            "http://example.foo",
+            "http://example.foo.bar",
+            "http://example.foo.bar.com",
+        ];
+        let will_match_hostnames = vec![
+            Hostname::from_static("foo.bar.com"),
+            Hostname::from_static("bar.com"),
+            Hostname::from_static("com"),
+        ];
 
         for url in will_match {
             let url = crate::Url::from_str(url).unwrap();
