@@ -6,7 +6,7 @@ use crate::{
     xds::AdsClient,
     ConfigCache, Endpoint, Error, StaticConfig,
 };
-use futures::FutureExt;
+use futures::{stream::FuturesOrdered, FutureExt, StreamExt};
 use junction_api::{
     backend::{Backend, BackendId},
     http::{HeaderMatch, PathMatch, QueryParamMatch, Route, RouteMatch, RouteRule},
@@ -364,11 +364,11 @@ impl Client {
     ) -> crate::Result<Endpoint> {
         let deadline = Instant::now() + self.resolve_timeout;
 
-        let request = HttpRequest::from_parts(method, &url, headers)?;
+        let request = HttpRequest::from_parts(method, url, headers)?;
 
         let resolved = self.resolve_route(request, Some(deadline)).await?;
 
-        let lb_context = LbContext::new(resolved.trace, &url, headers);
+        let lb_context = LbContext::new(resolved.trace, url, headers);
         let selected = self
             .select_endpoint(&resolved.backend, lb_context, Some(deadline))
             .await?;
@@ -587,51 +587,33 @@ pub(crate) async fn resolve_routes(
         "resolve's search_path cannot be empty, this is a bug in Junction"
     );
 
-    //let mut lookup_results = match deadline {
-    //    Some(deadline) => {
-    //        let mut lookups = Vec::with_capacity(search_path.len());
-    //        for url in search_path {
-    //            let route =
-    //                tokio::time::timeout_at(deadline, cache.get_route(request.url.authority()));
-    //            lookups.push(route);
-    //        }
-
-    //        futures::future::join_all(lookups).await
-    //    }
-    //    None => {
-    //        let mut lookups = Vec::with_capacity(search_path.len());
-    //        for url in search_path {
-    //            let route = cache.get_route(request.url.authority());
-    //            lookups.push(route);
-    //        }
-
-    //        futures::future::join_all(lookups).await
-    //    }
-    //};
-
-    let futures_ordered = FuturesOrdered::new();
+    let mut futures_ordered = FuturesOrdered::new();
     for url in search_path {
-        futures_ordered.push(cache.get_route(request.url.authority()));
+        futures_ordered.push_back(cache.get_route(url.authority().to_string()));
     }
 
-    futures_ordered.
-
-    // safety: we're checking indexes immediately before calling
-    // swap_remove, and search path should never be empty.
-    //
-    // consuming a vec and returning the nth element is not a solved problem.
-    // https://github.com/rust-lang/rfcs/issues/1512
-    let route = match lookup_results.iter().position(|r| r.is_ok()) {
-        Some(idx) => lookup_results.swap_remove(idx),
-        None => lookup_results.swap_remove(0),
+    // NB[pt): two potential surprises below:
+    //  1. we do not surface any errors that occur subsequent to the first success in the list of
+    //     routes.
+    //  2. we rely on .next() called on FuturesOrdered to start all the futures contained in
+    //     futures_ordered. We expect all routes to be checked in parallel depending on load in
+    //     tokio.
+    let msg = "timed out fetching route";
+    let route = loop {
+        match with_deadline!(futures_ordered.next(), deadline, msg, trace) {
+            Some(Some(route)) => break route,
+            Some(None) => {
+                continue;
+            }
+            None => {
+                return Err(Error::no_route_matched(
+                    request.url.authority().to_string(),
+                    trace,
+                ))
+            }
+        }
     };
 
-    let Some(route) = route else {
-        return Err(Error::no_route_matched(
-            request.url.authority().to_string(),
-            trace,
-        ));
-    };
     trace.lookup_route(&route);
 
     // match the request against the list of RouteRules that are part of this
@@ -675,7 +657,7 @@ pub(crate) async fn resolve_routes(
     trace.select_backend(&backend);
 
     Ok(ResolvedRoute {
-        route: Arc::new(route),
+        route,
         rule,
         backend,
         trace,
@@ -1197,7 +1179,11 @@ mod test {
 
         let route = Route {
             id: Name::from_static("ndots-match"),
-            hostnames: vec![Hostname::from_static("example.foo.bar.com").into()],
+            hostnames: vec![
+                Hostname::from_static("example.com").into(),
+                Hostname::from_static("example.foo.com").into(),
+                Hostname::from_static("example.foo.bar.com").into(),
+            ],
             ports: vec![],
             tags: Default::default(),
             rules: vec![RouteRule {
@@ -1219,12 +1205,28 @@ mod test {
             "http://example.foo.bar.com",
         ];
 
+        let will_match_hostnames = vec![
+            Hostname::from_static("example.com"),
+            Hostname::from_static("example.foo.com"),
+            Hostname::from_static("example.foo.bar.com"),
+        ];
+
         for url in will_match {
             let url = crate::Url::from_str(url).unwrap();
             let headers = &http::HeaderMap::default();
             let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
 
-            let resolved = assert_resolve_routes(&routes, request);
+            let resolved = resolve_routes(
+                &routes,
+                Trace::new(),
+                request,
+                None,
+                &RouteSearchConfig::new(3, will_match_hostnames.clone()),
+            )
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+
             // should match one of the query matches
             assert_eq!(
                 (resolved.rule, &resolved.backend),

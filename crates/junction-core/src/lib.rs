@@ -19,7 +19,9 @@ mod dns;
 mod load_balancer;
 mod xds;
 
-pub use client::{Client, HttpRequest, HttpResult, LbContext, ResolvedRoute, SelectedEndpoint};
+pub use client::{
+    Client, HttpRequest, HttpResult, LbContext, ResolvedRoute, RouteSearchConfig, SelectedEndpoint,
+};
 use error::Trace;
 use futures::FutureExt;
 use junction_api::Name;
@@ -57,6 +59,7 @@ pub fn check_route(
     // TODO: do we actually want that or do we want to treat the passed routes
     // as the primary config?
     let config = StaticConfig::new(routes, Vec::new());
+    let route_search_config_actual = route_search_config.clone().unwrap_or_default();
 
     // resolve_routes is async but we know that with StaticConfig, fetching
     // config should NEVER block. now-or-never just calls Poll with a noop
@@ -66,7 +69,7 @@ pub fn check_route(
         Trace::new(),
         request,
         None,
-        route_search_config.unwrap_or_default(),
+        &route_search_config_actual,
     )
     .now_or_never()
     .expect("check_route yielded unexpectedly. this is a bug in Junction, please file an issue")
@@ -227,7 +230,11 @@ mod test {
 
         let route = Route {
             id: Name::from_static("ndots-match"),
-            hostnames: vec![Hostname::from_static("example.foo.bar.com").into()],
+            hostnames: vec![
+                Hostname::from_static("example.com").into(),
+                Hostname::from_static("example.foo.com").into(),
+                Hostname::from_static("example.foo.bar.com").into(),
+            ],
             ports: vec![],
             tags: Default::default(),
             rules: vec![RouteRule {
@@ -245,6 +252,17 @@ mod test {
 
         let wont_match = ["http://not.example.com", "http://notexample.com"];
 
+        let will_match = [
+            "http://example.com",
+            "http://example.foo.com",
+            "http://example.foo.bar.com",
+        ];
+        let will_match_hostnames = vec![
+            Hostname::from_static("example.com"),
+            Hostname::from_static("example.foo.com"),
+            Hostname::from_static("example.foo.bar.com"),
+        ];
+
         for url in wont_match {
             let url = crate::Url::from_str(url).unwrap();
             let headers = &http::HeaderMap::default();
@@ -254,7 +272,7 @@ mod test {
                 &http::Method::GET,
                 &url,
                 headers,
-                RouteSearchConfig::default(),
+                &Some(RouteSearchConfig::new(3, will_match_hostnames.clone())),
             );
 
             match resolved_route {
@@ -266,12 +284,6 @@ mod test {
             }
         }
 
-        let will_match = [
-            "http://example.com",
-            "http://example.foo.com",
-            "http://example.foo.bar.com",
-        ];
-
         for url in will_match {
             let url = crate::Url::from_str(url).unwrap();
             let headers = &http::HeaderMap::default();
@@ -281,7 +293,7 @@ mod test {
                 &http::Method::GET,
                 &url,
                 headers,
-                RouteSearchConfig::default(),
+                &Some(RouteSearchConfig::new(3, will_match_hostnames.clone())),
             )
             .unwrap();
             // should match one of the query matches
