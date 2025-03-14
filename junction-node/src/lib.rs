@@ -19,8 +19,17 @@ use neon::{
 // neon-serde is effectively abandoned or that would be an easy start. it
 // depends on neon 0.4.0 https://github.com/GabrielCastro/neon-serde
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const BUILD: &str = env!("BUILD_SHA");
+
 #[neon::main]
 fn main(mut cx: ModuleContext) -> NeonResult<()> {
+    let version = cx.string(VERSION);
+    cx.export_value("version", version)?;
+
+    let build_version = cx.string(BUILD);
+    cx.export_value("build", build_version)?;
+
     cx.export_function("newRuntime", new_runtime)?;
     cx.export_function("newClient", new_client)?;
     cx.export_function("resolveHttp", resolve_http)?;

@@ -22,8 +22,13 @@ use xds_api::pb::google::protobuf;
 
 mod runtime;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const BUILD: &str = env!("BUILD_SHA");
+
 #[pymodule]
 fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("_version", VERSION)?;
+    m.add("_build", BUILD)?;
     m.add_class::<Junction>()?;
     m.add_class::<Endpoint>()?;
     m.add_class::<RetryPolicy>()?;
