@@ -575,14 +575,14 @@ pub(crate) async fn resolve_routes(
 ) -> crate::Result<ResolvedRoute> {
     use rand::seq::SliceRandom;
 
-    let suffixes = search(search_config, request.url);
+    let uris_to_search = search(search_config, request.url);
     assert!(
-        !suffixes.is_empty(),
+        !uris_to_search.is_empty(),
         "resolve's suffixes cannot be empty, this is a bug in Junction"
     );
 
     let mut futures_ordered = FuturesOrdered::new();
-    for url in suffixes {
+    for url in uris_to_search {
         futures_ordered.push_back(cache.get_route(url.authority().to_string()));
     }
 
