@@ -318,11 +318,11 @@ impl RouteRule {
 
 impl RouteTimeouts {
     pub fn from_xds(r: &xds_route::RouteAction) -> Result<Option<Self>, Error> {
-        let request = r.timeout.clone().map(Duration::try_from).transpose()?;
+        let request = r.timeout.map(Duration::try_from).transpose()?;
         let backend_request = r
             .retry_policy
             .as_ref()
-            .and_then(|retry_policy| retry_policy.per_try_timeout.clone().map(Duration::try_from))
+            .and_then(|retry_policy| retry_policy.per_try_timeout.map(Duration::try_from))
             .transpose()?;
 
         if request.is_some() || backend_request.is_some() {
@@ -593,11 +593,11 @@ impl RouteRetry {
             .iter()
             .map(|code| *code as u16)
             .collect();
-        let attempts = r.num_retries.clone().map(|v| u32::from(v) + 1);
+        let attempts = r.num_retries.map(|v| u32::from(v) + 1);
         let backoff = r
             .retry_back_off
             .as_ref()
-            .and_then(|r2| r2.base_interval.clone().map(|x| x.try_into().unwrap()));
+            .and_then(|r2| r2.base_interval.map(|x| x.try_into().unwrap()));
         Some(Self {
             codes,
             attempts,

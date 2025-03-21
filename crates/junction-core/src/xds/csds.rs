@@ -30,7 +30,7 @@ pub async fn local_server(cache: CacheReader, port: u16) -> Result<(), tonic::tr
     let reflection = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(xds_api::FILE_DESCRIPTOR_SET)
         .with_service_name("envoy.service.status.v3.ClientStatusDiscoveryService")
-        .build()
+        .build_v1()
         .unwrap();
 
     tonic::transport::Server::builder()
