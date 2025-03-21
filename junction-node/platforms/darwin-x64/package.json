@@ -1,7 +1,7 @@
 {
   "name": "@junction-labs/client-darwin-x64",
   "description": "Prebuilt binary package for `@junction-labs/client` on `darwin-x64`.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "os": ["darwin"],
   "cpu": ["x64"],
   "main": "index.node",

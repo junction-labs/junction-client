@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "junction-api"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arbitrary",
  "arbtest",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "junction-api-gen"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "askama",
@@ -1070,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "junction-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1104,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "junction-node"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "http 1.2.0",
  "junction-api",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "junction-python"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "http 1.2.0",
  "junction-api",
@@ -1134,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "junction-typeinfo"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "junction-typeinfo-derive",
  "serde",
@@ -1142,7 +1142,7 @@ dependencies = [
 
 [[package]]
 name = "junction-typeinfo-derive"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "proc-macro2",
  "quote",
