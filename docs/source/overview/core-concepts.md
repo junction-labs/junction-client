@@ -43,8 +43,8 @@ hostname, method, URL, and headers.
 Junction's main purpose is service discovery, and just like with DNS, the major
 input to a lookup is a hostname. However, unlike DNS which needs to handle the
 scale of the Internet, Junction is aimed at problems where the entire set of
-names can me kept in memory of a single server (at 1,000 bytes per record,
-1,000,000 records is just 1 GiB).  Thus in junction there is no logic about
+names can be kept in memory of a single server (at 1,000 bytes per record,
+1,000,000 records is just 1 GiB).  Thus in Junction there is no logic about
 subdomains. Rather, you set up a Route on any hostname you want, and a Junction
 will match it. 
 
