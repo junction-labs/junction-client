@@ -1,0 +1,122 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `crates/junction-core/src/xds/csds.rs`."><title>csds.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-6c3ea77c.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="junction_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.86.0 (05f9846f8 2025-03-31)" data-channel="1.86.0" data-search-js="search-581efc7a.js" data-settings-js="settings-6dad6058.js" ><script src="../../../static.files/storage-3a5871a4.js"></script><script defer src="../../../static.files/src-script-b8d3f215.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-4d63596a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">junction_core/xds/</div>csds.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! A server for [CSDS][csds].
+<a href=#2 id=2 data-nosnippet>2</a>//!
+<a href=#3 id=3 data-nosnippet>3</a>//! [csds]: https://www.envoyproxy.io/docs/envoy/latest/api-v3/service/status/v3/csds.proto
+<a href=#4 id=4 data-nosnippet>4</a>
+<a href=#5 id=5 data-nosnippet>5</a></span><span class="kw">use </span>std::{
+<a href=#6 id=6 data-nosnippet>6</a>    net::SocketAddr,
+<a href=#7 id=7 data-nosnippet>7</a>    net::{IpAddr, Ipv4Addr},
+<a href=#8 id=8 data-nosnippet>8</a>    pin::Pin,
+<a href=#9 id=9 data-nosnippet>9</a>};
+<a href=#10 id=10 data-nosnippet>10</a>
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span>futures::Stream;
+<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>tonic::{Request, Response, Status, Streaming};
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>xds_api::pb::envoy::{
+<a href=#14 id=14 data-nosnippet>14</a>    admin::v3::ClientResourceStatus,
+<a href=#15 id=15 data-nosnippet>15</a>    service::status::v3::{
+<a href=#16 id=16 data-nosnippet>16</a>        client_config::GenericXdsConfig,
+<a href=#17 id=17 data-nosnippet>17</a>        client_status_discovery_service_server::{
+<a href=#18 id=18 data-nosnippet>18</a>            ClientStatusDiscoveryService, ClientStatusDiscoveryServiceServer,
+<a href=#19 id=19 data-nosnippet>19</a>        },
+<a href=#20 id=20 data-nosnippet>20</a>        ClientConfig, ClientStatusRequest, ClientStatusResponse,
+<a href=#21 id=21 data-nosnippet>21</a>    },
+<a href=#22 id=22 data-nosnippet>22</a>};
+<a href=#23 id=23 data-nosnippet>23</a>
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::xds::{cache::CacheReader, XdsConfig};
+<a href=#25 id=25 data-nosnippet>25</a>
+<a href=#26 id=26 data-nosnippet>26</a><span class="doccomment">/// Run a CSDS server listening on `localhost` at the given port.
+<a href=#27 id=27 data-nosnippet>27</a></span><span class="kw">pub async fn </span>local_server(cache: CacheReader, port: u16) -&gt; <span class="prelude-ty">Result</span>&lt;(), tonic::transport::Error&gt; {
+<a href=#28 id=28 data-nosnippet>28</a>    <span class="kw">let </span>socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+<a href=#29 id=29 data-nosnippet>29</a>
+<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">let </span>reflection = tonic_reflection::server::Builder::configure()
+<a href=#31 id=31 data-nosnippet>31</a>        .register_encoded_file_descriptor_set(xds_api::FILE_DESCRIPTOR_SET)
+<a href=#32 id=32 data-nosnippet>32</a>        .with_service_name(<span class="string">"envoy.service.status.v3.ClientStatusDiscoveryService"</span>)
+<a href=#33 id=33 data-nosnippet>33</a>        .build_v1()
+<a href=#34 id=34 data-nosnippet>34</a>        .unwrap();
+<a href=#35 id=35 data-nosnippet>35</a>
+<a href=#36 id=36 data-nosnippet>36</a>    tonic::transport::Server::builder()
+<a href=#37 id=37 data-nosnippet>37</a>        .add_service(reflection)
+<a href=#38 id=38 data-nosnippet>38</a>        .add_service(ClientStatusDiscoveryServiceServer::new(Server { cache }))
+<a href=#39 id=39 data-nosnippet>39</a>        .serve(socket_addr)
+<a href=#40 id=40 data-nosnippet>40</a>        .<span class="kw">await
+<a href=#41 id=41 data-nosnippet>41</a></span>}
+<a href=#42 id=42 data-nosnippet>42</a>
+<a href=#43 id=43 data-nosnippet>43</a><span class="doccomment">/// A CSDS Server that exposes the current state of a client's cache.
+<a href=#44 id=44 data-nosnippet>44</a>///
+<a href=#45 id=45 data-nosnippet>45</a>/// Unlike a standard CSDS server, this server only has a single node worth of
+<a href=#46 id=46 data-nosnippet>46</a>/// config to expose. Because there is no reasonable way to interpret a node
+<a href=#47 id=47 data-nosnippet>47</a>/// matcher, any request that sets `node_matchers` will return an error.
+<a href=#48 id=48 data-nosnippet>48</a></span><span class="kw">struct </span>Server {
+<a href=#49 id=49 data-nosnippet>49</a>    cache: CacheReader,
+<a href=#50 id=50 data-nosnippet>50</a>}
+<a href=#51 id=51 data-nosnippet>51</a>
+<a href=#52 id=52 data-nosnippet>52</a><span class="kw">type </span>ClientStatusResponseStream =
+<a href=#53 id=53 data-nosnippet>53</a>    Pin&lt;Box&lt;<span class="kw">dyn </span>Stream&lt;Item = <span class="prelude-ty">Result</span>&lt;ClientStatusResponse, Status&gt;&gt; + Send&gt;&gt;;
+<a href=#54 id=54 data-nosnippet>54</a>
+<a href=#55 id=55 data-nosnippet>55</a><span class="attr">#[tonic::async_trait]
+<a href=#56 id=56 data-nosnippet>56</a></span><span class="kw">impl </span>ClientStatusDiscoveryService <span class="kw">for </span>Server {
+<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">type </span>StreamClientStatusStream = ClientStatusResponseStream;
+<a href=#58 id=58 data-nosnippet>58</a>
+<a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">async fn </span>stream_client_status(
+<a href=#60 id=60 data-nosnippet>60</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#61 id=61 data-nosnippet>61</a>        _request: Request&lt;Streaming&lt;ClientStatusRequest&gt;&gt;,
+<a href=#62 id=62 data-nosnippet>62</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Response&lt;<span class="self">Self</span>::StreamClientStatusStream&gt;, Status&gt; {
+<a href=#63 id=63 data-nosnippet>63</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(Status::unimplemented(
+<a href=#64 id=64 data-nosnippet>64</a>            <span class="string">"streaming client status is not supported"</span>,
+<a href=#65 id=65 data-nosnippet>65</a>        ));
+<a href=#66 id=66 data-nosnippet>66</a>    }
+<a href=#67 id=67 data-nosnippet>67</a>
+<a href=#68 id=68 data-nosnippet>68</a>    <span class="kw">async fn </span>fetch_client_status(
+<a href=#69 id=69 data-nosnippet>69</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#70 id=70 data-nosnippet>70</a>        request: Request&lt;ClientStatusRequest&gt;,
+<a href=#71 id=71 data-nosnippet>71</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Response&lt;ClientStatusResponse&gt;, Status&gt; {
+<a href=#72 id=72 data-nosnippet>72</a>        <span class="kw">let </span>request = request.into_inner();
+<a href=#73 id=73 data-nosnippet>73</a>
+<a href=#74 id=74 data-nosnippet>74</a>        <span class="kw">if </span>!request.node_matchers.is_empty() {
+<a href=#75 id=75 data-nosnippet>75</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(Status::invalid_argument(
+<a href=#76 id=76 data-nosnippet>76</a>                <span class="string">"node_matchers are unsupported for a single client CSDS endpoint"</span>,
+<a href=#77 id=77 data-nosnippet>77</a>            ));
+<a href=#78 id=78 data-nosnippet>78</a>        }
+<a href=#79 id=79 data-nosnippet>79</a>
+<a href=#80 id=80 data-nosnippet>80</a>        <span class="kw">let </span>node = request.node;
+<a href=#81 id=81 data-nosnippet>81</a>        <span class="kw">let </span>generic_xds_configs: Vec&lt;<span class="kw">_</span>&gt; = <span class="self">self</span>.cache.iter_xds().map(to_generic_config).collect();
+<a href=#82 id=82 data-nosnippet>82</a>
+<a href=#83 id=83 data-nosnippet>83</a>        <span class="prelude-val">Ok</span>(Response::new(ClientStatusResponse {
+<a href=#84 id=84 data-nosnippet>84</a>            config: <span class="macro">vec!</span>[ClientConfig {
+<a href=#85 id=85 data-nosnippet>85</a>                node,
+<a href=#86 id=86 data-nosnippet>86</a>                generic_xds_configs,
+<a href=#87 id=87 data-nosnippet>87</a>                ..Default::default()
+<a href=#88 id=88 data-nosnippet>88</a>            }],
+<a href=#89 id=89 data-nosnippet>89</a>        }))
+<a href=#90 id=90 data-nosnippet>90</a>    }
+<a href=#91 id=91 data-nosnippet>91</a>}
+<a href=#92 id=92 data-nosnippet>92</a>
+<a href=#93 id=93 data-nosnippet>93</a><span class="doccomment">/// Convert a crate config to an xDS generic config
+<a href=#94 id=94 data-nosnippet>94</a>///
+<a href=#95 id=95 data-nosnippet>95</a>/// There's no way on GenericXdsConfig to indicate that you've ACKed one version
+<a href=#96 id=96 data-nosnippet>96</a>/// of a config but rejected another. Since xDS generally gets cranky when you
+<a href=#97 id=97 data-nosnippet>97</a>/// specify a duplicate resource name, we're currently just only showing an error
+<a href=#98 id=98 data-nosnippet>98</a>/// if there was any error at all.
+<a href=#99 id=99 data-nosnippet>99</a>///
+<a href=#100 id=100 data-nosnippet>100</a>/// This is weird but so is xDS. There's a hidden field that describes the last
+<a href=#101 id=101 data-nosnippet>101</a>/// error trying to apply this config that would do what we want, but it's hidden
+<a href=#102 id=102 data-nosnippet>102</a>/// as not-implemented, so not in our protobufs.
+<a href=#103 id=103 data-nosnippet>103</a>///
+<a href=#104 id=104 data-nosnippet>104</a>/// Either figure out how to use the hidden field, or return MULTIPLE statuses for
+<a href=#105 id=105 data-nosnippet>105</a>/// resources that have a valid and an invalid resource.
+<a href=#106 id=106 data-nosnippet>106</a></span><span class="kw">fn </span>to_generic_config(config: XdsConfig) -&gt; GenericXdsConfig {
+<a href=#107 id=107 data-nosnippet>107</a>    <span class="kw">let </span>client_status = <span class="kw">match </span>(<span class="kw-2">&amp;</span>config.xds, <span class="kw-2">&amp;</span>config.last_error) {
+<a href=#108 id=108 data-nosnippet>108</a>        (<span class="kw">_</span>, <span class="prelude-val">Some</span>(<span class="kw">_</span>)) =&gt; ClientResourceStatus::Nacked,
+<a href=#109 id=109 data-nosnippet>109</a>        (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="prelude-val">None</span>) =&gt; ClientResourceStatus::Acked,
+<a href=#110 id=110 data-nosnippet>110</a>        <span class="kw">_ </span>=&gt; ClientResourceStatus::Unknown,
+<a href=#111 id=111 data-nosnippet>111</a>    };
+<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">let </span>version_info = config.version.map(|v| v.to_string()).unwrap_or_default();
+<a href=#113 id=113 data-nosnippet>113</a>
+<a href=#114 id=114 data-nosnippet>114</a>    GenericXdsConfig {
+<a href=#115 id=115 data-nosnippet>115</a>        type_url: config.type_url,
+<a href=#116 id=116 data-nosnippet>116</a>        name: config.name,
+<a href=#117 id=117 data-nosnippet>117</a>        version_info,
+<a href=#118 id=118 data-nosnippet>118</a>        xds_config: config.xds,
+<a href=#119 id=119 data-nosnippet>119</a>        client_status: client_status.into(),
+<a href=#120 id=120 data-nosnippet>120</a>        ..Default::default()
+<a href=#121 id=121 data-nosnippet>121</a>    }
+<a href=#122 id=122 data-nosnippet>122</a>}</code></pre></div></section></main></body></html>
