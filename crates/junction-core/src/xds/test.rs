@@ -165,6 +165,16 @@ macro_rules! req {
             err = None
         )
     };
+    (t = $ty:expr, n = $n:expr, add = $add:expr, remove = $remove:expr $(,)*) => {
+        crate::xds::test::req!(
+            t = $ty,
+            n = $n,
+            add = $add,
+            remove = $remove,
+            init = vec![],
+            err = None
+        )
+    };
     (t = $ty:expr, add = $add:expr, init = $init:expr $(,)*) => {
         crate::xds::test::req!(
             t = $ty,

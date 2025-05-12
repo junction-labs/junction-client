@@ -756,6 +756,8 @@ impl DnsUpdates {
 
 #[cfg(test)]
 mod test_ads_conn {
+    use std::collections::HashMap;
+
     use cache::Cache;
     use once_cell::sync::Lazy;
     use pretty_assertions::assert_eq;
@@ -1044,6 +1046,112 @@ mod test_ads_conn {
                     add = vec!["warm-route"]
                 ),
             ],
+        );
+    }
+
+    #[test]
+    fn test_handle_ads_message_listener_swap_route() {
+        let mut cache = Cache::default();
+        assert!(cache.is_wildcard(ResourceType::Listener));
+
+        let (mut conn, _) = new_conn(&mut cache);
+
+        // get set up with a listener pointing to a route
+        conn.handle_ads_message(xds_test::resp!(
+            n = "1",
+            add = ResourceVec::from_listeners(
+                "111".into(),
+                vec![xds_test::listener!("cooler.example.org", "cool-route")],
+            ),
+            remove = vec![],
+        ));
+        conn.handle_ads_message(xds_test::resp!(
+            n = "2",
+            add = ResourceVec::from_route_configs(
+                "222".into(),
+                vec![xds_test::route_config!(
+                    "cool-route",
+                    vec![xds_test::vhost!(
+                        "an-vhost",
+                        ["cooler.example.org"],
+                        [xds_test::route!(default "cooler.example.internal:8008")]
+                    )]
+                )],
+            ),
+            remove = vec![],
+        ));
+
+        let (outgoing, dns) = conn.outgoing();
+        assert!(dns.is_noop());
+        assert_eq!(
+            outgoing,
+            vec![
+                // new resource subs
+                xds_test::req!(
+                    t = ResourceType::Cluster,
+                    add = vec!["cooler.example.internal:8008"]
+                ),
+                // listener ack
+                xds_test::req!(t = ResourceType::Listener, n = "1"),
+                // route config ack
+                xds_test::req!(t = ResourceType::RouteConfiguration, n = "2"),
+            ],
+        );
+
+        assert_eq!(
+            conn.cache.versions(ResourceType::Listener),
+            HashMap::from_iter([("cooler.example.org".to_string(), "111".to_string())])
+        );
+        assert_eq!(
+            conn.cache.versions(ResourceType::RouteConfiguration),
+            HashMap::from_iter([("cool-route".to_string(), "222".to_string())])
+        );
+
+        // swap the route and immediately swap it back
+        //
+        // the cached resources should not change, but the Listener version should
+        // update and the outgoing messages should include a Listener ACK.
+        conn.handle_ads_message(xds_test::resp!(
+            n = "3",
+            add = ResourceVec::from_listeners(
+                "333".into(),
+                vec![xds_test::listener!("cooler.example.org", "lame-route")],
+            ),
+            remove = vec![],
+        ));
+        conn.handle_ads_message(xds_test::resp!(
+            n = "4",
+            add = ResourceVec::from_listeners(
+                "444".into(),
+                vec![xds_test::listener!("cooler.example.org", "cool-route")],
+            ),
+            remove = vec![],
+        ));
+
+        let (outgoing, dns) = conn.outgoing();
+        assert!(dns.is_noop());
+        assert_eq!(
+            outgoing,
+            vec![
+                // listener ack
+                xds_test::req!(t = ResourceType::Listener, n = "4"),
+                // route config for lame-route was both added and removed
+                xds_test::req!(
+                    t = ResourceType::RouteConfiguration,
+                    n = "",
+                    add = vec!["lame-route"],
+                    remove = vec!["lame-route"]
+                ),
+            ]
+        );
+
+        assert_eq!(
+            conn.cache.versions(ResourceType::Listener),
+            HashMap::from_iter([("cooler.example.org".to_string(), "444".to_string())])
+        );
+        assert_eq!(
+            conn.cache.versions(ResourceType::RouteConfiguration),
+            HashMap::from_iter([("cool-route".to_string(), "222".to_string())])
         );
     }
 
