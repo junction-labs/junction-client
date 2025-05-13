@@ -462,7 +462,7 @@ impl Ord for PathMatch {
 /// Invalid values include:
 ///
 /// * ":method" - ":" is an invalid character. This means that HTTP/2 pseudo
-///    headers are not currently supported by this type.
+///   headers are not currently supported by this type.
 ///
 /// * "/invalid" - "/" is an invalid character
 //

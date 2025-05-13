@@ -810,9 +810,9 @@ pub fn is_query_params_match(rule: &QueryParamMatch, query: Option<&str>) -> boo
 /// - a single element, a ref to the original URL
 ///
 /// - `search.len() + 1` elements, where the first element is the original
-///    URl and the rest of the entries are the result of appending the URL's
-///    hostname to the suffixes in search_config.search. the order of the suffixes in
-///    search is preserved.
+///   URl and the rest of the entries are the result of appending the URL's
+///   hostname to the suffixes in search_config.search. the order of the suffixes in
+///   search is preserved.
 fn search<'a>(search_config: &SearchConfig, url: &'a crate::Url) -> Vec<Cow<'a, crate::Url>> {
     // TODO: this could return an enum { Original(url), Search(url, path) } that
     // implements Iterator and lazily generates Cow<Url>. there's no reason to

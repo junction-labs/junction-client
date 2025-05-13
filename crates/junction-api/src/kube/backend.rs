@@ -75,8 +75,8 @@ impl Backend {
     ///   services, so that endpoint information is available.
     ///
     /// - `ExternalName` Services are translated to backends with a Dns target,
-    ///    and uses the service port as the target port. If no port is specified,
-    ///    backends are generated for ports 80 and 443.
+    ///   and uses the service port as the target port. If no port is specified,
+    ///   backends are generated for ports 80 and 443.
     ///
     /// All other Service types are currently unsupported.
     pub fn from_service(svc: &core_v1::Service) -> Result<Vec<Self>, Error> {
