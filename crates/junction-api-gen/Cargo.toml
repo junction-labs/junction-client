@@ -15,7 +15,6 @@ anyhow = "1.0"
 askama = "0.12"
 regex = { workspace = true }
 once_cell = { workspace = true }
-textwrap = { version = "0.16", features = ["smawk"] }
 
 junction-typeinfo = { workspace = true }
 junction-api = { workspace = true, features = ["typeinfo"] }
