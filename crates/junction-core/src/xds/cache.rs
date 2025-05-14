@@ -452,7 +452,7 @@ impl Subscriptions {
     }
 
     fn remove(&mut self, rtype: ResourceType, name: &str) {
-        if let Some(sub) = self.find_subcribed(rtype, name) {
+        if let Some(sub) = self.find(rtype, name) {
             self.reset_refs(sub);
         }
     }
@@ -469,7 +469,7 @@ impl Subscriptions {
         self.changes[sub.resource_type].removed.insert(sub.name);
     }
 
-    fn find_subcribed(&mut self, rtype: ResourceType, name: &str) -> Option<NodeIndex> {
+    fn find_or_subscribe(&mut self, rtype: ResourceType, name: &str) -> Option<NodeIndex> {
         // if this is a wildcard subscription, any name is subscribed. create it
         // and move on.
         if self.wildcard[rtype] {
@@ -780,7 +780,7 @@ impl Cache {
             }
             let Some(sub) = self
                 .subs
-                .find_subcribed(ResourceType::Listener, &listener.name)
+                .find_or_subscribe(ResourceType::Listener, &listener.name)
             else {
                 continue;
             };
@@ -889,7 +889,7 @@ impl Cache {
     ) -> Result<(), ResourceError> {
         let Some(sub) = self
             .subs
-            .find_subcribed(ResourceType::Cluster, &cluster.name)
+            .find_or_subscribe(ResourceType::Cluster, &cluster.name)
         else {
             return Ok(());
         };
@@ -963,7 +963,7 @@ impl Cache {
         for (version, route_config) in route_configs {
             let Some(sub) = self
                 .subs
-                .find_subcribed(ResourceType::RouteConfiguration, &route_config.name)
+                .find_or_subscribe(ResourceType::RouteConfiguration, &route_config.name)
             else {
                 continue;
             };
@@ -1039,7 +1039,7 @@ impl Cache {
         let mut errors = Vec::new();
 
         for (version, load_assignment) in load_assignments {
-            let sub = self.subs.find_subcribed(
+            let sub = self.subs.find_or_subscribe(
                 ResourceType::ClusterLoadAssignment,
                 &load_assignment.cluster_name,
             );
@@ -1548,6 +1548,110 @@ mod test {
         assert_eq!(
             cache.subscriptions(ResourceType::RouteConfiguration),
             vec!["example-route"],
+        );
+        assert_eq!(
+            cache.versions(ResourceType::RouteConfiguration),
+            collect_kv_str![("example-route", 123)],
+        );
+    }
+
+    #[test]
+    fn test_route_config_add_remove_add() {
+        let route_config = xds_test::route_config!(
+            "example-route",
+            vec![xds_test::vhost!(
+                "a-vhost",
+                ["listener.example.svc.cluster.local"],
+                [xds_test::route!(default "cluster.example:8008")]
+            )]
+        );
+
+        let mut cache = Cache::default();
+        cache.subscribe(ResourceType::RouteConfiguration, "example-route");
+
+        // add the route
+        assert_insert(cache.insert(ResourceVec::from_route_configs(
+            "123".into(),
+            vec![route_config.clone()],
+        )));
+        let (resources, dns) = cache.collect();
+        assert_eq!(
+            resources,
+            enum_map::enum_map! {
+                ResourceType::Cluster => Changes {
+                    added: collect_str!["cluster.example:8008"],
+                    ..Default::default()
+                },
+                _ => Changes::default(),
+            }
+        );
+        assert!(dns.is_noop());
+        assert_eq!(
+            cache.subscriptions(ResourceType::RouteConfiguration),
+            vec!["example-route"],
+        );
+        assert_eq!(
+            cache.subscriptions(ResourceType::Cluster),
+            vec!["cluster.example:8008"],
+        );
+        assert_eq!(
+            cache.versions(ResourceType::RouteConfiguration),
+            collect_kv_str![("example-route", 123)],
+        );
+
+        // remove the route
+        cache.remove(
+            ResourceType::RouteConfiguration,
+            &["example-route".to_string()],
+        );
+        let (resources, dns) = cache.collect();
+        assert_eq!(
+            resources,
+            enum_map::enum_map! {
+                ResourceType::Cluster => Changes {
+                    removed: collect_str!["cluster.example:8008"],
+                    ..Default::default()
+                },
+                _ => Changes::default(),
+            }
+        );
+        assert!(dns.is_noop());
+        assert_eq!(
+            cache.subscriptions(ResourceType::RouteConfiguration),
+            vec!["example-route"],
+        );
+        assert!(cache.subscriptions(ResourceType::Cluster).is_empty());
+
+        // remove the cluster
+        //
+        // NOTE: it doesn't seeem to matter if this cache.collect() is here
+        cache.remove(ResourceType::Cluster, &["cluster.example:8008".to_string()]);
+        let _ = cache.collect();
+
+        // add the route config again
+        assert_insert(cache.insert(ResourceVec::from_route_configs(
+            "123".into(),
+            vec![route_config],
+        )));
+        let (resources, dns) = cache.collect();
+        assert_eq!(
+            resources,
+            enum_map::enum_map! {
+                ResourceType::Cluster => Changes {
+                    added: collect_str!["cluster.example:8008"],
+                    ..Default::default()
+                },
+                _ => Changes::default(),
+            }
+        );
+        assert!(dns.is_noop());
+        assert_eq!(
+            cache.subscriptions(ResourceType::RouteConfiguration),
+            vec!["example-route"],
+        );
+        assert_eq!(
+            cache.subscriptions(ResourceType::Cluster),
+            vec!["cluster.example:8008"],
         );
         assert_eq!(
             cache.versions(ResourceType::RouteConfiguration),
