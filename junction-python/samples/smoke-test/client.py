@@ -148,7 +148,7 @@ def retry_test(args):
     }
     routes: List[junction.config.Route] = [
         {
-            "id": "retry-sample",
+            "id": "smoke-test-retry-test",
             "hostnames": ["jct-simple-app.default.svc.cluster.local"],
             "rules": [
                 {
@@ -207,7 +207,7 @@ def path_match_test(args):
     }
     routes: List[junction.config.Route] = [
         {
-            "id": "retry-sample",
+            "id": "smoke-test-path-match",
             "hostnames": ["jct-simple-app.default.svc.cluster.local"],
             "rules": [
                 {
@@ -317,7 +317,7 @@ def timeouts_test(args):
         }
         routes: List[junction.config.Route] = [
             {
-                "id": "timeouts-sample",
+                "id": "smoke-test-timeouts-test",
                 "hostnames": ["jct-simple-app.default.svc.cluster.local"],
                 "rules": [
                     {
@@ -362,7 +362,7 @@ def urllib3_test(args):
     }
     default_routes: List[junction.config.Route] = [
         {
-            "id": "urllib3-sample",
+            "id": "smoke-test-urllib3",
             "hostnames": ["jct-simple-app.default.svc.cluster.local"],
             "rules": [
                 {
