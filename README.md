@@ -71,9 +71,9 @@ the xds configuration to drive the Junction Client.
 | [Python]    | [requests], [urllib3]     |
 | [Node.js]   | [fetch()]                 |
 
-[Rust]: https://docs.junctionlabs.io/getting-started/rust.md
-[Python]: https://docs.junctionlabs.io/getting-started/python.md
-[Node.js]: https://docs.junctionlabs.io/getting-started/node.md
+[Rust]: https://docs.junctionlabs.io/getting-started/rust
+[Python]: https://docs.junctionlabs.io/getting-started/python
+[Node.js]: https://docs.junctionlabs.io/getting-started/node
 [requests]: https://pypi.org/project/requests/
 [urllib3]: https://github.com/urllib3/urllib3
 [fetch()]: https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API/Using_Fetch
