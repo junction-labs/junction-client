@@ -18,6 +18,7 @@ use std::{
     str::FromStr,
     time::{Duration, Instant},
 };
+use tracing_subscriber::EnvFilter;
 use xds_api::pb::google::protobuf;
 
 mod runtime;
@@ -37,8 +38,25 @@ fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(check_route, m)?)?;
     m.add_function(wrap_pyfunction!(dump_kube_route, m)?)?;
     m.add_function(wrap_pyfunction!(dump_kube_backend, m)?)?;
+    m.add_function(wrap_pyfunction!(enable_tracing, m)?)?;
 
     Ok(())
+}
+
+/// Enable Rust's tracing output to stdout, using the `RUST_LOG` environment
+/// variable for control over what's logged.
+///
+/// If `json` is True, traces are output as JSON instead of human-readable text.
+#[pyfunction]
+#[pyo3(signature = (*, json=false))]
+fn enable_tracing(json: bool) -> bool {
+    let builder = tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env());
+
+    if json {
+        builder.json().try_init().is_ok()
+    } else {
+        builder.try_init().is_ok()
+    }
 }
 
 mod env {

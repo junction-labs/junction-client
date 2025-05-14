@@ -24,6 +24,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yml = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+tracing-subscriber = { workspace = true }
 xds-api = { workspace = true, features = ["pbjson"] }
 pyo3 = { version = "0.21", features = [
     "extension-module",

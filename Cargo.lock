@@ -1128,6 +1128,7 @@ dependencies = [
  "serde_json",
  "serde_yml",
  "tokio",
+ "tracing-subscriber",
  "xds-api",
 ]
 

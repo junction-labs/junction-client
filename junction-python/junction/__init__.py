@@ -10,6 +10,7 @@ from junction.junction import (
     check_route,
     dump_kube_backend,
     dump_kube_route,
+    enable_tracing,
 )
 
 from . import config, requests, urllib3
@@ -55,4 +56,5 @@ __all__ = (
     default_client,
     dump_kube_backend,
     dump_kube_route,
+    enable_tracing,
 )
