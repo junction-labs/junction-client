@@ -59,7 +59,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: node reference docs
-        if: ${{ needs.what.outputs.dev || needs.what.outputs.node }}
+        if: ${{ needs.what.outputs.dev == 'true' || needs.what.outputs.node == 'true' }}
         uses: ./.github/actions/node-reference-docs
         with:
           node-version: 22
@@ -68,7 +68,7 @@ jobs:
           build-stable: ${{ needs.what.outputs.node }}
 
       - name: Python reference docs
-        if: ${{ needs.what.outputs.dev || needs.what.outputs.python }}
+        if: ${{ needs.what.outputs.dev == 'true' || needs.what.outputs.python == 'true' }}
         uses: ./.github/actions/python-reference-docs
         with:
           python-version: 3.12
@@ -82,11 +82,11 @@ jobs:
       # TODO: move this into a composite action so we don't have to `if` every
       # step separately.
       - name: Build Rust documentation
-        if: ${{ needs.what.outputs.dev }}
+        if: ${{ needs.what.outputs.dev == 'true' }}
         run: cargo xtask core doc
 
       - name: Deploy Rust dev docs
-        if: ${{ needs.what.outputs.dev }}
+        if: ${{ needs.what.outputs.dev == 'true' }}
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: target/doc/
@@ -94,5 +94,5 @@ jobs:
           single-commit: true
 
       - name: Clean up rust dev docs artifacts
-        if: ${{ needs.what.outputs.dev }}
+        if: ${{ needs.what.outputs.dev == 'true' }}
         run: rm -rf target/doc
