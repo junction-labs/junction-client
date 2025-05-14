@@ -9,12 +9,16 @@ on:
   push:
     branches: ["main"]
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "crates/**"
       - ".github/workflows/junction-ci.yml"
 
   pull_request:
     branches: ["main"]
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "crates/**"
       - ".github/workflows/junction-ci.yml"
 
