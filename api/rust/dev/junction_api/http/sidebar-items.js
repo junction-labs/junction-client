@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["HeaderMatch","HostnameMatch","PathMatch","PathModifier","QueryParamMatch","RouteFilter"],"struct":["BackendRef","HeaderFilter","HeaderValue","RequestMirrorFilter","RequestRedirectFilter","Route","RouteMatch","RouteRetry","RouteRule","RouteTimeouts","UrlRewriteFilter"],"type":["HeaderName","Method"]};

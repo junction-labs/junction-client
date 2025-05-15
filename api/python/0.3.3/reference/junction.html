@@ -1,0 +1,698 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" sizes="32x32" href="https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292/icons/favicon-32x32.png" type="image/png">
+    <link rel="apple-touch-icon" sizes="180x180" href="https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292/icons/touchicon-180x180.png" type="image/png">
+    <title>Junction &#8212; Junction  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=87e54e7c" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom.css" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'reference/junction';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.15.4';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://docs.junctionlabs.io/api/python/dev/_static/version_switcher.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '0.3.3';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner = false;
+        </script>
+    <script data-domain="docs.junctionlabs" defer="defer" src="https://plausible.io/js/script.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Requests" href="requests.html" />
+    <link rel="prev" title="Config" href="config.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292/67099720085278dbb34eccb2_logo-closed-orange-grey.svg" class="logo__image only-light" alt="Junction  documentation - Home"/>
+    <script>document.write(`<img src="https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292/67099720085278dbb34eccb2_logo-closed-orange-grey.svg" class="logo__image only-dark" alt="Junction  documentation - Home"/>`);</script>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="index.html">
+    Python API reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://docs.junctionlabs.io/">
+    User guide
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script></div>
+      
+        <div class="navbar-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-2"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-2"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-2"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-2">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/junction-labs/junction-client" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://discord.gg/9Uq9FwnW3y" title="Discord" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-discord fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">Discord</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="index.html">
+    Python API reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://docs.junctionlabs.io/">
+    User guide
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script></div>
+        
+          <div class="navbar-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-3"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-3"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-3"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-3">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/junction-labs/junction-client" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://discord.gg/9Uq9FwnW3y" title="Discord" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-discord fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">Discord</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="config.html">Config</a></li>
+</ul>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Junction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="requests.html">Requests</a></li>
+<li class="toctree-l1"><a class="reference internal" href="urllib3.html">Urllib3</a></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Python API reference</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page">Junction</li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="junction">
+<h1>Junction<a class="headerlink" href="#junction" title="Link to this heading">#</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.Junction">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.</span></span><span class="sig-name descname"><span class="pre">Junction</span></span><span class="sig-paren">(</span>
+
+<dl>
+<dd><em class="sig-param"><span class="o"><span class="pre">*</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">static_routes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">static_backends</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">ads_server</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">node</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">cluster</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+</dl>
+
+<span class="sig-paren">)</span><a class="headerlink" href="#junction.Junction" title="Link to this definition">#</a></dt>
+<dd><p>A Junction endpoint discovery client.</p>
+<p><strong>Methods:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.Junction.dump_backends" title="junction.Junction.dump_backends"><code class="xref py py-obj docutils literal notranslate"><span class="pre">dump_backends</span></code></a>()</p></td>
+<td><p>Dump the client's backend config.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.Junction.dump_routes" title="junction.Junction.dump_routes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">dump_routes</span></code></a>()</p></td>
+<td><p>Dump the client's current route config.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.Junction.dump_xds" title="junction.Junction.dump_xds"><code class="xref py py-obj docutils literal notranslate"><span class="pre">dump_xds</span></code></a>([not_found])</p></td>
+<td><p>Dump the client's current xDS config as a pbjson dict.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.Junction.dump_xds_errors" title="junction.Junction.dump_xds_errors"><code class="xref py py-obj docutils literal notranslate"><span class="pre">dump_xds_errors</span></code></a>()</p></td>
+<td><p>Dump the client's current xDS errors as a pbjson dict.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.Junction.get_endpoints" title="junction.Junction.get_endpoints"><code class="xref py py-obj docutils literal notranslate"><span class="pre">get_endpoints</span></code></a>(backend)</p></td>
+<td><p>Return the list of addresses currently in cache for a backend.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.Junction.resolve_http" title="junction.Junction.resolve_http"><code class="xref py py-obj docutils literal notranslate"><span class="pre">resolve_http</span></code></a>(url, *[, method, headers])</p></td>
+<td><p>Resolve an endpoint based on an HTTP method, url, and headers.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.Junction.resolve_route" title="junction.Junction.resolve_route"><code class="xref py py-obj docutils literal notranslate"><span class="pre">resolve_route</span></code></a>(url, *[, method, headers, timeout])</p></td>
+<td><p>Perform the route resolution half of resolve_http, returning the matched route, the index of the matching rule, and the backend that was selected.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.Junction.run_csds_server" title="junction.Junction.run_csds_server"><code class="xref py py-obj docutils literal notranslate"><span class="pre">run_csds_server</span></code></a>(port)</p></td>
+<td><p>Spawn a new CSDS server on the given port.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="junction.Junction.dump_backends">
+<span class="sig-name descname"><span class="pre">dump_backends</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#junction.Junction.dump_backends" title="Link to this definition">#</a></dt>
+<dd><p>Dump the client’s backend config.</p>
+<p>This is the same merged view of dynamic config and static config that
+the client uses to make load balancing decisions.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="junction.Junction.dump_routes">
+<span class="sig-name descname"><span class="pre">dump_routes</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#junction.Junction.dump_routes" title="Link to this definition">#</a></dt>
+<dd><p>Dump the client’s current route config.</p>
+<p>This is the same merged view of dynamic config and static config that
+the client uses to make routing decisions.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="junction.Junction.dump_xds">
+<span class="sig-name descname"><span class="pre">dump_xds</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">not_found</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#junction.Junction.dump_xds" title="Link to this definition">#</a></dt>
+<dd><p>Dump the client’s current xDS config as a pbjson dict.</p>
+<p>The xDS config will contain the latest values for all resources and any
+errors encountered while trying to fetch updated versions.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="junction.Junction.dump_xds_errors">
+<span class="sig-name descname"><span class="pre">dump_xds_errors</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#junction.Junction.dump_xds_errors" title="Link to this definition">#</a></dt>
+<dd><p>Dump the client’s current xDS errors as a pbjson dict.</p>
+<p>This is the same as dumping config with dump_xds and filtering to only
+xds with a <code class="code docutils literal notranslate"><span class="pre">last_error</span></code> message set.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="junction.Junction.get_endpoints">
+<span class="sig-name descname"><span class="pre">get_endpoints</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">backend</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#junction.Junction.get_endpoints" title="Link to this definition">#</a></dt>
+<dd><p>Return the list of addresses currently in cache for a backend. These
+endpoints are a snapshot of what is currently in cache.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="junction.Junction.resolve_http">
+<span class="sig-name descname"><span class="pre">resolve_http</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">method</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">headers</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#junction.Junction.resolve_http" title="Link to this definition">#</a></dt>
+<dd><p>Resolve an endpoint based on an HTTP method, url, and headers.</p>
+<p>Returns the list of endpoints that traffic should be directed to, taking
+in to account load balancing and any prior requests. A request should be
+sent to all endpoints, and it’s up to the caller to decide how to
+combine multiple responses.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="junction.Junction.resolve_route">
+<span class="sig-name descname"><span class="pre">resolve_route</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">url</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">method</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">headers</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">timeout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#junction.Junction.resolve_route" title="Link to this definition">#</a></dt>
+<dd><p>Perform the route resolution half of resolve_http, returning the
+matched route, the index of the matching rule, and the backend that
+was selected. Use it as a lower level method to debug route resolution,
+or to look up Routes without making a full request.</p>
+<p>If <code class="code docutils literal notranslate"><span class="pre">dynamic=False</span></code> is passed as a kwarg, the resolution happens without
+fetching any new routing data over the network.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="junction.Junction.run_csds_server">
+<span class="sig-name descname"><span class="pre">run_csds_server</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">port</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#junction.Junction.run_csds_server" title="Link to this definition">#</a></dt>
+<dd><p>Spawn a new CSDS server on the given port. Spawning the server will not
+block the current thread.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="config.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Config</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="requests.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Requests</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.Junction"><code class="docutils literal notranslate"><span class="pre">Junction</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.Junction.dump_backends"><code class="docutils literal notranslate"><span class="pre">Junction.dump_backends()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.Junction.dump_routes"><code class="docutils literal notranslate"><span class="pre">Junction.dump_routes()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.Junction.dump_xds"><code class="docutils literal notranslate"><span class="pre">Junction.dump_xds()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.Junction.dump_xds_errors"><code class="docutils literal notranslate"><span class="pre">Junction.dump_xds_errors()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.Junction.get_endpoints"><code class="docutils literal notranslate"><span class="pre">Junction.get_endpoints()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.Junction.resolve_http"><code class="docutils literal notranslate"><span class="pre">Junction.resolve_http()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.Junction.resolve_route"><code class="docutils literal notranslate"><span class="pre">Junction.resolve_route()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.Junction.run_csds_server"><code class="docutils literal notranslate"><span class="pre">Junction.run_csds_server()</span></code></a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright 2024, Junction Labs.
+      <br/>
+    
+  </p>
+</div>
+      
+        <div class="footer-item">
+
+  <p class="sphinx-version">
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
+    <br/>
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+<p class="theme-version">
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.15.4.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>

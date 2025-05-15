@@ -1,0 +1,1370 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" sizes="32x32" href="https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292/icons/favicon-32x32.png" type="image/png">
+    <link rel="apple-touch-icon" sizes="180x180" href="https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292/icons/touchicon-180x180.png" type="image/png">
+    <title>Config &#8212; Junction  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=87e54e7c" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom.css" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'reference/config';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.15.4';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://docs.junctionlabs.io/api/python/dev/_static/version_switcher.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = '0.3.2';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner = false;
+        </script>
+    <script data-domain="docs.junctionlabs" defer="defer" src="https://plausible.io/js/script.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Junction" href="junction.html" />
+    <link rel="prev" title="Python API reference" href="index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292/67099720085278dbb34eccb2_logo-closed-orange-grey.svg" class="logo__image only-light" alt="Junction  documentation - Home"/>
+    <script>document.write(`<img src="https://cdn.prod.website-files.com/6707f6a426fd2aa62b6ff292/67099720085278dbb34eccb2_logo-closed-orange-grey.svg" class="logo__image only-dark" alt="Junction  documentation - Home"/>`);</script>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="index.html">
+    Python API reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://docs.junctionlabs.io/">
+    User guide
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script></div>
+      
+        <div class="navbar-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-2"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-2"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-2"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-2">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/junction-labs/junction-client" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://discord.gg/9Uq9FwnW3y" title="Discord" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-discord fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">Discord</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="index.html">
+    Python API reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-external" href="https://docs.junctionlabs.io/">
+    User guide
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script></div>
+        
+          <div class="navbar-item">
+<script>
+document.write(`
+  <div class="version-switcher__container dropdown">
+    <button id="pst-version-switcher-button-3"
+      type="button"
+      class="version-switcher__button btn btn-sm dropdown-toggle"
+      data-bs-toggle="dropdown"
+      aria-haspopup="listbox"
+      aria-controls="pst-version-switcher-list-3"
+      aria-label="Version switcher list"
+    >
+      Choose version  <!-- this text may get changed later by javascript -->
+      <span class="caret"></span>
+    </button>
+    <div id="pst-version-switcher-list-3"
+      class="version-switcher__menu dropdown-menu list-group-flush py-0"
+      role="listbox" aria-labelledby="pst-version-switcher-button-3">
+      <!-- dropdown will be populated by javascript on page load -->
+    </div>
+  </div>
+`);
+</script></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/junction-labs/junction-client" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://discord.gg/9Uq9FwnW3y" title="Discord" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-discord fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">Discord</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+<nav class="bd-docs-nav bd-links"
+     aria-label="Section Navigation">
+  <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
+  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Config</a></li>
+</ul>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="junction.html">Junction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="requests.html">Requests</a></li>
+<li class="toctree-l1"><a class="reference internal" href="urllib3.html">Urllib3</a></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">Python API reference</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page">Config</li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="module-junction.config">
+<span id="config"></span><h1>Config<a class="headerlink" href="#module-junction.config" title="Link to this heading">#</a></h1>
+<p>Junction client configuration.</p>
+<p><strong>Classes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.Backend" title="junction.config.Backend"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Backend</span></code></a></p></td>
+<td><p>A Backend is a logical target for network traffic.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.BackendId" title="junction.config.BackendId"><code class="xref py py-obj docutils literal notranslate"><span class="pre">BackendId</span></code></a></p></td>
+<td><p>A Backend is uniquely identifiable by a combination of Service and port.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.BackendRef" title="junction.config.BackendRef"><code class="xref py py-obj docutils literal notranslate"><span class="pre">BackendRef</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.Fraction" title="junction.config.Fraction"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Fraction</span></code></a></p></td>
+<td><p>A fraction, expressed as a numerator and a denominator.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.HeaderMatchExact" title="junction.config.HeaderMatchExact"><code class="xref py py-obj docutils literal notranslate"><span class="pre">HeaderMatchExact</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.HeaderMatchRegularExpression" title="junction.config.HeaderMatchRegularExpression"><code class="xref py py-obj docutils literal notranslate"><span class="pre">HeaderMatchRegularExpression</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.HeaderValue" title="junction.config.HeaderValue"><code class="xref py py-obj docutils literal notranslate"><span class="pre">HeaderValue</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.LbPolicyRingHash" title="junction.config.LbPolicyRingHash"><code class="xref py py-obj docutils literal notranslate"><span class="pre">LbPolicyRingHash</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.LbPolicyRoundRobin" title="junction.config.LbPolicyRoundRobin"><code class="xref py py-obj docutils literal notranslate"><span class="pre">LbPolicyRoundRobin</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.LbPolicyUnspecified" title="junction.config.LbPolicyUnspecified"><code class="xref py py-obj docutils literal notranslate"><span class="pre">LbPolicyUnspecified</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.PathMatchExact" title="junction.config.PathMatchExact"><code class="xref py py-obj docutils literal notranslate"><span class="pre">PathMatchExact</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.PathMatchPrefix" title="junction.config.PathMatchPrefix"><code class="xref py py-obj docutils literal notranslate"><span class="pre">PathMatchPrefix</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.PathMatchRegularExpression" title="junction.config.PathMatchRegularExpression"><code class="xref py py-obj docutils literal notranslate"><span class="pre">PathMatchRegularExpression</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.QueryParamMatchExact" title="junction.config.QueryParamMatchExact"><code class="xref py py-obj docutils literal notranslate"><span class="pre">QueryParamMatchExact</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.QueryParamMatchRegularExpression" title="junction.config.QueryParamMatchRegularExpression"><code class="xref py py-obj docutils literal notranslate"><span class="pre">QueryParamMatchRegularExpression</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RequestHashPolicy" title="junction.config.RequestHashPolicy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">RequestHashPolicy</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.Route" title="junction.config.Route"><code class="xref py py-obj docutils literal notranslate"><span class="pre">Route</span></code></a></p></td>
+<td><p>A Route is a policy that describes how a request to a specific virtual host should be routed.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RouteMatch" title="junction.config.RouteMatch"><code class="xref py py-obj docutils literal notranslate"><span class="pre">RouteMatch</span></code></a></p></td>
+<td><p>Defines the predicate used to match requests to a given action.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RouteRetry" title="junction.config.RouteRetry"><code class="xref py py-obj docutils literal notranslate"><span class="pre">RouteRetry</span></code></a></p></td>
+<td><p>Configure client retry policy.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RouteRule" title="junction.config.RouteRule"><code class="xref py py-obj docutils literal notranslate"><span class="pre">RouteRule</span></code></a></p></td>
+<td><p>A RouteRule contains a set of matches that define which requests it applies to, processing rules, and the final destination(s) for matching traffic.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RouteTimeouts" title="junction.config.RouteTimeouts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">RouteTimeouts</span></code></a></p></td>
+<td><p>Defines timeouts that can be configured for a HTTP Route.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.ServiceDns" title="junction.config.ServiceDns"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ServiceDns</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.ServiceKube" title="junction.config.ServiceKube"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ServiceKube</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.Backend">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">Backend</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L333-L344"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.Backend" title="Link to this definition">#</a></dt>
+<dd><p>A Backend is a logical target for network traffic.</p>
+<p>A backend configures how all traffic for its <code class="code docutils literal notranslate"><span class="pre">target</span></code> is handled. Any
+traffic routed to this backend will use the configured load balancing policy
+to spread traffic across available endpoints.</p>
+<p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.Backend.id" title="junction.config.Backend.id"><code class="xref py py-obj docutils literal notranslate"><span class="pre">id</span></code></a></p></td>
+<td><p>A unique identifier for this backend.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.Backend.lb" title="junction.config.Backend.lb"><code class="xref py py-obj docutils literal notranslate"><span class="pre">lb</span></code></a></p></td>
+<td><p>How traffic to this target should be load balanced.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.Backend.id">
+<span class="sig-name descname"><span class="pre">id</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.BackendId" title="junction.config.BackendId"><span class="pre">BackendId</span></a></em><a class="headerlink" href="#junction.config.Backend.id" title="Link to this definition">#</a></dt>
+<dd><p>A unique identifier for this backend.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.Backend.lb">
+<span class="sig-name descname"><span class="pre">lb</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.LbPolicyRoundRobin" title="junction.config.LbPolicyRoundRobin"><span class="pre">LbPolicyRoundRobin</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.LbPolicyRingHash" title="junction.config.LbPolicyRingHash"><span class="pre">LbPolicyRingHash</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.LbPolicyUnspecified" title="junction.config.LbPolicyUnspecified"><span class="pre">LbPolicyUnspecified</span></a></em><a class="headerlink" href="#junction.config.Backend.lb" title="Link to this definition">#</a></dt>
+<dd><p>How traffic to this target should be load balanced.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.BackendId">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">BackendId</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L271-L288"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.BackendId" title="Link to this definition">#</a></dt>
+<dd><p>A Backend is uniquely identifiable by a combination of Service and port.</p>
+<p>[Backend][crate::backend::Backend].</p>
+<p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.BackendId.hostname" title="junction.config.BackendId.hostname"><code class="xref py py-obj docutils literal notranslate"><span class="pre">hostname</span></code></a></p></td>
+<td><p>A valid RFC1123 DNS domain name.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.BackendId.name" title="junction.config.BackendId.name"><code class="xref py py-obj docutils literal notranslate"><span class="pre">name</span></code></a></p></td>
+<td><p>The name of the Kubernetes Service to target.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.BackendId.namespace" title="junction.config.BackendId.namespace"><code class="xref py py-obj docutils literal notranslate"><span class="pre">namespace</span></code></a></p></td>
+<td><p>The namespace of the Kubernetes service to target.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.BackendId.port" title="junction.config.BackendId.port"><code class="xref py py-obj docutils literal notranslate"><span class="pre">port</span></code></a></p></td>
+<td><p>The port backend traffic is sent on.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.BackendId.hostname">
+<span class="sig-name descname"><span class="pre">hostname</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.BackendId.hostname" title="Link to this definition">#</a></dt>
+<dd><p>A valid RFC1123 DNS domain name.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.BackendId.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.BackendId.name" title="Link to this definition">#</a></dt>
+<dd><p>The name of the Kubernetes Service to target.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.BackendId.namespace">
+<span class="sig-name descname"><span class="pre">namespace</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.BackendId.namespace" title="Link to this definition">#</a></dt>
+<dd><p>The namespace of the Kubernetes service to target. This must be explicitly
+specified, and won’t be inferred from context.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.BackendId.port">
+<span class="sig-name descname"><span class="pre">port</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></em><a class="headerlink" href="#junction.config.BackendId.port" title="Link to this definition">#</a></dt>
+<dd><p>The port backend traffic is sent on.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.BackendRef">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">BackendRef</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L37-L63"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.BackendRef" title="Link to this definition">#</a></dt>
+<dd><p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.BackendRef.hostname" title="junction.config.BackendRef.hostname"><code class="xref py py-obj docutils literal notranslate"><span class="pre">hostname</span></code></a></p></td>
+<td><p>A valid RFC1123 DNS domain name.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.BackendRef.name" title="junction.config.BackendRef.name"><code class="xref py py-obj docutils literal notranslate"><span class="pre">name</span></code></a></p></td>
+<td><p>The name of the Kubernetes Service to target.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.BackendRef.namespace" title="junction.config.BackendRef.namespace"><code class="xref py py-obj docutils literal notranslate"><span class="pre">namespace</span></code></a></p></td>
+<td><p>The namespace of the Kubernetes service to target.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.BackendRef.port" title="junction.config.BackendRef.port"><code class="xref py py-obj docutils literal notranslate"><span class="pre">port</span></code></a></p></td>
+<td><p>The port to route traffic to, used in combination with [service][Self::service] to identify the [Backend][crate::backend::Backend] to route traffic to.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.BackendRef.weight" title="junction.config.BackendRef.weight"><code class="xref py py-obj docutils literal notranslate"><span class="pre">weight</span></code></a></p></td>
+<td><p>The relative weight of this backend relative to any other backends in [the list][RouteRule::backends].</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.BackendRef.hostname">
+<span class="sig-name descname"><span class="pre">hostname</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.BackendRef.hostname" title="Link to this definition">#</a></dt>
+<dd><p>A valid RFC1123 DNS domain name.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.BackendRef.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.BackendRef.name" title="Link to this definition">#</a></dt>
+<dd><p>The name of the Kubernetes Service to target.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.BackendRef.namespace">
+<span class="sig-name descname"><span class="pre">namespace</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.BackendRef.namespace" title="Link to this definition">#</a></dt>
+<dd><p>The namespace of the Kubernetes service to target. This must be explicitly
+specified, and won’t be inferred from context.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.BackendRef.port">
+<span class="sig-name descname"><span class="pre">port</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></em><a class="headerlink" href="#junction.config.BackendRef.port" title="Link to this definition">#</a></dt>
+<dd><p>The port to route traffic to, used in combination with
+[service][Self::service] to identify the
+[Backend][crate::backend::Backend] to route traffic to.</p>
+<p>If omitted, the port of the incoming request is used to route traffic.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.BackendRef.weight">
+<span class="sig-name descname"><span class="pre">weight</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></em><a class="headerlink" href="#junction.config.BackendRef.weight" title="Link to this definition">#</a></dt>
+<dd><p>The relative weight of this backend relative to any other backends in
+[the list][RouteRule::backends].</p>
+<p>If not specified, defaults to <code class="code docutils literal notranslate"><span class="pre">1</span></code>.</p>
+<p>An individual backend may have a weight of <code class="code docutils literal notranslate"><span class="pre">0</span></code>, but specifying every
+backend with <code class="code docutils literal notranslate"><span class="pre">0</span></code> weight is an error.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py data">
+<dt class="sig sig-object py" id="junction.config.Duration">
+<span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">Duration</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#junction.config.Duration" title="Link to this definition">#</a></dt>
+<dd><p>A duration expressed as a total number of seconds. Durations should never be negative.</p>
+<p>alias of <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></a> | <a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code></a> | <a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></a></p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.Fraction">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">Fraction</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L30-L34"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.Fraction" title="Link to this definition">#</a></dt>
+<dd><p>A fraction, expressed as a numerator and a denominator.</p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.HeaderMatchExact">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">HeaderMatchExact</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L116-L119"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.HeaderMatchExact" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.HeaderMatchRegularExpression">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">HeaderMatchRegularExpression</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L110-L113"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.HeaderMatchRegularExpression" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.HeaderValue">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">HeaderValue</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L101-L107"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.HeaderValue" title="Link to this definition">#</a></dt>
+<dd><p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.HeaderValue.name" title="junction.config.HeaderValue.name"><code class="xref py py-obj docutils literal notranslate"><span class="pre">name</span></code></a></p></td>
+<td><p>The name of the HTTP Header.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.HeaderValue.value" title="junction.config.HeaderValue.value"><code class="xref py py-obj docutils literal notranslate"><span class="pre">value</span></code></a></p></td>
+<td><p>The value of HTTP Header.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.HeaderValue.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.HeaderValue.name" title="Link to this definition">#</a></dt>
+<dd><p>The name of the HTTP Header. Note header names are case insensitive. (See
+&lt;<a class="reference external" href="https://tools.ietf.org/html/rfc7230#section-3.2">https://tools.ietf.org/html/rfc7230#section-3.2</a>&gt;).</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.HeaderValue.value">
+<span class="sig-name descname"><span class="pre">value</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.HeaderValue.value" title="Link to this definition">#</a></dt>
+<dd><p>The value of HTTP Header.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.LbPolicyRingHash">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">LbPolicyRingHash</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L308-L323"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.LbPolicyRingHash" title="Link to this definition">#</a></dt>
+<dd><p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.LbPolicyRingHash.hash_params" title="junction.config.LbPolicyRingHash.hash_params"><code class="xref py py-obj docutils literal notranslate"><span class="pre">hash_params</span></code></a></p></td>
+<td><p>How to hash an outgoing request into the ring.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.LbPolicyRingHash.min_ring_size" title="junction.config.LbPolicyRingHash.min_ring_size"><code class="xref py py-obj docutils literal notranslate"><span class="pre">min_ring_size</span></code></a></p></td>
+<td><p>The minimum size of the hash ring</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.LbPolicyRingHash.hash_params">
+<span class="sig-name descname"><span class="pre">hash_params</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#junction.config.RequestHashPolicy" title="junction.config.RequestHashPolicy"><span class="pre">RequestHashPolicy</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.LbPolicyRingHash.hash_params" title="Link to this definition">#</a></dt>
+<dd><p>How to hash an outgoing request into the ring.</p>
+<p>Hash parameters are applied in order. If the request is missing an input, it has no effect
+on the final hash. Hashing stops when only when all polices have been applied or a
+<code class="code docutils literal notranslate"><span class="pre">terminal</span></code> policy matches part of an incoming request.</p>
+<p>This allows configuring a fallback-style hash, where the value of <code class="code docutils literal notranslate"><span class="pre">HeaderA</span></code> gets used,
+falling back to the value of <code class="code docutils literal notranslate"><span class="pre">HeaderB</span></code>.</p>
+<p>If no policies match, a random hash is generated for each request.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.LbPolicyRingHash.min_ring_size">
+<span class="sig-name descname"><span class="pre">min_ring_size</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></em><a class="headerlink" href="#junction.config.LbPolicyRingHash.min_ring_size" title="Link to this definition">#</a></dt>
+<dd><p>The minimum size of the hash ring</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.LbPolicyRoundRobin">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">LbPolicyRoundRobin</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L304-L305"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.LbPolicyRoundRobin" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.LbPolicyUnspecified">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">LbPolicyUnspecified</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L326-L327"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.LbPolicyUnspecified" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.PathMatchExact">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">PathMatchExact</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L150-L152"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.PathMatchExact" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.PathMatchPrefix">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">PathMatchPrefix</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L140-L142"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.PathMatchPrefix" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.PathMatchRegularExpression">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">PathMatchRegularExpression</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L145-L147"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.PathMatchRegularExpression" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.QueryParamMatchExact">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">QueryParamMatchExact</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L131-L134"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.QueryParamMatchExact" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.QueryParamMatchRegularExpression">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">QueryParamMatchRegularExpression</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L125-L128"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.QueryParamMatchRegularExpression" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.RequestHashPolicy">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">RequestHashPolicy</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L291-L301"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.RequestHashPolicy" title="Link to this definition">#</a></dt>
+<dd><p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RequestHashPolicy.name" title="junction.config.RequestHashPolicy.name"><code class="xref py py-obj docutils literal notranslate"><span class="pre">name</span></code></a></p></td>
+<td><p>The name of the header to use as hash input.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RequestHashPolicy.terminal" title="junction.config.RequestHashPolicy.terminal"><code class="xref py py-obj docutils literal notranslate"><span class="pre">terminal</span></code></a></p></td>
+<td><p>Whether to stop immediately after hashing this value.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RequestHashPolicy.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.RequestHashPolicy.name" title="Link to this definition">#</a></dt>
+<dd><p>The name of the header to use as hash input.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RequestHashPolicy.terminal">
+<span class="sig-name descname"><span class="pre">terminal</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.13)"><span class="pre">bool</span></a></em><a class="headerlink" href="#junction.config.RequestHashPolicy.terminal" title="Link to this definition">#</a></dt>
+<dd><p>Whether to stop immediately after hashing this value.</p>
+<p>This is useful if you want to try to hash a value, and then fall back to
+another as a default if it wasn’t set.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.Route">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">Route</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L246-L268"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.Route" title="Link to this definition">#</a></dt>
+<dd><p>A Route is a policy that describes how a request to a specific virtual
+host should be routed.</p>
+<p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.Route.hostnames" title="junction.config.Route.hostnames"><code class="xref py py-obj docutils literal notranslate"><span class="pre">hostnames</span></code></a></p></td>
+<td><p>The hostnames that match this Route.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.Route.id" title="junction.config.Route.id"><code class="xref py py-obj docutils literal notranslate"><span class="pre">id</span></code></a></p></td>
+<td><p>A globally unique identifier for this Route.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.Route.ports" title="junction.config.Route.ports"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ports</span></code></a></p></td>
+<td><p>The ports that match this Route.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.Route.rules" title="junction.config.Route.rules"><code class="xref py py-obj docutils literal notranslate"><span class="pre">rules</span></code></a></p></td>
+<td><p>The rules that determine whether a request matches and where traffic should be routed.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.Route.tags" title="junction.config.Route.tags"><code class="xref py py-obj docutils literal notranslate"><span class="pre">tags</span></code></a></p></td>
+<td><p>A list of arbitrary tags that can be added to a Route.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.Route.hostnames">
+<span class="sig-name descname"><span class="pre">hostnames</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.Route.hostnames" title="Link to this definition">#</a></dt>
+<dd><p>The hostnames that match this Route.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.Route.id">
+<span class="sig-name descname"><span class="pre">id</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.Route.id" title="Link to this definition">#</a></dt>
+<dd><p>A globally unique identifier for this Route.</p>
+<p>Route IDs must be valid RFC 1035 DNS label names - they must start with
+a lowercase ascii character, and can only contain lowercase ascii
+alphanumeric characters and the <code class="code docutils literal notranslate"><span class="pre">-</span></code> character.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.Route.ports">
+<span class="sig-name descname"><span class="pre">ports</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.Route.ports" title="Link to this definition">#</a></dt>
+<dd><p>The ports that match this Route.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.Route.rules">
+<span class="sig-name descname"><span class="pre">rules</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#junction.config.RouteRule" title="junction.config.RouteRule"><span class="pre">RouteRule</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.Route.rules" title="Link to this definition">#</a></dt>
+<dd><p>The rules that determine whether a request matches and where traffic
+should be routed.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.Route.tags">
+<span class="sig-name descname"><span class="pre">tags</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.13)"><span class="pre">Dict</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.Route.tags" title="Link to this definition">#</a></dt>
+<dd><p>A list of arbitrary tags that can be added to a Route.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.RouteMatch">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">RouteMatch</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L158-L200"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.RouteMatch" title="Link to this definition">#</a></dt>
+<dd><p>Defines the predicate used to match requests to a given action. Multiple
+match types are ANDed together; the match will evaluate to true only if all
+conditions are satisfied. For example, if a match specifies a <code class="code docutils literal notranslate"><span class="pre">path</span></code> match
+and two <code class="code docutils literal notranslate"><span class="pre">query_params</span></code> matches, it will match only if the request’s path
+matches and both of the <code class="code docutils literal notranslate"><span class="pre">query_params</span></code> are matches.</p>
+<p>The default RouteMatch functions like a path match on the empty prefix,
+which matches every request.</p>
+<p>## Match Ordering</p>
+<p>Route matches are [Ordered][Ord] to help break ties. While once a Route is
+constructed, rules are matched in-order, sorting matches and rules can be
+useful while constructing a Route in case there isn’t an obvious order
+matches should apply in. From highest-value to lowest value, routes are
+ordered by:</p>
+<ul class="simple">
+<li><p>“Exact” path match.</p></li>
+<li><p>“Prefix” path match with largest number of characters.</p></li>
+<li><p>Method match.</p></li>
+<li><p>Largest number of header matches.</p></li>
+<li><p>Largest number of query param matches.</p></li>
+</ul>
+<p>Note that this means a route that matches on a path is greater than a route
+that only matches on headers. To get a natural sort order by precedence, you
+may want to reverse-sort a list of matches.</p>
+<p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RouteMatch.headers" title="junction.config.RouteMatch.headers"><code class="xref py py-obj docutils literal notranslate"><span class="pre">headers</span></code></a></p></td>
+<td><p>Specifies HTTP request header matchers.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RouteMatch.method" title="junction.config.RouteMatch.method"><code class="xref py py-obj docutils literal notranslate"><span class="pre">method</span></code></a></p></td>
+<td><p>Specifies HTTP method matcher.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RouteMatch.path" title="junction.config.RouteMatch.path"><code class="xref py py-obj docutils literal notranslate"><span class="pre">path</span></code></a></p></td>
+<td><p>Specifies a HTTP request path matcher.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RouteMatch.query_params" title="junction.config.RouteMatch.query_params"><code class="xref py py-obj docutils literal notranslate"><span class="pre">query_params</span></code></a></p></td>
+<td><p>Specifies HTTP query parameter matchers.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteMatch.headers">
+<span class="sig-name descname"><span class="pre">headers</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#junction.config.HeaderMatchRegularExpression" title="junction.config.HeaderMatchRegularExpression"><span class="pre">HeaderMatchRegularExpression</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.HeaderMatchExact" title="junction.config.HeaderMatchExact"><span class="pre">HeaderMatchExact</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.RouteMatch.headers" title="Link to this definition">#</a></dt>
+<dd><p>Specifies HTTP request header matchers. Multiple match values are ANDed
+together, meaning, a request must match all the specified headers.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteMatch.method">
+<span class="sig-name descname"><span class="pre">method</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.RouteMatch.method" title="Link to this definition">#</a></dt>
+<dd><p>Specifies HTTP method matcher. When specified, this route will be
+matched only if the request has the specified method.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteMatch.path">
+<span class="sig-name descname"><span class="pre">path</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.PathMatchPrefix" title="junction.config.PathMatchPrefix"><span class="pre">PathMatchPrefix</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.PathMatchRegularExpression" title="junction.config.PathMatchRegularExpression"><span class="pre">PathMatchRegularExpression</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.PathMatchExact" title="junction.config.PathMatchExact"><span class="pre">PathMatchExact</span></a></em><a class="headerlink" href="#junction.config.RouteMatch.path" title="Link to this definition">#</a></dt>
+<dd><p>Specifies a HTTP request path matcher.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteMatch.query_params">
+<span class="sig-name descname"><span class="pre">query_params</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#junction.config.QueryParamMatchRegularExpression" title="junction.config.QueryParamMatchRegularExpression"><span class="pre">QueryParamMatchRegularExpression</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.QueryParamMatchExact" title="junction.config.QueryParamMatchExact"><span class="pre">QueryParamMatchExact</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.RouteMatch.query_params" title="Link to this definition">#</a></dt>
+<dd><p>Specifies HTTP query parameter matchers. Multiple match values are ANDed
+together, meaning, a request must match all the specified query
+parameters.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.RouteRetry">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">RouteRetry</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L87-L98"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.RouteRetry" title="Link to this definition">#</a></dt>
+<dd><p>Configure client retry policy.</p>
+<p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RouteRetry.attempts" title="junction.config.RouteRetry.attempts"><code class="xref py py-obj docutils literal notranslate"><span class="pre">attempts</span></code></a></p></td>
+<td><p>The total number of attempts to make when retrying this request.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RouteRetry.backoff" title="junction.config.RouteRetry.backoff"><code class="xref py py-obj docutils literal notranslate"><span class="pre">backoff</span></code></a></p></td>
+<td><p>The amount of time to back off between requests during a series of retries.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RouteRetry.codes" title="junction.config.RouteRetry.codes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">codes</span></code></a></p></td>
+<td><p>The HTTP error codes that retries should be applied to.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteRetry.attempts">
+<span class="sig-name descname"><span class="pre">attempts</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a></em><a class="headerlink" href="#junction.config.RouteRetry.attempts" title="Link to this definition">#</a></dt>
+<dd><p>The total number of attempts to make when retrying this request.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteRetry.backoff">
+<span class="sig-name descname"><span class="pre">backoff</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><span class="pre">float</span></a></em><a class="headerlink" href="#junction.config.RouteRetry.backoff" title="Link to this definition">#</a></dt>
+<dd><p>The amount of time to back off between requests during a series of
+retries.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteRetry.codes">
+<span class="sig-name descname"><span class="pre">codes</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.RouteRetry.codes" title="Link to this definition">#</a></dt>
+<dd><p>The HTTP error codes that retries should be applied to.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.RouteRule">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">RouteRule</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L203-L243"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.RouteRule" title="Link to this definition">#</a></dt>
+<dd><p>A RouteRule contains a set of matches that define which requests it applies
+to, processing rules, and the final destination(s) for matching traffic.</p>
+<p>See the Junction docs for a high level description of how Routes and
+RouteRules behave.</p>
+<p># Ordering Rules</p>
+<p>Route rules may be ordered by comparing their maximum
+[matches][Self::matches], breaking ties by comparing their next-highest
+match. This provides a total ordering on rules. Note that having a sorted
+list of rules does not mean that the list of all matches across all rules is
+totally sorted.</p>
+<p>This ordering is provided for convenience - clients match rules in the order
+they’re listed in a Route.</p>
+<p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RouteRule.backends" title="junction.config.RouteRule.backends"><code class="xref py py-obj docutils literal notranslate"><span class="pre">backends</span></code></a></p></td>
+<td><p>Where the traffic should route if this rule matches.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RouteRule.matches" title="junction.config.RouteRule.matches"><code class="xref py py-obj docutils literal notranslate"><span class="pre">matches</span></code></a></p></td>
+<td><p>A list of match rules applied to an outgoing request.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RouteRule.name" title="junction.config.RouteRule.name"><code class="xref py py-obj docutils literal notranslate"><span class="pre">name</span></code></a></p></td>
+<td><p>A human-readable name for this rule.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RouteRule.retry" title="junction.config.RouteRule.retry"><code class="xref py py-obj docutils literal notranslate"><span class="pre">retry</span></code></a></p></td>
+<td><p>How to retry requests.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteRule.backends">
+<span class="sig-name descname"><span class="pre">backends</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#junction.config.BackendRef" title="junction.config.BackendRef"><span class="pre">BackendRef</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.RouteRule.backends" title="Link to this definition">#</a></dt>
+<dd><p>Where the traffic should route if this rule matches.</p>
+<p>If no backends are specified, this route becomes a black hole for
+traffic and all matching requests return an error.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteRule.matches">
+<span class="sig-name descname"><span class="pre">matches</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.13)"><span class="pre">List</span></a><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#junction.config.RouteMatch" title="junction.config.RouteMatch"><span class="pre">RouteMatch</span></a><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#junction.config.RouteRule.matches" title="Link to this definition">#</a></dt>
+<dd><p>A list of match rules applied to an outgoing request.  Each match is
+independent; this rule will be matched if <strong>any</strong> of the listed matches
+is satisfied.</p>
+<p>If no matches are specified, this Rule matches any outgoing request.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteRule.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.RouteRule.name" title="Link to this definition">#</a></dt>
+<dd><p>A human-readable name for this rule.</p>
+<p>This name is completely optional, and will only be used in diagnostics
+to make it easier to debug. Diagnostics that don’t have a name will be
+referred to by their index in a Route’s list of rules.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteRule.retry">
+<span class="sig-name descname"><span class="pre">retry</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#junction.config.RouteRetry" title="junction.config.RouteRetry"><span class="pre">RouteRetry</span></a></em><a class="headerlink" href="#junction.config.RouteRule.retry" title="Link to this definition">#</a></dt>
+<dd><p>How to retry requests. If not specified, requests are not retried.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.RouteTimeouts">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">RouteTimeouts</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L66-L84"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.RouteTimeouts" title="Link to this definition">#</a></dt>
+<dd><p>Defines timeouts that can be configured for a HTTP Route.</p>
+<p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.RouteTimeouts.backend_request" title="junction.config.RouteTimeouts.backend_request"><code class="xref py py-obj docutils literal notranslate"><span class="pre">backend_request</span></code></a></p></td>
+<td><p>Specifies a timeout for an individual request to a backend.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.RouteTimeouts.request" title="junction.config.RouteTimeouts.request"><code class="xref py py-obj docutils literal notranslate"><span class="pre">request</span></code></a></p></td>
+<td><p>Specifies the maximum duration for a HTTP request.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteTimeouts.backend_request">
+<span class="sig-name descname"><span class="pre">backend_request</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><span class="pre">float</span></a></em><a class="headerlink" href="#junction.config.RouteTimeouts.backend_request" title="Link to this definition">#</a></dt>
+<dd><p>Specifies a timeout for an individual request to a backend. This covers
+the time from when the request first starts being sent to when the full
+response has been received from the backend.</p>
+<p>Because the overall request timeout encompasses the backend request
+timeout, the value of this timeout must be less than or equal to the
+value of the overall timeout.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.RouteTimeouts.request">
+<span class="sig-name descname"><span class="pre">request</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.13)"><span class="pre">int</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.13)"><span class="pre">float</span></a></em><a class="headerlink" href="#junction.config.RouteTimeouts.request" title="Link to this definition">#</a></dt>
+<dd><p>Specifies the maximum duration for a HTTP request. This timeout is
+intended to cover as close to the whole request-response transaction as
+possible.</p>
+<p>An entire client HTTP transaction may result in more than one call to
+destination backends, for example, if automatic retries are configured.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.ServiceDns">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">ServiceDns</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L11-L14"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.ServiceDns" title="Link to this definition">#</a></dt>
+<dd><p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.ServiceDns.hostname" title="junction.config.ServiceDns.hostname"><code class="xref py py-obj docutils literal notranslate"><span class="pre">hostname</span></code></a></p></td>
+<td><p>A valid RFC1123 DNS domain name.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.ServiceDns.hostname">
+<span class="sig-name descname"><span class="pre">hostname</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.ServiceDns.hostname" title="Link to this definition">#</a></dt>
+<dd><p>A valid RFC1123 DNS domain name.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="junction.config.ServiceKube">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">junction.config.</span></span><span class="sig-name descname"><span class="pre">ServiceKube</span></span><a class="reference external" href="https://github.com/junction-labs/junction-client/blob/0.3.2/junction-python/junction/config.py#L17-L24"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#junction.config.ServiceKube" title="Link to this definition">#</a></dt>
+<dd><p><strong>Attributes:</strong></p>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table autosummary">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#junction.config.ServiceKube.name" title="junction.config.ServiceKube.name"><code class="xref py py-obj docutils literal notranslate"><span class="pre">name</span></code></a></p></td>
+<td><p>The name of the Kubernetes Service to target.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#junction.config.ServiceKube.namespace" title="junction.config.ServiceKube.namespace"><code class="xref py py-obj docutils literal notranslate"><span class="pre">namespace</span></code></a></p></td>
+<td><p>The namespace of the Kubernetes service to target.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.ServiceKube.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.ServiceKube.name" title="Link to this definition">#</a></dt>
+<dd><p>The name of the Kubernetes Service to target.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="junction.config.ServiceKube.namespace">
+<span class="sig-name descname"><span class="pre">namespace</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.13)"><span class="pre">str</span></a></em><a class="headerlink" href="#junction.config.ServiceKube.namespace" title="Link to this definition">#</a></dt>
+<dd><p>The namespace of the Kubernetes service to target. This must be explicitly
+specified, and won’t be inferred from context.</p>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Python API reference</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="junction.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Junction</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Backend"><code class="docutils literal notranslate"><span class="pre">Backend</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Backend.id"><code class="docutils literal notranslate"><span class="pre">Backend.id</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Backend.lb"><code class="docutils literal notranslate"><span class="pre">Backend.lb</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendId"><code class="docutils literal notranslate"><span class="pre">BackendId</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendId.hostname"><code class="docutils literal notranslate"><span class="pre">BackendId.hostname</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendId.name"><code class="docutils literal notranslate"><span class="pre">BackendId.name</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendId.namespace"><code class="docutils literal notranslate"><span class="pre">BackendId.namespace</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendId.port"><code class="docutils literal notranslate"><span class="pre">BackendId.port</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendRef"><code class="docutils literal notranslate"><span class="pre">BackendRef</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendRef.hostname"><code class="docutils literal notranslate"><span class="pre">BackendRef.hostname</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendRef.name"><code class="docutils literal notranslate"><span class="pre">BackendRef.name</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendRef.namespace"><code class="docutils literal notranslate"><span class="pre">BackendRef.namespace</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendRef.port"><code class="docutils literal notranslate"><span class="pre">BackendRef.port</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.BackendRef.weight"><code class="docutils literal notranslate"><span class="pre">BackendRef.weight</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Duration"><code class="docutils literal notranslate"><span class="pre">Duration</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Fraction"><code class="docutils literal notranslate"><span class="pre">Fraction</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.HeaderMatchExact"><code class="docutils literal notranslate"><span class="pre">HeaderMatchExact</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.HeaderMatchRegularExpression"><code class="docutils literal notranslate"><span class="pre">HeaderMatchRegularExpression</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.HeaderValue"><code class="docutils literal notranslate"><span class="pre">HeaderValue</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.HeaderValue.name"><code class="docutils literal notranslate"><span class="pre">HeaderValue.name</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.HeaderValue.value"><code class="docutils literal notranslate"><span class="pre">HeaderValue.value</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.LbPolicyRingHash"><code class="docutils literal notranslate"><span class="pre">LbPolicyRingHash</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.LbPolicyRingHash.hash_params"><code class="docutils literal notranslate"><span class="pre">LbPolicyRingHash.hash_params</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.LbPolicyRingHash.min_ring_size"><code class="docutils literal notranslate"><span class="pre">LbPolicyRingHash.min_ring_size</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.LbPolicyRoundRobin"><code class="docutils literal notranslate"><span class="pre">LbPolicyRoundRobin</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.LbPolicyUnspecified"><code class="docutils literal notranslate"><span class="pre">LbPolicyUnspecified</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.PathMatchExact"><code class="docutils literal notranslate"><span class="pre">PathMatchExact</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.PathMatchPrefix"><code class="docutils literal notranslate"><span class="pre">PathMatchPrefix</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.PathMatchRegularExpression"><code class="docutils literal notranslate"><span class="pre">PathMatchRegularExpression</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.QueryParamMatchExact"><code class="docutils literal notranslate"><span class="pre">QueryParamMatchExact</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.QueryParamMatchRegularExpression"><code class="docutils literal notranslate"><span class="pre">QueryParamMatchRegularExpression</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RequestHashPolicy"><code class="docutils literal notranslate"><span class="pre">RequestHashPolicy</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RequestHashPolicy.name"><code class="docutils literal notranslate"><span class="pre">RequestHashPolicy.name</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RequestHashPolicy.terminal"><code class="docutils literal notranslate"><span class="pre">RequestHashPolicy.terminal</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Route"><code class="docutils literal notranslate"><span class="pre">Route</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Route.hostnames"><code class="docutils literal notranslate"><span class="pre">Route.hostnames</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Route.id"><code class="docutils literal notranslate"><span class="pre">Route.id</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Route.ports"><code class="docutils literal notranslate"><span class="pre">Route.ports</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Route.rules"><code class="docutils literal notranslate"><span class="pre">Route.rules</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.Route.tags"><code class="docutils literal notranslate"><span class="pre">Route.tags</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteMatch"><code class="docutils literal notranslate"><span class="pre">RouteMatch</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteMatch.headers"><code class="docutils literal notranslate"><span class="pre">RouteMatch.headers</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteMatch.method"><code class="docutils literal notranslate"><span class="pre">RouteMatch.method</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteMatch.path"><code class="docutils literal notranslate"><span class="pre">RouteMatch.path</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteMatch.query_params"><code class="docutils literal notranslate"><span class="pre">RouteMatch.query_params</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteRetry"><code class="docutils literal notranslate"><span class="pre">RouteRetry</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteRetry.attempts"><code class="docutils literal notranslate"><span class="pre">RouteRetry.attempts</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteRetry.backoff"><code class="docutils literal notranslate"><span class="pre">RouteRetry.backoff</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteRetry.codes"><code class="docutils literal notranslate"><span class="pre">RouteRetry.codes</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteRule"><code class="docutils literal notranslate"><span class="pre">RouteRule</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteRule.backends"><code class="docutils literal notranslate"><span class="pre">RouteRule.backends</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteRule.matches"><code class="docutils literal notranslate"><span class="pre">RouteRule.matches</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteRule.name"><code class="docutils literal notranslate"><span class="pre">RouteRule.name</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteRule.retry"><code class="docutils literal notranslate"><span class="pre">RouteRule.retry</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteTimeouts"><code class="docutils literal notranslate"><span class="pre">RouteTimeouts</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteTimeouts.backend_request"><code class="docutils literal notranslate"><span class="pre">RouteTimeouts.backend_request</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.RouteTimeouts.request"><code class="docutils literal notranslate"><span class="pre">RouteTimeouts.request</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.ServiceDns"><code class="docutils literal notranslate"><span class="pre">ServiceDns</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.ServiceDns.hostname"><code class="docutils literal notranslate"><span class="pre">ServiceDns.hostname</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.ServiceKube"><code class="docutils literal notranslate"><span class="pre">ServiceKube</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.ServiceKube.name"><code class="docutils literal notranslate"><span class="pre">ServiceKube.name</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#junction.config.ServiceKube.namespace"><code class="docutils literal notranslate"><span class="pre">ServiceKube.namespace</span></code></a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright 2024, Junction Labs.
+      <br/>
+    
+  </p>
+</div>
+      
+        <div class="footer-item">
+
+  <p class="sphinx-version">
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.3.7.
+    <br/>
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+<p class="theme-version">
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.15.4.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>
