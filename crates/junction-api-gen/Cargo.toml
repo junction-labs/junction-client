@@ -12,7 +12,7 @@ cross-language API generation for Junction
 
 [dependencies]
 anyhow = "1.0"
-askama = "0.12"
+askama = "0.14"
 regex = { workspace = true }
 once_cell = { workspace = true }
 
