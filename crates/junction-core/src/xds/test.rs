@@ -2,10 +2,7 @@
 //!
 //! Use these macros as a shorthand for writing out full XDS resource structs.
 
-use std::str::FromStr;
-
-use crate::xds::ResourceType;
-use junction_api::backend::{Backend, BackendId, LbPolicy};
+use crate::xds::{resources::ads_config_source, ResourceType};
 use xds_api::pb::{
     envoy::{
         config::{
@@ -15,7 +12,9 @@ use xds_api::pb::{
             listener::v3 as xds_listener,
             route::v3::{self as xds_route, route_action::hash_policy::Header},
         },
-        service::discovery::v3::{DeltaDiscoveryRequest, DeltaDiscoveryResponse},
+        service::discovery::v3::{
+            self as xds_discovery, DeltaDiscoveryRequest, DeltaDiscoveryResponse,
+        },
     },
     google::{protobuf, rpc},
 };
@@ -25,15 +24,23 @@ use xds_api::pb::envoy::extensions::filters::{
 };
 
 macro_rules! listener {
-    ($name:expr, $route_name:expr$(,)*) => {{
-        crate::xds::test::api_listener_rds($name, $route_name)
+    ($name:expr, $route_name:expr$(,)*) => {
+        crate::xds::test::listener!($name, "v123", $route_name)
+    };
+    ($name:expr, $version:expr, $route_name:expr$(,)*) => {{
+        let listener = crate::xds::test::api_listener_rds($name, $route_name);
+        crate::xds::test::xds_resource($name.to_string(), $version.to_string(), listener)
     }};
-    ($name:expr, $route_name:expr => [$($vhost:expr),*$(,)*]$(,)?) => {{
-        crate::xds::test::api_listener_inline_routes($name, $route_name, vec![
+    ($name:expr, $route_name:expr => [$($vhost:expr),*$(,)*]$(,)?) =>  {
+        crate::xds::test::listener!($name, "v123", $route_name => [$($vhost,)*])
+    };
+    ($name:expr, $version:expr, $route_name:expr => [$($vhost:expr),*$(,)*]$(,)?) => {{
+        let listener = crate::xds::test::api_listener_inline_routes($name, $route_name, vec![
             $(
                 $vhost,
             )*
-        ])
+        ]);
+        crate::xds::test::xds_resource($name.to_string(), $version.to_string(), listener)
     }};
 }
 
@@ -48,47 +55,57 @@ macro_rules! vhost {
 pub(crate) use vhost;
 
 macro_rules! cluster {
-    ($cluster_name:expr) => {{
-        crate::xds::test::cluster_from_name($cluster_name, None)
+    (eds => $cluster_name:expr) => {
+        crate::xds::test::cluster!(eds => $cluster_name, "v123")
+    };
+    (eds => $cluster_name:expr, $version:expr) => {{
+        let cluster = crate::xds::test::eds_cluster($cluster_name, None);
+        crate::xds::test::xds_resource($cluster_name.to_string(), $version.to_string(), cluster)
     }};
-    (ring_hash $cluster_name:expr) => {{
-        crate::xds::test::cluster_from_name($cluster_name, Some(xds_cluster::cluster::LbPolicy::RingHash))
-    }};
-    (inline $cluster_name:expr => { $($region:expr => [$($addr:expr),*]),* }) => {{
-        let cla = crate::xds::test::cluster_load_assignment($cluster_name, vec![$(
-            crate::xds::test::locality_lb_endpoints(Some($region), None, vec![
-                $(
-                    crate::xds::test::lb_endpoint($addr, None, None),
-                )+
-            ]),
-        )*]);
-
-        crate::xds::test::cluster_inline($cluster_name, cla)
+    (logical_dns => $hostname:expr, $port:expr) => {
+        crate::xds::test::cluster!(logical_dns => $hostname, $port, "v123")
+    };
+    (logical_dns => $hostname:expr, $port:expr, $version:expr) => {{
+        let cluster_name = format!("{}:{}", $hostname, $port);
+        let cluster = crate::xds::test::logical_dns_cluster(&cluster_name, $hostname, $port, None);
+        crate::xds::test::xds_resource(cluster_name.to_string(), $version.to_string(), cluster)
     }};
 }
 
 pub(crate) use cluster;
 
 macro_rules! cla {
-    ($cluster_name:expr => { $($region:expr => [$($addr:expr),*]),* }) => {{
-        crate::xds::test::cluster_load_assignment($cluster_name, vec![$(
+    ($name:expr => { $($region:expr => [$($addr:expr),*]),* }) => {
+        crate::xds::test::cla!($name, "v123" => {
+            $(
+                $region => [$($addr),*]
+            ),*
+        })
+    };
+    ($name:expr, $version:expr => { $($region:expr => [$($addr:expr),*]),* }) => {{
+        let cla = crate::xds::test::cluster_load_assignment($name, vec![$(
             crate::xds::test::locality_lb_endpoints(Some($region), None, vec![
                 $(
                     crate::xds::test::lb_endpoint($addr, None, None),
                 )+
             ]),
-        )*])
+        )*]);
+        crate::xds::test::xds_resource($name.to_string(), $version.to_string(), cla)
     }};
 }
 pub(crate) use cla;
 
 macro_rules! route_config {
-    ($name:expr, $vhosts:expr) => {{
-        xds_api::pb::envoy::config::route::v3::RouteConfiguration {
+    ($name:expr, $vhosts:expr) => {
+        crate::xds::test::route_config!($name, "v123", $vhosts)
+    };
+    ($name:expr, $version:expr, $vhosts:expr) => {{
+        let rc = xds_api::pb::envoy::config::route::v3::RouteConfiguration {
             name: $name.to_string(),
             virtual_hosts: $vhosts.into_iter().collect(),
             ..Default::default()
-        }
+        };
+        crate::xds::test::xds_resource($name.to_string(), $version.to_string(), rc)
     }};
 }
 
@@ -192,8 +209,6 @@ macro_rules! req {
 
 pub(crate) use req;
 
-use super::ResourceVec;
-
 pub fn delta_discovery_request(
     rtype: ResourceType,
     response_nonce: &'static str,
@@ -227,6 +242,9 @@ pub fn delta_discovery_request(
 }
 
 macro_rules! resp {
+    (n = $nonce:expr, ty = $rtype:expr, remove = $remove:expr $(,)*) => {
+        crate::xds::test::empty_delta_discovery_response($nonce, None, $rtype, $remove)
+    };
     (n = $nonce:expr, add = $add:expr, remove = $remove:expr $(,)*) => {
         crate::xds::test::delta_discovery_response($nonce, None, $add, $remove)
     };
@@ -234,15 +252,36 @@ macro_rules! resp {
 
 pub(crate) use resp;
 
+pub fn empty_delta_discovery_response(
+    nonce: &'static str,
+    version: Option<&'static str>,
+    rtype: ResourceType,
+    removed_resources: Vec<&'static str>,
+) -> DeltaDiscoveryResponse {
+    let type_url = rtype.type_url().to_string();
+    let system_version_info = version.map(|s| s.to_string()).unwrap_or_default();
+    let removed_resources = removed_resources
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    DeltaDiscoveryResponse {
+        type_url,
+        system_version_info,
+        nonce: nonce.to_string(),
+        removed_resources,
+        ..Default::default()
+    }
+}
+
 pub fn delta_discovery_response(
     nonce: &'static str,
     version: Option<&'static str>,
-    resources: ResourceVec,
+    resources: Vec<xds_discovery::Resource>,
     removed_resources: Vec<&'static str>,
 ) -> DeltaDiscoveryResponse {
-    let type_url = resources.resource_type().type_url().to_string();
+    let type_url = resources.first().and_then(resource_type_url).unwrap();
     let system_version_info = version.map(|s| s.to_string()).unwrap_or_default();
-    let resources = resources.to_resources().unwrap();
     let removed_resources = removed_resources
         .into_iter()
         .map(|s| s.to_string())
@@ -254,6 +293,24 @@ pub fn delta_discovery_response(
         nonce: nonce.to_string(),
         resources,
         removed_resources,
+        ..Default::default()
+    }
+}
+
+#[inline]
+fn resource_type_url(resource: &xds_discovery::Resource) -> Option<String> {
+    resource.resource.as_ref().map(|r| r.type_url.clone())
+}
+
+pub fn xds_resource<T: prost::Name>(
+    name: String,
+    version: String,
+    xds: T,
+) -> xds_discovery::Resource {
+    xds_discovery::Resource {
+        name,
+        version,
+        resource: Some(protobuf::Any::from_msg(&xds).unwrap()),
         ..Default::default()
     }
 }
@@ -392,16 +449,65 @@ pub fn virtual_host(
     }
 }
 
-pub fn cluster_from_name(
+pub fn eds_cluster(
     name: &'static str,
     lb_policy: Option<xds_cluster::cluster::LbPolicy>,
 ) -> xds_cluster::Cluster {
-    let backend = Backend {
-        id: BackendId::from_str(name).unwrap(),
-        lb: LbPolicy::Unspecified,
-    };
+    use xds_cluster::cluster::ClusterDiscoveryType;
+    use xds_cluster::cluster::DiscoveryType;
+    use xds_cluster::cluster::EdsClusterConfig;
 
-    let mut cluster = backend.to_xds();
+    let cluster_discovery_type = Some(ClusterDiscoveryType::Type(DiscoveryType::Eds.into()));
+    let eds_cluster_config = Some(EdsClusterConfig {
+        eds_config: Some(ads_config_source()),
+        service_name: name.to_string(),
+    });
+    let mut cluster = xds_cluster::Cluster {
+        name: name.to_string(),
+        cluster_discovery_type,
+        eds_cluster_config,
+        ..Default::default()
+    };
+    if let Some(lb_policy) = lb_policy {
+        cluster.lb_policy = lb_policy.into();
+    }
+    cluster
+}
+
+pub fn logical_dns_cluster(
+    name: &str,
+    hostname: &str,
+    port: u16,
+    lb_policy: Option<xds_cluster::cluster::LbPolicy>,
+) -> xds_cluster::Cluster {
+    use xds_cluster::cluster::ClusterDiscoveryType;
+    use xds_cluster::cluster::DiscoveryType;
+
+    let cluster_discovery_type = Some(ClusterDiscoveryType::Type(DiscoveryType::LogicalDns.into()));
+    let host_identifier = Some(xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(
+        xds_endpoint::Endpoint {
+            address: Some(to_xds_address(&hostname, port)),
+            ..Default::default()
+        },
+    ));
+    let endpoints = vec![xds_endpoint::LocalityLbEndpoints {
+        lb_endpoints: vec![xds_endpoint::LbEndpoint {
+            host_identifier,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let load_assignment = Some(xds_endpoint::ClusterLoadAssignment {
+        endpoints,
+        ..Default::default()
+    });
+
+    let mut cluster = xds_cluster::Cluster {
+        name: name.to_string(),
+        cluster_discovery_type,
+        load_assignment,
+        ..Default::default()
+    };
     if let Some(lb_policy) = lb_policy {
         cluster.lb_policy = lb_policy.into();
     }
@@ -467,12 +573,16 @@ pub fn lb_endpoint(
     }
 }
 
-pub fn ads_config_source() -> xds_core::ConfigSource {
-    xds_core::ConfigSource {
-        config_source_specifier: Some(xds_core::config_source::ConfigSourceSpecifier::Ads(
-            xds_core::AggregatedConfigSource {},
+fn to_xds_address(hostname: &str, port: u16) -> xds_core::Address {
+    let socket_address = xds_core::SocketAddress {
+        address: hostname.to_string(),
+        port_specifier: Some(xds_core::socket_address::PortSpecifier::PortValue(
+            port as u32,
         )),
-        resource_api_version: xds_core::ApiVersion::V3 as i32,
         ..Default::default()
+    };
+
+    xds_core::Address {
+        address: Some(xds_core::address::Address::SocketAddress(socket_address)),
     }
 }

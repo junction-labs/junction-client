@@ -1,55 +1,220 @@
-use std::borrow::Cow;
-use std::collections::BTreeMap;
-use std::net::SocketAddr;
-use std::ops::Deref;
-use std::{collections::BTreeSet, marker::PhantomData, sync::Arc};
-
-use junction_api::backend::Backend;
-use junction_api::backend::BackendId;
-use junction_api::http::Route;
+pub(crate) mod clusters;
+pub(crate) mod endpoints;
+pub(crate) mod listeners;
+pub(crate) mod route_configs;
+pub(crate) use clusters::Cluster;
+pub(crate) use endpoints::LoadAssignment;
 use junction_api::Hostname;
+pub(crate) use listeners::ApiListener;
+pub(crate) use route_configs::RouteConfiguration;
+
 use smol_str::SmolStr;
+use std::borrow::Cow;
+use std::fmt::Write;
+use std::ops::Deref;
+use std::sync::Arc;
+
 use xds_api::{
-    pb::envoy::{
-        config::{
-            cluster::v3 as xds_cluster, core::v3 as xds_core, endpoint::v3 as xds_endpoint,
-            listener::v3 as xds_listener, route::v3 as xds_route,
-        },
-        extensions::filters::network::http_connection_manager::v3 as xds_http,
-        service::discovery::v3 as xds_discovery,
-    },
+    pb::{envoy::config::core::v3 as xds_core, google::protobuf},
     WellKnownTypes,
 };
 
-use crate::endpoints::{EndpointGroup, Locality, LocalityInfo};
-use crate::load_balancer::{BackendLb, LoadBalancer};
+macro_rules! value_or_default {
+    ($value:expr, $default:expr) => {
+        $value.as_ref().map(|v| v.value).unwrap_or($default)
+    };
+}
+pub(crate) use value_or_default;
 
 // FIXME: validate that the all the EDS config sources use ADS instead of just assuming it everywhere.
 
-#[derive(Clone, Debug, thiserror::Error)]
-pub(crate) enum ResourceError {
-    #[error("{0}")]
-    InvalidResource(#[from] junction_api::Error),
+/// An xDS resource that can be handled, decoded, and cached.
+///
+/// Resources must be able to be decoded from a [protobuf::Any] and from
+/// their associated xDS protobuf type, and should know how to return a
+/// set of other xDS resources they reference.
+pub(crate) trait Resource: Sized {
+    type Xds: prost::Name + Default;
 
-    #[error("invalid xDS: {resource_name}: {message}")]
-    InvalidXds {
-        resource_name: String,
-        message: Cow<'static, str>,
-    },
+    fn from_any(any: &protobuf::Any) -> Result<Self, ResourceError> {
+        let m: Self::Xds = any.to_msg()?;
+        Self::from_xds(&m)
+    }
+
+    fn from_xds(xds: &Self::Xds) -> Result<Self, ResourceError>;
+    fn references(&self) -> Vec<(ResourceType, ResourceName)>;
+    fn dns_names(&self) -> Vec<&Hostname> {
+        Vec::new()
+    }
+}
+
+/// An error that occurred while trying to parse and validate an incoming
+/// xDS message.
+#[derive(Clone, Debug, thiserror::Error, PartialEq)]
+pub(crate) struct ResourceError {
+    kind: ResourceErrorKind,
+    path: Vec<PathEntry>,
+}
+
+impl std::fmt::Display for ResourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.path.is_empty() {
+            write!(f, "{}: ", path_str(&self.path))?;
+        }
+
+        write!(f, "{}", self.kind)
+    }
+}
+
+impl From<prost::DecodeError> for ResourceError {
+    fn from(err: prost::DecodeError) -> Self {
+        Self {
+            kind: ResourceErrorKind::Decode(err),
+            path: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+enum ResourceErrorKind {
+    #[error(transparent)]
+    Decode(prost::DecodeError),
+
+    #[error("{0}")]
+    Invalid(Cow<'static, str>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PathEntry {
+    Field(&'static str),
+    Index(usize),
+    MapIndex(String),
+}
+
+impl std::fmt::Display for PathEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathEntry::Field(field) => f.write_str(field),
+            PathEntry::Index(idx) => write!(f, "[{idx}]"),
+            PathEntry::MapIndex(field) => write!(f, "[{field}]"),
+        }
+    }
+}
+
+fn path_str(path: &[PathEntry]) -> String {
+    let mut buf = String::new();
+
+    let path_iter = path.iter().rev();
+    for (i, path_entry) in path_iter.enumerate() {
+        if i > 0 && matches!(path_entry, PathEntry::Field(_)) {
+            buf.push('.');
+        }
+        let _ = write!(&mut buf, "{}", path_entry);
+    }
+
+    buf
 }
 
 impl ResourceError {
-    fn for_xds(resource_name: String, message: String) -> Self {
-        Self::InvalidXds {
-            resource_name,
-            message: message.into(),
+    pub fn invalid(msg: &'static str) -> Self {
+        Self {
+            kind: ResourceErrorKind::Invalid(Cow::Borrowed(msg)),
+            path: Vec::new(),
         }
     }
 
-    fn for_xds_static(resource_name: String, message: &'static str) -> Self {
-        Self::InvalidXds {
-            resource_name,
-            message: message.into(),
+    pub fn invalid_with(msg: String) -> Self {
+        Self {
+            kind: ResourceErrorKind::Invalid(Cow::Owned(msg)),
+            path: Vec::new(),
+        }
+    }
+
+    pub fn is_decode(&self) -> bool {
+        matches!(&self.kind, ResourceErrorKind::Decode(_))
+    }
+
+    pub fn is_invalid(&self) -> bool {
+        matches!(&self.kind, ResourceErrorKind::Invalid(_))
+    }
+
+    pub fn path(&self) -> String {
+        path_str(&self.path)
+    }
+
+    pub fn with_field(mut self, field: &'static str) -> Self {
+        self.path.push(PathEntry::Field(field));
+        self
+    }
+
+    pub fn with_index(mut self, idx: usize) -> Self {
+        self.path.push(PathEntry::Index(idx));
+        self
+    }
+
+    #[inline(always)]
+    pub fn with_field_index(self, field: &'static str, index: usize) -> Self {
+        self.with_index(index).with_field(field)
+    }
+
+    pub fn with_map_key(mut self, key: String) -> Self {
+        self.path.push(PathEntry::MapIndex(key));
+        self
+    }
+
+    #[inline(always)]
+    pub fn with_field_key<T: std::fmt::Display>(self, field: &'static str, key: T) -> Self {
+        self.with_map_key(key.to_string()).with_field(field)
+    }
+}
+
+// use a trait here so we can implement methods on Result<T, Error> instead of
+// on Error directly. this makes life saner when doing ingest.
+pub trait ErrorCtx<T>: Sized {
+    fn with_field(self, field: &'static str) -> Result<T, ResourceError>;
+    fn with_index(self, idx: usize) -> Result<T, ResourceError>;
+    fn with_map_key(self, idx: String) -> Result<T, ResourceError>;
+
+    #[allow(unused)]
+    fn with_fields(self, a: &'static str, b: &'static str) -> Result<T, ResourceError> {
+        self.with_field(b).with_field(a)
+    }
+
+    fn with_field_index(self, field: &'static str, index: usize) -> Result<T, ResourceError> {
+        self.with_index(index).with_field(field)
+    }
+
+    fn with_field_key<F: std::fmt::Display>(
+        self,
+        field: &'static str,
+        key: F,
+    ) -> Result<T, ResourceError> {
+        self.with_map_key(key.to_string()).with_field(field)
+    }
+}
+
+impl<T, E> ErrorCtx<T> for Result<T, E>
+where
+    E: Into<ResourceError>,
+{
+    fn with_field(self, field: &'static str) -> Result<T, ResourceError> {
+        match self {
+            Ok(t) => Ok(t),
+            Err(e) => Err(e.into().with_field(field)),
+        }
+    }
+
+    fn with_index(self, idx: usize) -> Result<T, ResourceError> {
+        match self {
+            Ok(t) => Ok(t),
+            Err(e) => Err(e.into().with_index(idx)),
+        }
+    }
+
+    fn with_map_key(self, idx: String) -> Result<T, ResourceError> {
+        match self {
+            Ok(t) => Ok(t),
+            Err(e) => Err(e.into().with_map_key(idx)),
         }
     }
 }
@@ -157,450 +322,69 @@ impl ResourceType {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum ResourceVec {
-    Listener(VersionedVec<xds_listener::Listener>),
-    RouteConfiguration(VersionedVec<xds_route::RouteConfiguration>),
-    Cluster(VersionedVec<xds_cluster::Cluster>),
-    ClusterLoadAssignment(VersionedVec<xds_endpoint::ClusterLoadAssignment>),
-}
-
-type VersionedVec<T> = Vec<(ResourceVersion, T)>;
-
-impl ResourceVec {
-    pub(crate) fn from_resources(
-        rtype: ResourceType,
-        resources: Vec<xds_discovery::Resource>,
-    ) -> Result<Self, prost::DecodeError> {
-        match rtype {
-            ResourceType::Cluster => from_resource_vec(resources).map(Self::Cluster),
-            ResourceType::ClusterLoadAssignment => {
-                from_resource_vec(resources).map(Self::ClusterLoadAssignment)
-            }
-            ResourceType::Listener => from_resource_vec(resources).map(Self::Listener),
-            ResourceType::RouteConfiguration => {
-                from_resource_vec(resources).map(Self::RouteConfiguration)
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn resource_type(&self) -> ResourceType {
-        match self {
-            ResourceVec::Listener(_) => ResourceType::Listener,
-            ResourceVec::RouteConfiguration(_) => ResourceType::RouteConfiguration,
-            ResourceVec::Cluster(_) => ResourceType::Cluster,
-            ResourceVec::ClusterLoadAssignment(_) => ResourceType::ClusterLoadAssignment,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn to_resources(&self) -> Result<Vec<xds_discovery::Resource>, prost::EncodeError> {
-        match self {
-            ResourceVec::Listener(vec) => to_resource_vec(vec),
-            ResourceVec::RouteConfiguration(vec) => to_resource_vec(vec),
-            ResourceVec::Cluster(vec) => to_resource_vec(vec),
-            ResourceVec::ClusterLoadAssignment(vec) => to_resource_vec(vec),
-        }
-    }
-}
-
-macro_rules! test_constructor {
-    ($name:ident, $variant:ident, $xds_type:ty) => {
-        impl ResourceVec {
-            #[cfg(test)]
-            pub(crate) fn $name<I: IntoIterator<Item = $xds_type>>(
-                version: ResourceVersion,
-                xs: I,
-            ) -> Self {
-                let data = xs.into_iter().map(|l| (version.clone(), l)).collect();
-                Self::$variant(data)
-            }
-        }
-    };
-}
-
-test_constructor!(from_listeners, Listener, xds_listener::Listener);
-test_constructor!(
-    from_route_configs,
-    RouteConfiguration,
-    xds_route::RouteConfiguration
-);
-test_constructor!(from_clusters, Cluster, xds_cluster::Cluster);
-test_constructor!(
-    from_load_assignments,
-    ClusterLoadAssignment,
-    xds_endpoint::ClusterLoadAssignment
-);
-
-fn from_resource_vec<M: Default + prost::Name>(
-    resources: Vec<xds_discovery::Resource>,
-) -> Result<VersionedVec<M>, prost::DecodeError> {
-    let mut ms = Vec::with_capacity(resources.len());
-    for r in resources {
-        let Some(any) = r.resource else {
-            continue;
-        };
-        ms.push((ResourceVersion::from(r.version), any.to_msg()?));
-    }
-
-    Ok(ms)
-}
-
-#[cfg(test)]
-fn to_resource_vec<M: prost::Name>(
-    xs: &VersionedVec<M>,
-) -> Result<Vec<xds_discovery::Resource>, prost::EncodeError> {
-    use xds_api::pb::google::protobuf;
-
-    let mut resources = Vec::with_capacity(xs.len());
-
-    for (v, msg) in xs {
-        let as_any = protobuf::Any::from_msg(msg)?;
-        resources.push(xds_discovery::Resource {
-            resource: Some(as_any),
-            version: v.to_string(),
-            ..Default::default()
-        })
-    }
-
-    Ok(resources)
-}
-
-/// A typed reference to another resource.
-///
-/// This is functionally a `String` and implements `Clone`, `Ord`, and `Eq`` as
-/// if it was just a string.
-#[derive(Debug)]
-pub(crate) struct ResourceName<T> {
-    _type: PhantomData<T>,
+#[derive(Debug, Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ResourceName {
     name: String,
 }
 
-impl<T> ResourceName<T> {
+impl std::fmt::Display for ResourceName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl ResourceName {
     pub fn as_str(&self) -> &str {
+        &self.name
+    }
+
+    pub fn wildcard() -> Self {
+        Self {
+            name: "*".to_string(),
+        }
+    }
+}
+
+impl AsRef<str> for ResourceName {
+    fn as_ref(&self) -> &str {
         &self.name
     }
 }
 
-impl<T> Clone for ResourceName<T> {
-    fn clone(&self) -> Self {
+impl From<&'static str> for ResourceName {
+    fn from(name: &'static str) -> Self {
         Self {
-            _type: PhantomData,
-            name: self.name.clone(),
+            name: name.to_string(),
         }
     }
 }
 
-impl<T> From<String> for ResourceName<T> {
+impl From<String> for ResourceName {
     fn from(name: String) -> Self {
-        Self {
-            _type: PhantomData,
-            name,
-        }
+        Self { name }
     }
 }
 
-impl<T> PartialEq for ResourceName<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+/// An xDS ConfigSource that specifies a resource is fetchable on the same ADS
+/// connection as the current resource.
+pub(super) const fn ads_config_source() -> xds_core::ConfigSource {
+    xds_core::ConfigSource {
+        config_source_specifier: Some(xds_core::config_source::ConfigSourceSpecifier::Ads(
+            xds_core::AggregatedConfigSource {},
+        )),
+        resource_api_version: xds_core::ApiVersion::V3 as i32,
+        authorities: Vec::new(),
+        initial_fetch_timeout: None,
     }
 }
 
-impl<T> Eq for ResourceName<T> {}
-
-#[allow(clippy::non_canonical_partial_ord_impl)]
-impl<T> PartialOrd for ResourceName<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.name.partial_cmp(&other.name)
-    }
-}
-
-impl<T> Ord for ResourceName<T> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name.cmp(&other.name)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ApiListener {
-    pub xds: xds_listener::Listener,
-    pub route_config: ApiListenerData,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum ApiListenerData {
-    Rds(ResourceName<RouteConfig>),
-    Inlined(RouteConfigData),
-}
-
-fn http_connection_manager(
-    listener: &xds_listener::Listener,
-) -> Result<xds_http::HttpConnectionManager, ResourceError> {
-    let api_listener = listener
-        .api_listener
-        .as_ref()
-        .and_then(|l| l.api_listener.as_ref())
-        .ok_or_else(|| {
-            ResourceError::for_xds_static(listener.name.clone(), "Listener has no api_listener")
-        })?;
-
-    api_listener.to_msg().map_err(|e| {
-        ResourceError::for_xds(listener.name.clone(), format!("invalid api_listener: {e}"))
-    })
-}
-
-impl ApiListener {
-    pub(crate) fn from_xds(name: &str, xds: xds_listener::Listener) -> Result<Self, ResourceError> {
-        use xds_http::http_connection_manager::RouteSpecifier;
-
-        let conn_manager = http_connection_manager(&xds)?;
-        let data = match &conn_manager.route_specifier {
-            Some(RouteSpecifier::Rds(rds)) => {
-                let name = rds.route_config_name.clone();
-                ApiListenerData::Rds(name.into())
-            }
-            Some(RouteSpecifier::RouteConfig(route_config)) => {
-                let data = RouteConfigData::from_xds(route_config)?;
-                ApiListenerData::Inlined(data)
-            }
-            _ => {
-                return Err(ResourceError::for_xds_static(
-                    name.to_string(),
-                    "api_listener has no routes configured",
-                ))
-            }
-        };
-
-        Ok(Self {
-            xds,
-            route_config: data,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RouteConfig {
-    pub xds: xds_route::RouteConfiguration,
-    pub data: RouteConfigData,
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum RouteConfigData {
-    Route {
-        route: Arc<Route>,
-        clusters: Vec<ResourceName<Cluster>>,
-    },
-    LbPolicy {
-        action: Arc<xds_route::RouteAction>,
-        cluster: ResourceName<Cluster>,
-    },
-}
-
-impl RouteConfigData {
-    fn from_xds(xds: &xds_route::RouteConfiguration) -> Result<Self, ResourceError> {
-        match BackendId::from_lb_config_route_name(&xds.name) {
-            // it's a normal route
-            Err(_) => {
-                let clusters = RouteConfig::cluster_names(xds);
-                let route = Arc::new(Route::from_xds(xds)?);
-                Ok(RouteConfigData::Route { route, clusters })
-            }
-            // it's an lb config route
-            Ok(_) => RouteConfig::lb_policy_action(xds).ok_or(ResourceError::for_xds_static(
-                xds.name.clone(),
-                "failed to parse LB config route",
-            )),
-        }
-    }
-}
-
-impl RouteConfig {
-    pub(crate) fn from_xds(xds: xds_route::RouteConfiguration) -> Result<Self, ResourceError> {
-        let data = RouteConfigData::from_xds(&xds)?;
-        Ok(Self { xds, data })
-    }
-
-    fn cluster_names(xds: &xds_route::RouteConfiguration) -> Vec<ResourceName<Cluster>> {
-        let mut clusters = BTreeSet::new();
-        for vhost in &xds.virtual_hosts {
-            for route in &vhost.routes {
-                let Some(xds_route::route::Action::Route(route_action)) = &route.action else {
-                    continue;
-                };
-
-                match &route_action.cluster_specifier {
-                    Some(xds_route::route_action::ClusterSpecifier::Cluster(cluster)) => {
-                        clusters.insert(cluster.clone());
-                    }
-                    Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(
-                        weighted_clusters,
-                    )) => {
-                        for w in &weighted_clusters.clusters {
-                            clusters.insert(w.name.clone());
-                        }
-                    }
-                    _ => continue,
-                }
-            }
-        }
-        clusters.into_iter().map(|n| n.into()).collect()
-    }
-
-    fn lb_policy_action(xds: &xds_route::RouteConfiguration) -> Option<RouteConfigData> {
-        let vhost = match &xds.virtual_hosts.as_slice() {
-            &[vhost] => vhost,
-            _ => return None,
-        };
-
-        let route = match &vhost.routes.as_slice() {
-            &[route] => route,
-            _ => return None,
-        };
-
-        let Some(xds_route::route::Action::Route(action)) = &route.action else {
-            return None;
-        };
-        match &action.cluster_specifier {
-            Some(xds_route::route_action::ClusterSpecifier::Cluster(cluster)) => {
-                Some(RouteConfigData::LbPolicy {
-                    action: Arc::new(action.clone()),
-                    cluster: cluster.clone().into(),
-                })
-            }
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct Cluster {
-    pub(crate) xds: xds_cluster::Cluster,
-    pub(crate) backend_lb: Arc<BackendLb>,
-}
-
-impl Cluster {
-    pub(crate) fn dns_name(&self) -> Option<(Hostname, u16)> {
-        let id = &self.backend_lb.config.id;
-        match &id.service {
-            junction_api::Service::Dns(dns) => Some((dns.hostname.clone(), id.port)),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn from_xds(
-        xds: xds_cluster::Cluster,
-        default_action: Option<&xds_route::RouteAction>,
-    ) -> Result<Self, ResourceError> {
-        let backend = Backend::from_xds(&xds, default_action)?;
-        let load_balancer = LoadBalancer::from_config(&backend.lb);
-
-        let backend_lb = Arc::new(BackendLb {
-            config: backend,
-            load_balancer,
-        });
-
-        Ok(Self { xds, backend_lb })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct LoadAssignment {
-    pub xds: xds_endpoint::ClusterLoadAssignment,
-    pub endpoint_group: Arc<EndpointGroup>,
-}
-
-impl LoadAssignment {
-    pub(crate) fn from_xds(
-        xds: xds_endpoint::ClusterLoadAssignment,
-    ) -> Result<Self, ResourceError> {
-        let endpoint_group = Arc::new(EndpointGroup::from_xds(&xds)?);
-        Ok(Self {
-            xds,
-            endpoint_group,
-        })
-    }
-}
-
-impl Locality {
-    pub(crate) fn from_xds(locality: &Option<xds_core::Locality>) -> Self {
-        let Some(locality) = locality.as_ref() else {
-            return Self::Unknown;
-        };
-
-        if locality.region.is_empty() && locality.zone.is_empty() {
-            return Self::Unknown;
-        }
-
-        Self::Known(LocalityInfo {
-            region: locality.region.clone(),
-            zone: locality.zone.clone(),
-        })
-    }
-}
-
-impl EndpointGroup {
-    pub(crate) fn from_xds(
-        cla: &xds_endpoint::ClusterLoadAssignment,
-    ) -> Result<Self, ResourceError> {
-        let mut endpoints = BTreeMap::new();
-        for (locality_idx, locality_endpoints) in cla.endpoints.iter().enumerate() {
-            let locality = Locality::from_xds(&locality_endpoints.locality);
-            let locality_endpoints: Result<Vec<_>, _> = locality_endpoints
-                .lb_endpoints
-                .iter()
-                .enumerate()
-                .map(|(endpoint_idx, e)| {
-                    xds_lb_endpoint_socket_addr(&cla.cluster_name, locality_idx, endpoint_idx, e)
-                })
-                .collect();
-
-            endpoints.insert(locality, locality_endpoints?);
-        }
-
-        Ok(EndpointGroup::new(endpoints))
-    }
-}
-
-fn xds_lb_endpoint_socket_addr(
-    eds_name: &str,
-    locality_idx: usize,
-    endpoint_idx: usize,
-    endpoint: &xds_endpoint::LbEndpoint,
-) -> Result<SocketAddr, ResourceError> {
-    macro_rules! make_error {
-        ($msg:expr) => {
-            ResourceError::for_xds_static(
-                format!(
-                    "{}: endpoints[{}].lb_endpoints[{}]",
-                    eds_name, locality_idx, endpoint_idx
-                ),
-                $msg,
-            )
-        };
-    }
-
-    let endpoint = match &endpoint.host_identifier {
-        Some(xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(ep)) => ep,
-        _ => return Err(make_error!("endpoint is missing endpoint data")),
-    };
-
-    let address = endpoint.address.as_ref().and_then(|a| a.address.as_ref());
-    match address {
-        Some(xds_core::address::Address::SocketAddress(addr)) => {
-            let ip = addr
-                .address
-                .parse()
-                .map_err(|_| make_error!("invalid socket address"))?;
-            let port = match &addr.port_specifier {
-                Some(xds_core::socket_address::PortSpecifier::PortValue(p)) => {
-                    (*p).try_into().map_err(|_| make_error!("invalid port"))?
-                }
-                _ => return Err(make_error!("missing port specifier")),
-            };
-
-            Ok(SocketAddr::new(ip, port))
-        }
-        _ => Err(make_error!("endpoint has no socket address")),
+/// Parse a u16 port from an xDS port specifier
+#[inline]
+pub(super) fn xds_port(
+    port_specifier: Option<&xds_core::socket_address::PortSpecifier>,
+) -> Option<u16> {
+    match port_specifier {
+        Some(xds_core::socket_address::PortSpecifier::PortValue(v)) => (*v).try_into().ok(),
+        _ => None,
     }
 }
