@@ -4,7 +4,7 @@ use std::{borrow::Cow, fmt::Write as _, str::FromStr};
 ///
 /// Errors should be treated as opaque, and contain a message about what went
 /// wrong and a jsonpath style path to the field that caused problems.
-#[derive(Clone, thiserror::Error)]
+#[derive(Clone, PartialEq, thiserror::Error)]
 pub struct Error {
     // an error message
     message: String,

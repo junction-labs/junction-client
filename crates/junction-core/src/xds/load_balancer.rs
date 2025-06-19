@@ -1,5 +1,8 @@
-use crate::{endpoints::EndpointGroup, error::Trace, hash::thread_local_xxhash};
-use junction_api::backend::{Backend, LbPolicy, RequestHashPolicy, RequestHasher, RingHashParams};
+use crate::{
+    error::Trace,
+    hash::thread_local_xxhash,
+    xds::{clusters::LbPolicy, endpoints::EndpointGroup},
+};
 use smol_str::ToSmolStr;
 use std::{
     net::SocketAddr,
@@ -9,16 +12,8 @@ use std::{
     },
 };
 
-/// A [Backend][junction_api::backend::Backend] and the [LoadBalancer] it's
-/// configured with.
 #[derive(Debug)]
-pub struct BackendLb {
-    pub config: Backend,
-    pub load_balancer: LoadBalancer,
-}
-
-#[derive(Debug)]
-pub enum LoadBalancer {
+pub(crate) enum LoadBalancer {
     RoundRobin(RoundRobinLb),
     RingHash(RingHashLb),
 }
@@ -27,18 +22,16 @@ impl LoadBalancer {
     pub(crate) fn load_balance<'e>(
         &self,
         trace: &mut Trace,
+        request_hash: u64,
         endpoints: &'e EndpointGroup,
-        url: &crate::Url,
-        headers: &http::HeaderMap,
         previous_addrs: &[SocketAddr],
     ) -> Option<&'e SocketAddr> {
+        let _ = previous_addrs;
         match self {
             // RoundRobin skips previously picked addrs and ignores context
-            LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(trace, endpoints, previous_addrs),
+            LoadBalancer::RoundRobin(lb) => lb.pick_endpoint(trace, endpoints),
             // RingHash needs context but doesn't care about history
-            LoadBalancer::RingHash(lb) => {
-                lb.pick_endpoint(trace, endpoints, url, headers, &lb.config.hash_params)
-            }
+            LoadBalancer::RingHash(lb) => lb.pick_endpoint(trace, endpoints, request_hash),
         }
     }
 }
@@ -47,7 +40,9 @@ impl LoadBalancer {
     pub(crate) fn from_config(config: &LbPolicy) -> Self {
         match config {
             LbPolicy::RoundRobin => LoadBalancer::RoundRobin(RoundRobinLb::default()),
-            LbPolicy::RingHash(x) => LoadBalancer::RingHash(RingHashLb::new(x)),
+            LbPolicy::RingHash { min_ring_size } => {
+                LoadBalancer::RingHash(RingHashLb::new(*min_ring_size))
+            }
             LbPolicy::Unspecified => LoadBalancer::RoundRobin(RoundRobinLb::default()),
         }
     }
@@ -69,7 +64,6 @@ impl RoundRobinLb {
         &self,
         trace: &mut Trace,
         endpoint_group: &'e EndpointGroup,
-        previous_addrs: &[SocketAddr],
     ) -> Option<&'e SocketAddr> {
         // TODO: actually use previous addrs to pick a new address. have to
         // decide if we return anything if all addresses have previously been
@@ -77,7 +71,6 @@ impl RoundRobinLb {
         // but we'd prefer to do something simpler by default.
         //
         // https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#config-route-v3-retrypolicy
-        let _ = previous_addrs;
 
         let idx = self.idx.fetch_add(1, Ordering::SeqCst) % endpoint_group.len();
         let addr = endpoint_group.nth(idx);
@@ -97,7 +90,7 @@ impl RoundRobinLb {
 ///
 #[derive(Debug)]
 pub struct RingHashLb {
-    config: RingHashParams,
+    min_ring_size: u32,
     ring: RwLock<Ring>,
 }
 
@@ -108,12 +101,12 @@ struct RingEntry {
 }
 
 impl RingHashLb {
-    fn new(config: &RingHashParams) -> Self {
+    fn new(min_ring_size: u32) -> Self {
         Self {
-            config: config.clone(),
+            min_ring_size,
             ring: RwLock::new(Ring {
-                eg_hash: 0,
-                entries: Vec::with_capacity(config.min_ring_size as usize),
+                hash: 0,
+                entries: Vec::with_capacity(min_ring_size as usize),
             }),
         }
     }
@@ -122,13 +115,8 @@ impl RingHashLb {
         &self,
         trace: &mut Trace,
         endpoints: &'e EndpointGroup,
-        url: &crate::Url,
-        headers: &http::HeaderMap,
-        hash_params: &Vec<RequestHashPolicy>,
+        request_hash: u64,
     ) -> Option<&'e SocketAddr> {
-        let request_hash =
-            hash_request(hash_params, url, headers).unwrap_or_else(crate::rand::random);
-
         let endpoint_idx = self.with_ring(endpoints, |r| r.pick(request_hash))?;
         let addr = endpoints.nth(endpoint_idx);
 
@@ -154,14 +142,14 @@ impl RingHashLb {
         // explicitly drop the guard at the end so we can't get confused and
         // try to upgrade and deadlock ourselves.
         let ring = self.ring.read().unwrap();
-        if ring.eg_hash == endpoint_group.hash {
+        if ring.hash == endpoint_group.hash {
             return cb(&ring);
         }
         std::mem::drop(ring);
 
         // write path:
         let mut ring = self.ring.write().unwrap();
-        ring.rebuild(self.config.min_ring_size as usize, endpoint_group);
+        ring.rebuild(self.min_ring_size as usize, endpoint_group);
         cb(&ring)
     }
 }
@@ -170,7 +158,7 @@ impl RingHashLb {
 struct Ring {
     // The hash of the EndpointGroup used to build the Ring. This is slightly
     // more stable than ResourceVersion, but could be changed to that.
-    eg_hash: u64,
+    hash: u64,
     entries: Vec<RingEntry>,
 }
 
@@ -202,7 +190,7 @@ impl Ring {
             }
         }
 
-        self.eg_hash = endpoint_group.hash;
+        self.hash = endpoint_group.hash;
         self.entries.sort_by_key(|e| e.hash);
     }
 
@@ -223,84 +211,23 @@ impl Ring {
     }
 }
 
-/// Hash an outgoing request based on a set of hash policies.
-///
-/// Like Envoy and gRPC, multiple hash policies are combined by applying a
-/// bitwise left-rotate to the previous value and xor-ing the new value into
-/// the previous value.
-///
-/// See:
-/// - https://github.com/grpc/proposal/blob/master/A42-xds-ring-hash-lb-policy.md#xds-api-fields
-/// - https://github.com/envoyproxy/envoy/blob/main/source/common/http/hash_policy.cc#L236-L257
-pub(crate) fn hash_request(
-    hash_policies: &Vec<RequestHashPolicy>,
-    url: &crate::Url,
-    headers: &http::HeaderMap,
-) -> Option<u64> {
-    let mut hash: Option<u64> = None;
-
-    for hash_policy in hash_policies {
-        if let Some(new_hash) = hash_component(hash_policy, url, headers) {
-            hash = Some(match hash {
-                Some(hash) => hash.rotate_left(1) ^ new_hash,
-                None => new_hash,
-            });
-
-            if hash_policy.terminal {
-                break;
-            }
-        }
-    }
-
-    hash
-}
-
-fn hash_component(
-    policy: &RequestHashPolicy,
-    url: &crate::Url,
-    headers: &http::HeaderMap,
-) -> Option<u64> {
-    match &policy.hasher {
-        RequestHasher::Header { name } => {
-            let mut header_values: Vec<_> = headers
-                .get_all(name)
-                .iter()
-                .map(http::HeaderValue::as_bytes)
-                .collect();
-
-            if header_values.is_empty() {
-                None
-            } else {
-                // sort values so that "foo,bar" and "bar,foo" hash to the same value
-                header_values.sort();
-                Some(thread_local_xxhash::hash_iter(header_values))
-            }
-        }
-        RequestHasher::QueryParam { ref name } => url.query().map(|query| {
-            let matching_vals = form_urlencoded::parse(query.as_bytes())
-                .filter_map(|(param, value)| (&param == name).then_some(value));
-            thread_local_xxhash::hash_iter(matching_vals)
-        }),
-    }
-}
-
 #[cfg(test)]
 mod test_ring_hash {
-    use crate::endpoints::Locality;
+    use crate::xds::endpoints::Locality;
 
     use super::*;
 
     #[test]
     fn test_rebuild_ring() {
         let mut ring = Ring {
-            eg_hash: 0,
+            hash: 0,
             entries: Vec::new(),
         };
 
         // rebuild a ring with no min size
         ring.rebuild(0, &endpoint_group(123, ["1.1.1.1:80", "1.1.1.2:80"]));
 
-        assert_eq!(ring.eg_hash, 123);
+        assert_eq!(ring.hash, 123);
         assert_eq!(ring.entries.len(), 2);
         assert_eq!(ring_indexes(&ring), (0..2).collect::<Vec<_>>());
         assert_hashes_unique(&ring);
@@ -313,7 +240,7 @@ mod test_ring_hash {
             &endpoint_group(123, ["1.1.1.1:80", "1.1.1.2:80", "1.1.1.3:80"]),
         );
 
-        assert_eq!(ring.eg_hash, 123);
+        assert_eq!(ring.hash, 123);
         assert_eq!(ring.entries.len(), 3);
         assert_eq!(ring_indexes(&ring), (0..3).collect::<Vec<_>>());
         assert_hashes_unique(&ring);
@@ -332,7 +259,7 @@ mod test_ring_hash {
     #[test]
     fn test_rebuild_ring_min_size() {
         let mut ring = Ring {
-            eg_hash: 0,
+            hash: 0,
             entries: Vec::new(),
         };
 
@@ -359,14 +286,15 @@ mod test_ring_hash {
     #[test]
     fn test_pick() {
         let mut ring = Ring {
-            eg_hash: 0,
+            hash: 0,
             entries: vec![],
         };
         ring.rebuild(
             0,
             &EndpointGroup::new(
+                0,
                 [(
-                    Locality::Unknown,
+                    Locality::empty(),
                     vec![
                         "1.1.1.1:80".parse().unwrap(),
                         "1.1.1.2:80".parse().unwrap(),
@@ -399,9 +327,8 @@ mod test_ring_hash {
     fn endpoint_group(hash: u64, addrs: impl IntoIterator<Item = &'static str>) -> EndpointGroup {
         let addrs = addrs.into_iter().map(|s| s.parse().unwrap()).collect();
 
-        let mut eg = EndpointGroup::new([(Locality::Unknown, addrs)].into());
+        let mut eg = EndpointGroup::new(123, [(Locality::empty(), addrs)].into());
         eg.hash = hash;
-
         eg
     }
 

@@ -83,41 +83,59 @@
 
 use std::{
     collections::{BTreeSet, HashMap},
-    str::FromStr,
     sync::Arc,
 };
 
-use crossbeam_skiplist::SkipMap;
+use dashmap::DashMap;
 use enum_map::EnumMap;
-use junction_api::{backend::BackendId, http::Route, Hostname};
+use junction_api::Hostname;
 use petgraph::{
     graph::{DiGraph, NodeIndex},
     visit::{EdgeRef, Visitable},
     Direction,
 };
 use tokio::sync::Notify;
-use xds_api::pb::envoy::config::{
-    cluster::v3 as xds_cluster, endpoint::v3 as xds_endpoint, listener::v3 as xds_listener,
-    route::v3 as xds_route,
-};
+use xds_api::pb::envoy::service::discovery::v3 as xds_discovery;
 use xds_api::pb::google::protobuf;
-
-use crate::{endpoints::EndpointGroup, BackendLb};
 
 use super::{
     resources::{
-        ApiListener, ApiListenerData, Cluster, LoadAssignment, ResourceError, RouteConfig,
-        RouteConfigData,
+        ApiListener, Cluster, LoadAssignment, Resource, ResourceError, ResourceName,
+        RouteConfiguration,
     },
-    ConfigCache, DnsUpdates, ResourceType, ResourceVec, ResourceVersion, XdsConfig,
+    DnsUpdates, ResourceType, ResourceVersion, XdsConfig,
 };
 
 /// A concurrent map of resources, bundled together with an Arc<Notify> so that
 /// callers can wait on changes.
 #[derive(Debug)]
 struct ResourceMap<T> {
-    changed: Arc<Notify>,
-    map: SkipMap<String, CacheEntry<T>>,
+    changed: Notify,
+    // TODO: use ahash for keys, see if it matters
+    map: DashMap<ResourceName, ResourceData<T>>,
+}
+
+type ResourceMapEntryRef<'a, T> = dashmap::mapref::one::Ref<'a, ResourceName, ResourceData<T>>;
+type ResourceMapEntryIterRef<'a, T> =
+    dashmap::mapref::multiple::RefMulti<'a, ResourceName, ResourceData<T>>;
+
+#[derive(Clone, Debug)]
+struct ResourceData<T> {
+    version: Option<ResourceVersion>,
+    last_error: Option<(ResourceVersion, ResourceError)>,
+    data: Option<Arc<T>>,
+    raw_msg: Option<protobuf::Any>,
+}
+
+impl<T> Default for ResourceData<T> {
+    fn default() -> Self {
+        Self {
+            version: None,
+            last_error: None,
+            data: None,
+            raw_msg: None,
+        }
+    }
 }
 
 // NOTE: manually derived because the Derive macro requires `T: Default`, and
@@ -125,25 +143,25 @@ struct ResourceMap<T> {
 impl<T> Default for ResourceMap<T> {
     fn default() -> Self {
         Self {
-            changed: Arc::new(Notify::new()),
+            changed: Notify::new(),
             map: Default::default(),
         }
     }
 }
 
-impl<T: Send + 'static> ResourceMap<T> {
+impl<T> ResourceMap<T> {
     #[cfg(test)]
     fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
-    fn get<'a>(&'a self, name: &str) -> Option<ResourceEntry<'a, T>> {
-        self.map.get(name).map(ResourceEntry)
+    fn get<'a>(&'a self, name: &ResourceName) -> Option<ResourceMapEntryRef<'a, T>> {
+        self.map.get(name).map(|r| r)
     }
 
-    async fn get_await<'a>(&'a self, name: &str) -> Option<ResourceEntry<'a, T>> {
+    async fn get_await<'a>(&'a self, name: &ResourceName) -> Option<ResourceMapEntryRef<'a, T>> {
         // fast path: try a get and return it if it works out.
-        if let Some(entry) = self.map.get(name).map(ResourceEntry) {
+        if let Some(entry) = self.map.get(name) {
             return Some(entry);
         }
 
@@ -169,7 +187,7 @@ impl<T: Send + 'static> ResourceMap<T> {
         tokio::pin!(changed);
         loop {
             // check the map
-            if let Some(entry) = self.map.get(name).map(ResourceEntry) {
+            if let Some(entry) = self.map.get(name) {
                 return Some(entry);
             }
 
@@ -182,191 +200,75 @@ impl<T: Send + 'static> ResourceMap<T> {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = ResourceEntry<T>> + '_ {
-        self.map.iter().map(ResourceEntry)
+    fn iter(&self) -> impl Iterator<Item = ResourceMapEntryIterRef<T>> + '_ {
+        self.map.iter()
     }
 
-    fn has_data(&self, k: &str) -> bool {
+    fn has_data(&self, k: &ResourceName) -> bool {
         match self.get(k) {
             None => false,
-            Some(entry) => entry.data().is_some(),
+            Some(entry) => entry.data.is_some(),
         }
     }
 
-    fn versions(&self) -> HashMap<String, String> {
+    fn versions(&self) -> HashMap<ResourceName, ResourceVersion> {
         let mut versions = HashMap::new();
-        for entry in self.iter() {
-            if entry.data().is_none() {
+        for entry in self.map.iter() {
+            if entry.data.is_none() {
                 continue;
             };
-            let Some(version) = entry.version() else {
+            let Some(version) = &entry.version else {
                 continue;
             };
 
-            let name = entry.name().to_string();
-            let version = version.to_string();
+            let name = entry.key().clone();
+            let version = version.clone();
             versions.insert(name, version);
         }
 
         versions
     }
 
-    fn remove(&self, name: &str) -> Option<ResourceEntry<T>> {
+    fn remove(&self, name: &ResourceName) -> Option<(ResourceName, ResourceData<T>)> {
         let entry = self.map.remove(name);
         self.changed.notify_waiters();
-        entry.map(ResourceEntry)
+        entry
     }
 
-    fn remove_all<I>(&self, names: I)
+    fn remove_all<'a, I>(&self, names: I)
     where
-        I: IntoIterator<Item: AsRef<str>>,
+        I: IntoIterator<Item = &'a ResourceName>,
     {
         for name in names {
-            self.remove(name.as_ref());
+            self.remove(name);
         }
     }
-}
 
-impl<X, T> ResourceMap<T>
-where
-    T: CacheEntryData<Xds = X> + Clone + Send + 'static,
-    X: PartialEq + prost::Name,
-{
-    fn insert_ok(&self, name: String, version: ResourceVersion, t: T) {
+    fn insert_ok(&self, name: ResourceName, version: ResourceVersion, resource: T) {
         self.map.insert(
             name,
-            CacheEntry {
+            ResourceData {
                 version: Some(version),
                 last_error: None,
-                data: Some(t),
+                data: Some(Arc::new(resource)),
+                raw_msg: None,
             },
         );
         self.changed.notify_waiters();
     }
 
-    fn insert_tombstone(&self, name: String) {
+    fn insert_tombstone(&self, name: ResourceName) {
         self.map.insert(
             name,
-            CacheEntry {
+            ResourceData {
                 version: None,
                 last_error: None,
                 data: None,
+                raw_msg: None,
             },
         );
         self.changed.notify_waiters();
     }
-
-    fn insert_error<E: Into<ResourceError>>(
-        &self,
-        name: String,
-        version: ResourceVersion,
-        error: E,
-    ) {
-        match self.map.get(&name) {
-            Some(entry) => {
-                let mut updated_entry = entry.value().clone();
-                updated_entry.last_error = Some((version, error.into()));
-                self.map.insert(name, updated_entry);
-                self.changed.notify_waiters();
-            }
-            None => {
-                self.map.insert(
-                    name,
-                    CacheEntry {
-                        version: None,
-                        last_error: Some((version, error.into())),
-                        data: None,
-                    },
-                );
-                self.changed.notify_waiters();
-            }
-        }
-    }
-
-    // TDODO: should this compare version to short-circuit full eq?
-    fn is_changed(&self, name: &str, t: &X) -> bool {
-        let Some(entry) = self.map.get(name) else {
-            return true;
-        };
-
-        let Some(entry_data) = &entry.value().data else {
-            return true;
-        };
-        entry_data.xds() != t
-    }
-}
-
-/// Wrap a crossbeam_skiplist Entry to make some signatures and reference things
-/// less gnarly.
-struct ResourceEntry<'a, T>(crossbeam_skiplist::map::Entry<'a, String, CacheEntry<T>>);
-
-impl<T> ResourceEntry<'_, T> {
-    fn name(&self) -> &str {
-        self.0.key()
-    }
-
-    fn version(&self) -> Option<&ResourceVersion> {
-        self.0.value().version.as_ref()
-    }
-
-    fn last_error(&self) -> Option<&(ResourceVersion, ResourceError)> {
-        self.0.value().last_error.as_ref()
-    }
-
-    fn data(&self) -> Option<&T> {
-        self.0.value().data.as_ref()
-    }
-}
-
-#[derive(Clone, Debug)]
-struct CacheEntry<T> {
-    version: Option<ResourceVersion>,
-    last_error: Option<(ResourceVersion, ResourceError)>,
-    data: Option<T>,
-}
-
-impl<T> Default for CacheEntry<T> {
-    fn default() -> Self {
-        Self {
-            version: None,
-            last_error: None,
-            data: None,
-        }
-    }
-}
-
-impl<T: CacheEntryData> CacheEntry<T> {}
-
-// TODO: kill this, move xds into CacheEntry
-trait CacheEntryData {
-    type Xds;
-
-    fn xds(&self) -> &Self::Xds;
-}
-
-macro_rules! impl_cache_entry {
-    ($entry_ty:ty, $xds_ty:ty) => {
-        impl CacheEntryData for $entry_ty {
-            type Xds = $xds_ty;
-
-            fn xds(&self) -> &$xds_ty {
-                &self.xds
-            }
-        }
-    };
-}
-
-impl_cache_entry!(ApiListener, xds_listener::Listener);
-impl_cache_entry!(RouteConfig, xds_route::RouteConfiguration);
-impl_cache_entry!(Cluster, xds_cluster::Cluster);
-impl_cache_entry!(LoadAssignment, xds_endpoint::ClusterLoadAssignment);
-
-#[derive(Debug, Default)]
-struct CacheData {
-    listeners: ResourceMap<ApiListener>,
-    route_configs: ResourceMap<RouteConfig>,
-    clusters: ResourceMap<Cluster>,
-    load_assignments: ResourceMap<LoadAssignment>,
 }
 
 /// The set of subscription changes for a single resource type.
@@ -374,11 +276,11 @@ struct CacheData {
 pub(crate) struct Changes {
     /// The names of any newly added subscriptions. Newly added subscriptions
     /// may or may not be in cache, and must be requested from the xDS server.
-    pub(crate) added: BTreeSet<String>,
+    pub(crate) added: BTreeSet<ResourceName>,
 
     /// The names of any removed subscriptions. Callers should assume that any
     /// removed names are also removed from cache.
-    pub(crate) removed: BTreeSet<String>,
+    pub(crate) removed: BTreeSet<ResourceName>,
 }
 
 impl Changes {
@@ -421,7 +323,7 @@ struct SubscriptionInfo {
     resource_type: ResourceType,
 
     // the name of the resource
-    name: String,
+    name: ResourceName,
 
     // true if there is explicit interest in this resource via subscribe.
     explicit: bool,
@@ -432,33 +334,33 @@ struct SubscriptionInfo {
 }
 
 impl Subscriptions {
-    fn explicit(&self, rtype: ResourceType) -> impl Iterator<Item = &str> + '_ {
+    fn explicit(&self, rtype: ResourceType) -> impl Iterator<Item = &ResourceName> + '_ {
         self.subs
             .node_weights()
             .filter(move |w| w.resource_type == rtype && !w.wildcard)
-            .map(|w| &w.name[..])
+            .map(|w| &w.name)
     }
 
-    fn subscribe(&mut self, rtype: ResourceType, name: &str) {
+    fn subscribe(&mut self, rtype: ResourceType, name: &ResourceName) {
         // explicit subscription means never a wildcard
         let sub = self.find_or_create(rtype, name, false);
         self.subs[sub].explicit = true;
     }
 
-    fn unsubscribe(&mut self, rtype: ResourceType, name: &str) {
+    fn unsubscribe(&mut self, rtype: ResourceType, name: &ResourceName) {
         if let Some(sub) = self.find(rtype, name) {
             self.subs[sub].explicit = false;
         }
     }
 
-    fn remove(&mut self, rtype: ResourceType, name: &str) {
+    fn remove(&mut self, rtype: ResourceType, name: &ResourceName) {
         if let Some(sub) = self.find(rtype, name) {
             self.reset_refs(sub);
         }
     }
 
     #[inline]
-    fn clear_changes(&mut self, rtype: ResourceType, name: &str) {
+    fn clear_changes(&mut self, rtype: ResourceType, name: &ResourceName) {
         self.changes[rtype].added.remove(name);
         self.changes[rtype].removed.remove(name);
     }
@@ -469,7 +371,7 @@ impl Subscriptions {
         self.changes[sub.resource_type].removed.insert(sub.name);
     }
 
-    fn find_or_subscribe(&mut self, rtype: ResourceType, name: &str) -> Option<NodeIndex> {
+    fn find_or_subscribe(&mut self, rtype: ResourceType, name: &ResourceName) -> Option<NodeIndex> {
         // if this is a wildcard subscription, any name is subscribed. create it
         // and move on.
         if self.wildcard[rtype] {
@@ -483,19 +385,24 @@ impl Subscriptions {
         self.find(rtype, name)
     }
 
-    fn find(&self, rtype: ResourceType, name: &str) -> Option<NodeIndex> {
+    fn find(&self, rtype: ResourceType, name: &ResourceName) -> Option<NodeIndex> {
         self.subs.node_indices().find(|idx| {
             let sub = &self.subs[*idx];
-            sub.resource_type == rtype && sub.name == name
+            sub.resource_type == rtype && sub.name == *name
         })
     }
 
-    fn find_or_create(&mut self, rtype: ResourceType, name: &str, wildcard: bool) -> NodeIndex {
+    fn find_or_create(
+        &mut self,
+        rtype: ResourceType,
+        name: &ResourceName,
+        wildcard: bool,
+    ) -> NodeIndex {
         match self.find(rtype, name) {
             Some(idx) => idx,
             None => {
                 let idx = self.subs.add_node(SubscriptionInfo {
-                    name: name.to_string(),
+                    name: name.clone(),
                     resource_type: rtype,
                     explicit: false,
                     wildcard,
@@ -503,7 +410,7 @@ impl Subscriptions {
 
                 // track that this is a newly created sub
                 if !wildcard {
-                    self.changes[rtype].added.insert(name.to_string());
+                    self.changes[rtype].added.insert(name.clone());
                 }
 
                 idx
@@ -531,7 +438,7 @@ impl Subscriptions {
     /// Add a reference from `from_sub` to a node of with a given resource type
     /// and name. Creates the destination subscription if it doesn't already
     /// exist.
-    fn add_ref(&mut self, from_sub: NodeIndex, rtype: ResourceType, name: &str) {
+    fn add_ref(&mut self, from_sub: NodeIndex, rtype: ResourceType, name: &ResourceName) {
         // when adding a reference that creates a new subscription, even if the
         // destination type is a wildcard, we want a non-wildcard reference to
         // it so that the cache can switch to explicit mode and keep this
@@ -588,13 +495,76 @@ impl Subscriptions {
     }
 }
 
+/// A counted set of DNS names.
+///
+/// Keeps track of the number of times a name is used and builds up
+/// a set of tracked updates. Updates are cleared and returned when
+/// `collect` is called.
+#[derive(Clone, Debug, Default)]
+struct DnsNames {
+    names: HashMap<Hostname, usize>,
+    changes: DnsUpdates,
+}
+
+impl DnsNames {
+    /// Add a name to the set.
+    /// present.
+    fn add_name(&mut self, name: Hostname) {
+        use std::collections::hash_map::Entry;
+
+        match self.names.entry(name) {
+            Entry::Occupied(mut entry) => {
+                *entry.get_mut() += 1;
+            }
+            Entry::Vacant(entry) => {
+                let name = entry.key().clone();
+
+                // add one
+                entry.insert(1);
+                // update changes
+                self.changes.remove.remove(&name);
+                self.changes.add.insert(name);
+            }
+        }
+    }
+
+    /// Remove a name from the tracked set.
+    fn remove_name(&mut self, name: &Hostname) {
+        let Some(val) = self.names.get_mut(name) else {
+            return;
+        };
+
+        if *val == 1 {
+            self.names.remove(name);
+            self.changes.add.remove(name);
+            self.changes.remove.insert(name.clone());
+        } else {
+            *val -= 1;
+        }
+    }
+
+    /// Clear and return the set of names that have changed since the last call
+    /// to `collect`.
+    fn collect(&mut self) -> DnsUpdates {
+        std::mem::take(&mut self.changes)
+    }
+}
+
 /// A persistent cache of Junction xDS state. See the module documentation for
 /// more information on what's in a cache and how to use one.
 #[derive(Debug, Default)]
 pub(super) struct Cache {
     subs: Subscriptions,
     data: Arc<CacheData>,
-    dns: DnsUpdates,
+    dns: DnsNames,
+}
+
+#[derive(Debug, Default)]
+struct CacheData {
+    listeners: ResourceMap<ApiListener>,
+    route_configs: ResourceMap<RouteConfiguration>,
+    clusters: ResourceMap<Cluster>,
+    load_assignments: ResourceMap<LoadAssignment>,
 }
 
 impl Cache {
@@ -624,47 +594,37 @@ impl Cache {
     }
 
     /// Subscribe to a resource by name.
-    pub(crate) fn subscribe(&mut self, rtype: ResourceType, name: &str) {
+    pub(crate) fn subscribe(&mut self, rtype: ResourceType, name: &ResourceName) {
         self.subs.subscribe(rtype, name);
     }
 
     /// Unsubscribe from a resource by name.
-    pub(crate) fn unsubscribe(&mut self, rtype: ResourceType, name: &str) {
+    pub(crate) fn unsubscribe(&mut self, rtype: ResourceType, name: &ResourceName) {
         self.subs.unsubscribe(rtype, name);
-    }
-
-    /// Subscribe to a DNS name.
-    pub(crate) fn subscribe_dns(&mut self, hostname: Hostname, port: u16) {
-        self.dns.add.insert((hostname, port));
-    }
-
-    /// Unsubscribe from a DNS name.
-    pub(crate) fn unsubscribe_dns(&mut self, hostname: Hostname, port: u16) {
-        self.dns.remove.insert((hostname, port));
     }
 
     /// Return the current list of subscriptions for this resource type.
     #[cfg(test)]
-    pub(crate) fn subscriptions(&self, rtype: ResourceType) -> Vec<String> {
-        self.subs.explicit(rtype).map(|s| s.to_string()).collect()
+    pub(crate) fn subscriptions(&self, rtype: ResourceType) -> Vec<ResourceName> {
+        self.subs.explicit(rtype).map(|s| s.clone()).collect()
     }
 
-    pub(crate) fn dns_names(&self) -> impl Iterator<Item = (Hostname, u16)> + '_ {
+    pub(crate) fn dns_names(&self) -> impl Iterator<Item = Hostname> + '_ {
         self.data
             .clusters
             .iter()
-            .filter_map(|e| e.data().and_then(|c| c.dns_name()))
+            .filter_map(|e| e.data.as_ref().and_then(|c| c.dns_name().cloned()))
     }
 
     /// Return the list of resources the cache has a registered subscription for
     /// but contains no data for.
-    pub(crate) fn initial_subscriptions(&self, rtype: ResourceType) -> Vec<String> {
+    pub(crate) fn initial_subscriptions(&self, rtype: ResourceType) -> Vec<ResourceName> {
         macro_rules! missing_from {
             ($m:expr) => {
                 self.subs
                     .explicit(rtype)
                     .filter(|k| !$m.has_data(k))
-                    .map(|s| s.to_string())
+                    .map(|s| s.clone())
                     .collect()
             };
         }
@@ -678,7 +638,7 @@ impl Cache {
     }
 
     /// Get the versions of all resources currently in cache.
-    pub(crate) fn versions(&self, rtype: ResourceType) -> HashMap<String, String> {
+    pub(crate) fn versions(&self, rtype: ResourceType) -> HashMap<ResourceName, ResourceVersion> {
         match rtype {
             ResourceType::Cluster => self.data.clusters.versions(),
             ResourceType::ClusterLoadAssignment => self.data.load_assignments.versions(),
@@ -712,15 +672,17 @@ impl Cache {
 
         // when removing clusters based on changes, we also have to remove
         // any DNS names for removed clusters.
-        let mut dns = std::mem::take(&mut self.dns);
         for cluster_name in &changes[ResourceType::Cluster].removed {
-            if let Some(entry) = self.data.clusters.remove(cluster_name) {
-                let dns_name = entry.data().and_then(|c| c.dns_name());
-                if let Some(dns_name) = dns_name {
-                    dns.remove.insert(dns_name);
+            // NOTE: this can be an if-let chain once we upgrade to the 2024 edition.
+            if let Some((_, entry)) = self.data.clusters.remove(cluster_name) {
+                if let Some(cluster) = entry.data {
+                    for dns_name in cluster.dns_names() {
+                        self.dns.remove_name(dns_name);
+                    }
                 }
             }
         }
+        let dns = self.dns.collect();
 
         (changes, dns)
     }
@@ -730,13 +692,33 @@ impl Cache {
     /// Returns an error for each resource that could not be inserted.
     /// Successfully parsed resources are visible to readers as soon as they're
     /// inserted.
-    pub(crate) fn insert(&mut self, resources: ResourceVec) -> Vec<ResourceError> {
-        match resources {
-            ResourceVec::Cluster(clusters) => self.insert_clusters(clusters),
-            ResourceVec::ClusterLoadAssignment(clas) => self.insert_load_assignments(clas),
-            ResourceVec::Listener(listeners) => self.insert_listeners(listeners),
-            ResourceVec::RouteConfiguration(rcs) => self.insert_route_configs(rcs),
+    pub(crate) fn insert(
+        &mut self,
+        rtype: ResourceType,
+        resources: Vec<xds_discovery::Resource>,
+    ) -> Vec<ResourceError> {
+        macro_rules! dispatch {
+            ($($variant:pat => $field:ident),* $(,)*) => {
+                match rtype {
+                    $(
+                        $variant => insert_resources(
+                            &mut self.subs,
+                            &mut self.dns,
+                            &self.data.$field,
+                            rtype,
+                            resources,
+                        ),
+                    )*
+                }
+            }
         }
+
+        dispatch!(
+            ResourceType::Cluster => clusters,
+            ResourceType::ClusterLoadAssignment => load_assignments,
+            ResourceType::Listener => listeners,
+            ResourceType::RouteConfiguration => route_configs,
+        )
     }
 
     /// Remove a list of resources from cache by name.
@@ -750,7 +732,7 @@ impl Cache {
     /// that it may have subscribed us to. Note that newly-orphaned resources
     /// may not be fully removed from cache until the next call to
     /// [Cache::collect].
-    pub(crate) fn remove(&mut self, rtype: ResourceType, names: &[String]) {
+    pub(crate) fn remove(&mut self, rtype: ResourceType, names: &[ResourceName]) {
         macro_rules! tombstone_all {
             ($data:ident, $rtype:expr, $names:expr) => {{
                 for name in $names {
@@ -767,304 +749,66 @@ impl Cache {
             ResourceType::ClusterLoadAssignment => tombstone_all!(load_assignments, rtype, names),
         }
     }
+}
 
-    fn insert_listeners(
-        &mut self,
-        listeners: Vec<(ResourceVersion, xds_listener::Listener)>,
-    ) -> Vec<ResourceError> {
-        let mut errors = Vec::new();
+// NOTE: this is not a method on Cache because borrowck can't be bothered to
+// figure out that data and subs are disjoint. it should be
+fn insert_resources<T>(
+    subs: &mut Subscriptions,
+    dns: &mut DnsNames,
+    data: &ResourceMap<T>,
+    rtype: ResourceType,
+    resources: Vec<xds_discovery::Resource>,
+) -> Vec<ResourceError>
+where
+    T: Resource,
+{
+    let mut errors = Vec::new();
 
-        for (version, listener) in listeners {
-            if !self.data.listeners.is_changed(&listener.name, &listener) {
-                continue;
-            }
-            let Some(sub) = self
-                .subs
-                .find_or_subscribe(ResourceType::Listener, &listener.name)
-            else {
-                continue;
-            };
-
-            let listener_name = listener.name.clone();
-            let api_listener = match ApiListener::from_xds(&listener_name, listener) {
-                Ok(l) => l,
-                Err(e) => {
-                    self.data
-                        .listeners
-                        .insert_error(listener_name, version.clone(), e.clone());
-                    errors.push(e);
-                    continue;
-                }
-            };
-
-            // reset all outgoing references
-            self.subs.reset_refs(sub);
-
-            match &api_listener.route_config {
-                // RDS: add a reference from this Listener to a RouteConfiguration
-                ApiListenerData::Rds(rc_name) => {
-                    self.subs
-                        .add_ref(sub, ResourceType::RouteConfiguration, rc_name.as_str());
-                }
-                // with an inline RouteConfiguration, add a reference to all of
-                // the clusters that this Listener points to.
-                ApiListenerData::Inlined(RouteConfigData::Route { clusters, .. }) => {
-                    for cluster in clusters {
-                        self.subs
-                            .add_ref(sub, ResourceType::Cluster, cluster.as_str());
-                    }
-                }
-                // policy RouteConfigurations are the *targets* of references,
-                // and shouldn't actually reference any resources themselves.
-                // the only thing we should do here is update the clusters that
-                // point at this policy.
-                ApiListenerData::Inlined(RouteConfigData::LbPolicy { action, cluster }) => {
-                    // inserting the cluster should have already subscribed to
-                    // this route implicitly! don't recreate the edge in the
-                    // other direction.
-                    //
-                    // rebuild the cluster with the new LbPolicy from this
-                    // listener. we don't have to use the ref graph here, since
-                    // we have the cluster name (effectively the parent-pointer)
-                    // in the LbPolicy.
-                    //
-                    // TODO: remove this from Listener and only have Routes serve this purpose.
-                    let version_and_xds = self.data.clusters.get(cluster.as_str()).and_then(|e| {
-                        let version = e.version();
-                        let data = e.data();
-                        version.zip(data).map(|(v, d)| (v.clone(), d.xds.clone()))
-                    });
-                    let res = match version_and_xds {
-                        Some((version, xds)) => {
-                            self.insert_cluster(version, xds, Some(Arc::clone(action)))
-                        }
-                        None => Ok(()),
-                    };
-                    if let Err(e) = res {
-                        self.data
-                            .listeners
-                            .insert_error(listener_name, version, e.clone());
-                        errors.push(e);
-                        continue;
-                    }
-                }
-            }
-
-            // do the update
-            self.subs
-                .clear_changes(ResourceType::Listener, &listener_name);
-            self.data
-                .listeners
-                .insert_ok(listener_name, version, api_listener);
-        }
-
-        errors
-    }
-
-    fn insert_clusters(
-        &mut self,
-        clusters: Vec<(ResourceVersion, xds_cluster::Cluster)>,
-    ) -> Vec<ResourceError> {
-        let mut errors = Vec::new();
-
-        for (version, cluster) in clusters {
-            if !self.data.clusters.is_changed(&cluster.name, &cluster) {
-                continue;
-            }
-
-            let lb_action = self.find_lb_action(&cluster.name);
-            if let Err(e) = self.insert_cluster(version, cluster, lb_action) {
-                errors.push(e);
-            }
-        }
-
-        errors
-    }
-
-    fn insert_cluster(
-        &mut self,
-        version: ResourceVersion,
-        cluster: xds_cluster::Cluster,
-        lb_policy: Option<Arc<xds_route::RouteAction>>,
-    ) -> Result<(), ResourceError> {
-        let Some(sub) = self
-            .subs
-            .find_or_subscribe(ResourceType::Cluster, &cluster.name)
-        else {
-            return Ok(());
+    for raw_resource in resources {
+        let Some(any) = raw_resource.resource else {
+            continue;
+        };
+        let name = raw_resource.name.into();
+        let version = raw_resource.version.into();
+        let Some(sub) = subs.find_or_subscribe(rtype, &name) else {
+            continue;
         };
 
-        let cluster_name = cluster.name.clone();
-        let cluster = match Cluster::from_xds(cluster, lb_policy.as_deref()) {
-            Ok(c) => c,
+        // parse and validate
+        let resource = match T::from_any(&any) {
+            Ok(r) => r,
             Err(e) => {
-                self.data
-                    .clusters
-                    .insert_error(cluster_name, version.clone(), e.clone());
-                return Err(e);
+                errors.push(e);
+                continue;
             }
         };
 
-        // reset all outgoing references since we know we're updating
-        self.subs.reset_refs(sub);
-
-        // point to the CLA for this cluster or start a DNS subscription for it.
-        match cluster.dns_name() {
-            Some(dns_name) => {
-                self.dns.add.insert(dns_name);
-            }
-            None => self
-                .subs
-                .add_ref(sub, ResourceType::ClusterLoadAssignment, &cluster_name),
+        // reset all outgoing edges and replace them with the new reources
+        subs.reset_refs(sub);
+        for (ref_type, name) in resource.references() {
+            subs.add_ref(sub, ref_type, &name);
         }
 
-        // point to the LB config Listener for this cluster. pointing to the Listener
-        // means that the control plane has the option of sending us either a Listener
-        // or a RouteConfig for the Lb Config.
+        // add any new DNS names to the set of tracked names.
         //
-        // TODO: make this a RouteConfig instead of a listener?
-        let lb_config_name = cluster.backend_lb.config.id.lb_config_route_name();
-        self.subs
-            .add_ref(sub, ResourceType::Listener, &lb_config_name);
-
-        // actually insert the data
-        self.subs
-            .clear_changes(ResourceType::Cluster, &cluster_name);
-        self.data.clusters.insert_ok(cluster_name, version, cluster);
-
-        Ok(())
-    }
-
-    fn find_lb_action(&self, cluster_name: &str) -> Option<Arc<xds_route::RouteAction>> {
-        let target = BackendId::from_str(cluster_name).ok()?;
-        let listener = self.data.listeners.get(&target.lb_config_route_name())?;
-
-        match &listener.data()?.route_config {
-            ApiListenerData::Rds(name) => {
-                let route_config = self.data.route_configs.get(name.as_str())?;
-                route_config.data().and_then(|rc| match &rc.data {
-                    RouteConfigData::LbPolicy { action, .. } => Some(action.clone()),
-                    _ => None,
-                })
-            }
-            ApiListenerData::Inlined(data) => match &data {
-                RouteConfigData::LbPolicy { action, .. } => Some(action.clone()),
-                _ => None,
-            },
-        }
-    }
-
-    fn insert_route_configs(
-        &mut self,
-        route_configs: Vec<(ResourceVersion, xds_route::RouteConfiguration)>,
-    ) -> Vec<ResourceError> {
-        let mut errors = Vec::new();
-
-        for (version, route_config) in route_configs {
-            let Some(sub) = self
-                .subs
-                .find_or_subscribe(ResourceType::RouteConfiguration, &route_config.name)
-            else {
-                continue;
-            };
-
-            let route_name = route_config.name.clone();
-            let route_config = match RouteConfig::from_xds(route_config) {
-                Ok(route_config) => route_config,
-                Err(e) => {
-                    self.data
-                        .route_configs
-                        .insert_error(route_name, version, e.clone());
-                    errors.push(e);
-                    continue;
-                }
-            };
-
-            match &route_config.data {
-                // add a ref to all downstream clusters
-                RouteConfigData::Route { clusters, .. } => {
-                    for cluster in clusters {
-                        self.subs
-                            .add_ref(sub, ResourceType::Cluster, cluster.as_str());
-                    }
-                }
-                // this is Lb policy, update the cluster it's attached to.
-                RouteConfigData::LbPolicy { action, cluster } => {
-                    // inserting the cluster should have already subscribed to
-                    // this route implicitly! don't recreate the edge in the
-                    // other direction.
-                    //
-                    // rebuild the cluster with the new LbPolicy from this
-                    // route. we don't have to use the ref graph here, since
-                    // we have the cluster name (effectively the parent-pointer)
-                    // in the LbPolicy.
-                    //
-                    // TODO: remove this from Listener and only have Routes serve this purpose.
-                    let version_and_xds = self.data.clusters.get(cluster.as_str()).and_then(|e| {
-                        let version = e.version();
-                        let data = e.data();
-                        version.zip(data).map(|(v, d)| (v.clone(), d.xds.clone()))
-                    });
-                    let res = match version_and_xds {
-                        Some((version, xds)) => {
-                            self.insert_cluster(version, xds, Some(Arc::clone(action)))
-                        }
-                        None => Ok(()),
-                    };
-                    if let Err(e) = res {
-                        self.data
-                            .route_configs
-                            .insert_error(route_name, version, e.clone());
-                        errors.push(e);
-                        continue;
-                    }
-                }
-            }
-
-            // complete the insert
-            self.subs
-                .clear_changes(ResourceType::RouteConfiguration, &route_name);
-            self.data
-                .route_configs
-                .insert_ok(route_name, version, route_config);
+        // NOTE: we know this is almost certainly only going to happen for
+        // clusters, but it's less annoying to do the serialization here, once,
+        // for all of these types than it is to figure out how to split the
+        // cluster-specific steps. we could pass a callback in, but that seems
+        // like basically the same thing. just accept the Vec::new call and call
+        // it a day.
+        for dns_name in resource.dns_names() {
+            dns.add_name(dns_name.clone())
         }
 
-        errors
+        // clear any pending changes for this resource - it's no longer pending
+        subs.clear_changes(rtype, &name);
+        // actually insert the thing
+        data.insert_ok(name, version, resource);
     }
 
-    fn insert_load_assignments(
-        &mut self,
-        load_assignments: Vec<(ResourceVersion, xds_endpoint::ClusterLoadAssignment)>,
-    ) -> Vec<ResourceError> {
-        let mut errors = Vec::new();
-
-        for (version, load_assignment) in load_assignments {
-            let sub = self.subs.find_or_subscribe(
-                ResourceType::ClusterLoadAssignment,
-                &load_assignment.cluster_name,
-            );
-            if sub.is_none() {
-                continue;
-            };
-
-            let cla_name = load_assignment.cluster_name.clone();
-            match LoadAssignment::from_xds(load_assignment) {
-                Ok(cla) => {
-                    self.subs
-                        .clear_changes(ResourceType::ClusterLoadAssignment, &cla_name);
-                    self.data.load_assignments.insert_ok(cla_name, version, cla);
-                }
-                Err(e) => {
-                    self.data
-                        .load_assignments
-                        .insert_error(cla_name, version, e.clone());
-                    errors.push(e);
-                }
-            };
-        }
-
-        errors
-    }
+    errors
 }
 
 /// A read-only handle to a [Cache]. `CacheReader`s are cheap to clone and
@@ -1074,112 +818,49 @@ pub(super) struct CacheReader {
     data: Arc<CacheData>,
 }
 
-impl ConfigCache for CacheReader {
-    async fn get_route<S: AsRef<str>>(&self, host: S) -> Option<Arc<Route>> {
-        let listener = self.data.listeners.get_await(host.as_ref()).await?;
-
-        match &listener.data()?.route_config {
-            ApiListenerData::Rds(name) => {
-                let route_config = self.data.route_configs.get_await(name.as_str()).await?;
-
-                match &route_config.data()?.data {
-                    RouteConfigData::Route { route, .. } => Some(route.clone()),
-                    _ => None,
-                }
+macro_rules! impl_get {
+    ($method_name:ident($field_name:ident)=>$ret:ty) => {
+        impl CacheReader {
+            pub async fn $method_name(&self, name: &ResourceName) -> Option<Arc<$ret>> {
+                self.data
+                    .$field_name
+                    .get_await(name)
+                    .await
+                    .and_then(|e| e.data.as_ref().map(|d| Arc::clone(&d)))
             }
-            ApiListenerData::Inlined(data) => match &data {
-                RouteConfigData::Route { route, .. } => Some(route.clone()),
-                _ => None,
-            },
         }
-    }
-
-    async fn get_backend(&self, id: &BackendId) -> Option<Arc<BackendLb>> {
-        let cluster = self.data.clusters.get_await(&id.name()).await?;
-        let cluster_data = cluster.data()?;
-        Some(cluster_data.backend_lb.clone())
-    }
-
-    async fn get_endpoints(&self, id: &BackendId) -> Option<Arc<EndpointGroup>> {
-        let la = self.data.load_assignments.get_await(&id.name()).await?;
-        let la_data = la.data()?;
-        Some(la_data.endpoint_group.clone())
-    }
+    };
 }
 
+impl_get!(get_listener(listeners)=>ApiListener);
+impl_get!(get_route_config(route_configs)=>RouteConfiguration);
+impl_get!(get_cluster(clusters)=>Cluster);
+impl_get!(get_load_assignment(load_assignments)=>LoadAssignment);
+
 impl CacheReader {
-    /// Iterate over all routes currently in cache.
-    pub(super) fn iter_routes(&self) -> impl Iterator<Item = Arc<Route>> + '_ {
-        let listener_routes = self.data.listeners.iter().filter_map(|entry| {
-            entry
-                .data()
-                .and_then(|api_listener| match &api_listener.route_config {
-                    ApiListenerData::Inlined(RouteConfigData::Route { route, .. }) => {
-                        Some(route.clone())
-                    }
-                    _ => None,
-                })
-        });
-
-        let route_config_routes = self.data.route_configs.iter().filter_map(|entry| {
-            entry.data().and_then(|rc| match &rc.data {
-                RouteConfigData::Route { route, .. } => Some(route.clone()),
-                _ => None,
-            })
-        });
-
-        listener_routes.chain(route_config_routes)
-    }
-
-    /// Iterate over all backends currently in cache.
-    pub(super) fn iter_backends(&self) -> impl Iterator<Item = Arc<BackendLb>> + '_ {
-        self.data
-            .clusters
-            .iter()
-            .filter_map(|entry| entry.data().map(|cluster| cluster.backend_lb.clone()))
-    }
-
-    /// Iterate over all xDS currently in cache.
     pub(super) fn iter_xds(&self) -> impl Iterator<Item = XdsConfig> + '_ {
-        use prost::Name;
+        self.data.listeners.iter().map(|entry| {
+            let name = entry.key().to_string();
+            let type_url = ResourceType::Listener.type_url().to_string();
+            let version = entry.version.clone();
+            let xds = entry.raw_msg.clone();
+            let last_error = entry.last_error.clone().map(|(v, e)| (v, e.to_string()));
 
-        macro_rules! any_iter {
-            ($field:ident, $xds_type:ty) => {
-                self.data.$field.iter().map(|entry| {
-                    let name = entry.name().to_string();
-                    let type_url = <$xds_type>::type_url();
-                    let version = entry.version().cloned();
-
-                    let xds = entry.data().map(|data| {
-                        protobuf::Any::from_msg(data.xds()).expect("generated invalid protobuf")
-                    });
-                    let last_error = entry.last_error().map(|(v, e)| (v.clone(), e.to_string()));
-
-                    XdsConfig {
-                        name,
-                        type_url,
-                        version,
-                        xds,
-                        last_error,
-                    }
-                })
-            };
-        }
-
-        any_iter!(listeners, xds_listener::Listener)
-            .chain(any_iter!(route_configs, xds_route::RouteConfiguration))
-            .chain(any_iter!(clusters, xds_cluster::Cluster))
-            .chain(any_iter!(
-                load_assignments,
-                xds_endpoint::ClusterLoadAssignment
-            ))
+            XdsConfig {
+                name,
+                type_url,
+                version,
+                xds,
+                last_error,
+            }
+        })
     }
 }
 
 #[cfg(test)]
 mod test {
-    use junction_api::Service;
     use pretty_assertions::assert_eq;
+    use xds_api::pb::envoy::config::listener::v3 as xds_listener;
 
     use super::*;
     use crate::xds::test as xds_test;
@@ -1199,25 +880,39 @@ mod test {
         assert_sync::<Cache>();
     }
 
-    macro_rules! collect_str {
+    macro_rules! resource_names {
         ($($arg:expr),* $(,)?) => {
             [$(
-                    $arg.to_string(),
+                ResourceName::from($arg.to_string()),
             )*].into_iter().collect()
         }
     }
 
-    macro_rules! collect_kv_str {
+    macro_rules! versions {
         ($(($k:expr, $v:expr)),* $(,)?) => {
             [$(
-                ($k.to_string(), $v.to_string()),
+                (ResourceName::from($k.to_string()), ResourceVersion::from($v.to_string())),
             )*].into_iter().collect()
         }
     }
 
     #[track_caller]
-    fn assert_insert(errors: Vec<ResourceError>) {
-        assert!(errors.is_empty(), "errors is not empty: {errors:?}");
+    fn assert_insert(cache: &mut Cache, resources: Vec<xds_discovery::Resource>) {
+        let first = resources.first().expect("expected a non-empty vec");
+        let rtype = ResourceType::from_type_url(
+            &first
+                .resource
+                .as_ref()
+                .expect("expected a Resource")
+                .type_url,
+        )
+        .expect("expected a valid type url");
+
+        assert_eq!(
+            cache.insert(rtype, resources),
+            vec![],
+            "errors is not empty",
+        );
     }
 
     #[test]
@@ -1240,36 +935,44 @@ mod test {
 
     #[test]
     fn test_insert_listener_lds_explicit() {
-        let listeners = ResourceVec::from_listeners(
-            "123".into(),
+        let mut cache = Cache::default();
+        cache.set_wildcard(ResourceType::Listener, false);
+
+        // insert with no errors, and no effects
+        assert_insert(
+            &mut cache,
             vec![xds_test::listener!(
                 "listener.example.svc.cluster.local",
                 "example-route",
             )],
         );
-
-        let mut cache = Cache::default();
-        cache.set_wildcard(ResourceType::Listener, false);
-
-        // insert with no errors, and no effects
-        assert_insert(cache.insert(listeners.clone()));
         let (resources, dns) = cache.collect();
         assert_eq!(resources, EnumMap::default());
         assert!(dns.is_noop());
 
-        // subscribe and clear the resulting subs for the listener
-        cache.subscribe(ResourceType::Listener, "listener.example.svc.cluster.local");
+        // subscribe and clear the resulting subs for the listener. should be
+        // able to insert with no errors and generate the subscription to the
+        // cluster
+        cache.subscribe(
+            ResourceType::Listener,
+            &ResourceName::from("listener.example.svc.cluster.local"),
+        );
         let _ = cache.collect();
 
-        // insert with no errors and generate the subscription to the cluster
-        assert_insert(cache.insert(listeners));
+        assert_insert(
+            &mut cache,
+            vec![xds_test::listener!(
+                "listener.example.svc.cluster.local",
+                "example-route",
+            )],
+        );
         let (resources, dns) = cache.collect();
         assert!(dns.is_noop());
         assert_eq!(
             resources,
             enum_map::enum_map! {
                 ResourceType::RouteConfiguration => Changes {
-                    added: collect_str!["example-route"],
+                    added: resource_names!["example-route"],
                     removed: BTreeSet::new(),
                  },
                 _ => Changes::default(),
@@ -1278,13 +981,13 @@ mod test {
 
         // listener subscriptions should be the listener subscribed to versions
         // and should report the version of the listener we have.
-        assert_eq!(
-            cache.subscriptions(ResourceType::Listener),
-            vec!["listener.example.svc.cluster.local"]
-        );
+        assert_eq!(cache.subscriptions(ResourceType::Listener), {
+            let names: Vec<_> = resource_names!["listener.example.svc.cluster.local"];
+            names
+        });
         assert_eq!(
             cache.versions(ResourceType::Listener),
-            collect_kv_str![("listener.example.svc.cluster.local", "123")]
+            versions![("listener.example.svc.cluster.local", "v123")]
         );
     }
 
@@ -1292,13 +995,13 @@ mod test {
     fn test_insert_listener_lds_wildcard() {
         let mut cache = Cache::default();
 
-        assert_insert(cache.insert(ResourceVec::from_listeners(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![xds_test::listener!(
                 "listener.example.svc.cluster.local",
                 "example-route",
             )],
-        )));
+        );
 
         // check that we've added an explicit subscription to the new cluster
         // and that there are no DNS updates.
@@ -1308,7 +1011,7 @@ mod test {
             resources,
             enum_map::enum_map! {
                 ResourceType::RouteConfiguration => Changes {
-                    added: collect_str!["example-route"],
+                    added: resource_names!["example-route"],
                     removed: BTreeSet::new(),
                  },
                 _ => Changes::default(),
@@ -1321,7 +1024,7 @@ mod test {
         assert!(cache.subscriptions(ResourceType::Listener).is_empty());
         assert_eq!(
             cache.versions(ResourceType::Listener),
-            collect_kv_str![("listener.example.svc.cluster.local", "123")]
+            versions![("listener.example.svc.cluster.local", "v123")]
         );
     }
 
@@ -1329,8 +1032,8 @@ mod test {
     fn test_insert_listener_lds_inline_rds() {
         let mut cache = Cache::default();
 
-        assert_insert(cache.insert(ResourceVec::from_listeners(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![xds_test::listener!(
                 "listener.example.svc.cluster.local:80",
                 "example-route" => [xds_test::vhost!(
@@ -1339,7 +1042,7 @@ mod test {
                     [xds_test::route!(default "cluster.example:8008")],
                 )],
             )],
-        )));
+        );
 
         // check that we've added an explicit subscription to the new cluster
         // and that there are no DNS updates.
@@ -1349,7 +1052,7 @@ mod test {
             resources,
             enum_map::enum_map! {
                 ResourceType::Cluster => Changes {
-                    added: collect_str!["cluster.example:8008"],
+                    added: resource_names!["cluster.example:8008"],
                     removed: BTreeSet::new(),
                  },
                 _ => Changes::default(),
@@ -1360,22 +1063,24 @@ mod test {
     #[test]
     fn test_insert_listener_invalid() {
         let mut cache = Cache::default();
-        cache.subscribe(ResourceType::Listener, "potato");
+        cache.subscribe(ResourceType::Listener, &ResourceName::from("potato"));
         // clear subscription changes
         let _ = cache.collect();
 
         // the invalid insert should return an error
-        let errors = cache.insert(ResourceVec::from_listeners(
-            "123".into(),
-            [xds_listener::Listener {
-                name: "potato".to_string(),
-                ..Default::default()
-            }],
-        ));
+        let invalid_listener = xds_test::xds_resource(
+            "potato".to_string(),
+            "v123".to_string(),
+            xds_listener::Listener::default(),
+        );
+        let errors = cache.insert(ResourceType::Listener, vec![invalid_listener]);
         assert_eq!(errors.len(), 1);
 
         // should not have changed the cache
-        assert_eq!(cache.subscriptions(ResourceType::Listener), vec!["potato"]);
+        assert_eq!(cache.subscriptions(ResourceType::Listener), {
+            let names: Vec<_> = resource_names!["potato"];
+            names
+        });
         assert!(cache.versions(ResourceType::Listener).is_empty());
         let (resources, dns) = cache.collect();
         assert_eq!(resources, Default::default());
@@ -1386,36 +1091,20 @@ mod test {
     fn test_insert_cluster_cds_wildcard() {
         let mut cache = Cache::default();
 
-        let kube_backend = BackendId {
-            service: Service::kube("default", "whatever").unwrap(),
-            port: 7890,
-        };
-        let dns_backend = BackendId {
-            service: Service::dns("cluster.example").unwrap(),
-            port: 4433,
-        };
-
-        assert_insert(cache.insert(ResourceVec::from_clusters(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![
-                xds_test::cluster!(dns_backend.name().leak()),
-                xds_test::cluster!(kube_backend.name().leak()),
+                xds_test::cluster!(logical_dns => "cluster.example", 7890),
+                xds_test::cluster!(eds => "whatever.default.svc.cluster.local:4433"),
             ],
-        )));
+        );
 
         let (resources, dns) = cache.collect();
         assert_eq!(
             resources,
             enum_map::enum_map! {
-                ResourceType::Listener => Changes {
-                    added: collect_str!(
-                        kube_backend.lb_config_route_name(),
-                        dns_backend.lb_config_route_name(),
-                    ),
-                    ..Default::default()
-                },
                 ResourceType::ClusterLoadAssignment => Changes {
-                    added: collect_str![kube_backend.name()],
+                    added: resource_names!["whatever.default.svc.cluster.local:4433"],
                     ..Default::default()
                  },
                 _ => Changes::default(),
@@ -1424,7 +1113,7 @@ mod test {
         assert_eq!(
             dns,
             DnsUpdates {
-                add: BTreeSet::from_iter([(Hostname::from_static("cluster.example"), 4433)]),
+                add: BTreeSet::from_iter([Hostname::from_static("cluster.example")]),
                 ..Default::default()
             },
         );
@@ -1433,65 +1122,52 @@ mod test {
         assert!(cache.subscriptions(ResourceType::Cluster).is_empty());
         assert_eq!(
             cache.versions(ResourceType::Cluster),
-            collect_kv_str![(kube_backend.name(), "123"), (dns_backend.name(), "123"),]
+            versions![
+                ("cluster.example:7890", "v123"),
+                ("whatever.default.svc.cluster.local:4433", "v123"),
+            ]
         );
     }
 
     #[test]
-    fn test_insert_cluster_cds_explicit() {
+    fn insert_cluster_cds_no_wildcard() {
         let mut cache = Cache::default();
         cache.set_wildcard(ResourceType::Cluster, false);
 
-        let kube_backend = BackendId {
-            service: Service::kube("default", "whatever").unwrap(),
-            port: 7890,
-        };
-        let dns_backend = BackendId {
-            service: Service::dns("cluster.example").unwrap(),
-            port: 4433,
-        };
-
         // subscribe only to the kube backend, clear changes
-        cache.subscribe(ResourceType::Cluster, &kube_backend.name());
+        cache.subscribe(
+            ResourceType::Cluster,
+            &ResourceName::from("whatever.default.svc.cluster.local:8008"),
+        );
         let _ = cache.collect();
 
         // insert both clusters at the same version
-        assert_insert(cache.insert(ResourceVec::from_clusters(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![
-                xds_test::cluster!(dns_backend.name().leak()),
-                xds_test::cluster!(kube_backend.name().leak()),
+                xds_test::cluster!(eds => "whatever.default.svc.cluster.local:8008"),
+                xds_test::cluster!(logical_dns => "example.com", 80),
             ],
-        )));
+        );
 
-        // only the kbue cluster should have had an effect, no DNS updates
+        // only the subscribed cluster should have had an effect
         let (resources, dns) = cache.collect();
         assert_eq!(
             resources,
             enum_map::enum_map! {
-                ResourceType::Listener => Changes {
-                    added: collect_str!(
-                        kube_backend.lb_config_route_name(),
-                    ),
-                    ..Default::default()
-                },
                 ResourceType::ClusterLoadAssignment => Changes {
-                    added: collect_str![kube_backend.name()],
+                    added: resource_names!("whatever.default.svc.cluster.local:8008"),
                     ..Default::default()
                  },
                 _ => Changes::default(),
             }
         );
         assert!(dns.is_noop());
-
-        // should have the explicit subscription to one cluster and one version
-        assert_eq!(
-            cache.subscriptions(ResourceType::Cluster),
-            vec![kube_backend.name()],
-        );
+        let expected: Vec<_> = resource_names!["whatever.default.svc.cluster.local:8008"];
+        assert_eq!(cache.subscriptions(ResourceType::Cluster), expected);
         assert_eq!(
             cache.versions(ResourceType::Cluster),
-            collect_kv_str![(kube_backend.name(), "123")]
+            versions![("whatever.default.svc.cluster.local:8008", "v123")],
         );
     }
 
@@ -1509,35 +1185,29 @@ mod test {
         let mut cache = Cache::default();
 
         // inserting with no subscription is empty
-        assert_insert(cache.insert(ResourceVec::from_route_configs(
-            "123".into(),
-            vec![route_config.clone()],
-        )));
+        assert_insert(&mut cache, vec![route_config.clone()]);
         let (resources, dns) = cache.collect();
         assert!(resources.values().all(|c| c.is_empty()));
         assert!(dns.is_noop());
         assert!(cache.data.route_configs.is_empty());
 
         // insert listener, should now be able to insert the route config
-        assert_insert(cache.insert(ResourceVec::from_listeners(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![xds_test::listener!(
                 "listener.example.svc.cluster.local",
                 "example-route"
             )],
-        )));
+        );
 
         // should now have a new reference to a cluster
-        assert_insert(cache.insert(ResourceVec::from_route_configs(
-            "123".into(),
-            vec![route_config],
-        )));
+        assert_insert(&mut cache, vec![route_config]);
         let (resources, dns) = cache.collect();
         assert_eq!(
             resources,
             enum_map::enum_map! {
                 ResourceType::Cluster => Changes {
-                    added: collect_str!["cluster.example:8008"],
+                    added: resource_names!["cluster.example:8008"],
                     ..Default::default()
                 },
                 _ => Changes::default(),
@@ -1545,13 +1215,13 @@ mod test {
         );
         assert!(dns.is_noop());
 
-        assert_eq!(
-            cache.subscriptions(ResourceType::RouteConfiguration),
-            vec!["example-route"],
-        );
+        assert_eq!(cache.subscriptions(ResourceType::RouteConfiguration), {
+            let names: Vec<_> = resource_names!["example-route"];
+            names
+        });
         assert_eq!(
             cache.versions(ResourceType::RouteConfiguration),
-            collect_kv_str![("example-route", 123)],
+            versions![("example-route", "v123")],
         );
     }
 
@@ -1567,136 +1237,132 @@ mod test {
         );
 
         let mut cache = Cache::default();
-        cache.subscribe(ResourceType::RouteConfiguration, "example-route");
+        cache.subscribe(
+            ResourceType::RouteConfiguration,
+            &ResourceName::from("example-route"),
+        );
 
         // add the route
-        assert_insert(cache.insert(ResourceVec::from_route_configs(
-            "123".into(),
-            vec![route_config.clone()],
-        )));
+        assert_insert(&mut cache, vec![route_config.clone()]);
         let (resources, dns) = cache.collect();
         assert_eq!(
             resources,
             enum_map::enum_map! {
                 ResourceType::Cluster => Changes {
-                    added: collect_str!["cluster.example:8008"],
+                    added: resource_names!["cluster.example:8008"],
                     ..Default::default()
                 },
                 _ => Changes::default(),
             }
         );
         assert!(dns.is_noop());
-        assert_eq!(
-            cache.subscriptions(ResourceType::RouteConfiguration),
-            vec!["example-route"],
-        );
-        assert_eq!(
-            cache.subscriptions(ResourceType::Cluster),
-            vec!["cluster.example:8008"],
-        );
+        assert_eq!(cache.subscriptions(ResourceType::RouteConfiguration), {
+            let names: Vec<_> = resource_names!["example-route"];
+            names
+        });
+        assert_eq!(cache.subscriptions(ResourceType::Cluster), {
+            let names: Vec<_> = resource_names!["cluster.example:8008"];
+            names
+        });
         assert_eq!(
             cache.versions(ResourceType::RouteConfiguration),
-            collect_kv_str![("example-route", 123)],
+            versions![("example-route", "v123")],
         );
 
         // remove the route
         cache.remove(
             ResourceType::RouteConfiguration,
-            &["example-route".to_string()],
+            &[ResourceName::from("example-route")],
         );
         let (resources, dns) = cache.collect();
         assert_eq!(
             resources,
             enum_map::enum_map! {
                 ResourceType::Cluster => Changes {
-                    removed: collect_str!["cluster.example:8008"],
+                    removed: resource_names!["cluster.example:8008"],
                     ..Default::default()
                 },
                 _ => Changes::default(),
             }
         );
         assert!(dns.is_noop());
-        assert_eq!(
-            cache.subscriptions(ResourceType::RouteConfiguration),
-            vec!["example-route"],
-        );
+        assert_eq!(cache.subscriptions(ResourceType::RouteConfiguration), {
+            let names: Vec<_> = resource_names!["example-route"];
+            names
+        });
         assert!(cache.subscriptions(ResourceType::Cluster).is_empty());
 
         // remove the cluster
         //
         // NOTE: it doesn't seeem to matter if this cache.collect() is here
-        cache.remove(ResourceType::Cluster, &["cluster.example:8008".to_string()]);
+        cache.remove(
+            ResourceType::Cluster,
+            &[ResourceName::from("cluster.example:8008")],
+        );
         let _ = cache.collect();
 
         // add the route config again
-        assert_insert(cache.insert(ResourceVec::from_route_configs(
-            "123".into(),
-            vec![route_config],
-        )));
+        assert_insert(&mut cache, vec![route_config]);
         let (resources, dns) = cache.collect();
         assert_eq!(
             resources,
             enum_map::enum_map! {
                 ResourceType::Cluster => Changes {
-                    added: collect_str!["cluster.example:8008"],
+                    added: resource_names!["cluster.example:8008"],
                     ..Default::default()
                 },
                 _ => Changes::default(),
             }
         );
         assert!(dns.is_noop());
-        assert_eq!(
-            cache.subscriptions(ResourceType::RouteConfiguration),
-            vec!["example-route"],
-        );
-        assert_eq!(
-            cache.subscriptions(ResourceType::Cluster),
-            vec!["cluster.example:8008"],
-        );
+        assert_eq!(cache.subscriptions(ResourceType::RouteConfiguration), {
+            let names: Vec<_> = resource_names!["example-route"];
+            names
+        });
+        assert_eq!(cache.subscriptions(ResourceType::Cluster), {
+            let names: Vec<_> = resource_names!["cluster.example:8008"];
+            names
+        });
         assert_eq!(
             cache.versions(ResourceType::RouteConfiguration),
-            collect_kv_str![("example-route", 123)],
+            versions![("example-route", "v123")],
         );
     }
 
     #[test]
     fn test_insert_load_assignment() {
-        let kube_backend = BackendId {
-            service: Service::kube("default", "whatever").unwrap(),
-            port: 7890,
-        };
         let mut cache = Cache::default();
 
         // try to insert before being referenced
-        assert_insert(cache.insert(ResourceVec::from_load_assignments(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![xds_test::cla!(
                 "whatever.default.svc.cluster.local:7890" => {
                     "zone1" => ["1.1.1.1"]
                 }
             )],
-        )));
+        );
         let (resources, dns) = cache.collect();
         assert!(resources.values().all(|c| c.is_empty()));
         assert!(dns.is_noop());
         assert!(cache.data.load_assignments.is_empty());
 
         // insert a cluster
-        assert_insert(cache.insert(ResourceVec::from_clusters(
-            "123".into(),
-            vec![xds_test::cluster!(kube_backend.name().leak())],
-        )));
+        assert_insert(
+            &mut cache,
+            vec![xds_test::cluster!(eds => "whatever.default.svc.cluster.local:7890")],
+        );
         let _ = cache.collect();
 
         // try again
-        assert_insert(cache.insert(ResourceVec::from_load_assignments(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![xds_test::cla!(
                 "whatever.default.svc.cluster.local:7890" => {
                     "zone1" => ["1.1.1.1"]
                 }
             )],
-        )));
+        );
 
         // should be inserted, but won't cause changes
         let (resources, dns) = cache.collect();
@@ -1704,31 +1370,37 @@ mod test {
         assert!(dns.is_noop());
         assert_eq!(
             cache.versions(ResourceType::ClusterLoadAssignment),
-            collect_kv_str![("whatever.default.svc.cluster.local:7890", "123")]
+            versions![("whatever.default.svc.cluster.local:7890", "v123")]
         );
     }
 
     #[test]
-    fn test_remove_listener_explicit() {
+    fn test_remove_listener_no_wildcard() {
         let mut cache = Cache::default();
         cache.set_wildcard(ResourceType::Cluster, false);
         cache.set_wildcard(ResourceType::Listener, false);
 
         // subscribe to two listeners
-        cache.subscribe(ResourceType::Listener, "listener.example.svc.cluster.local");
-        cache.subscribe(ResourceType::Listener, "listener.local");
+        cache.subscribe(
+            ResourceType::Listener,
+            &ResourceName::from("listener.example.svc.cluster.local"),
+        );
+        cache.subscribe(
+            ResourceType::Listener,
+            &ResourceName::from("listener.local"),
+        );
         let _ = cache.collect();
 
         // insert a listener -> route -> cluster -> dns chain of configuration
-        assert_insert(cache.insert(ResourceVec::from_listeners(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![xds_test::listener!(
                 "listener.example.svc.cluster.local",
                 "example-route",
             )],
-        )));
-        assert_insert(cache.insert(ResourceVec::from_route_configs(
-            "123".into(),
+        );
+        assert_insert(
+            &mut cache,
             vec![xds_test::route_config!(
                 "example-route",
                 vec![xds_test::vhost!(
@@ -1737,59 +1409,49 @@ mod test {
                     [xds_test::route!(default "cluster.example:8008")]
                 )]
             )],
-        )));
-        assert_insert(cache.insert(ResourceVec::from_clusters(
-            "123".into(),
-            vec![xds_test::cluster!("cluster.example:8008")],
-        )));
-        assert_insert(cache.insert(ResourceVec::from_listeners(
-            "123".into(),
-            vec![xds_test::listener!(
-                "cluster.example.lb.jct:8008",
-                "lb-route" => [xds_test::vhost!(
-                    "lb-vhost",
-                    ["cluster.example.lb.jct:8080"],
-                    [xds_test::route!(default "cluster.example:8008")],
-                )],
-            )],
-        )));
+        );
+        assert_insert(
+            &mut cache,
+            vec![xds_test::cluster!(logical_dns => "cluster.example", 8008)],
+        );
 
         // check that the first set of resources makes sense
-        let _ = cache.collect();
-        assert_eq!(
-            cache.versions(ResourceType::Cluster),
-            collect_kv_str![("cluster.example:8008", "123")],
-        );
+        let _ = dbg!(cache.collect());
         assert_eq!(
             cache.versions(ResourceType::Listener),
-            collect_kv_str![
-                ("listener.example.svc.cluster.local", "123"),
-                ("cluster.example.lb.jct:8008", "123"),
-            ],
+            versions![("listener.example.svc.cluster.local", "v123")],
         );
         assert_eq!(
             cache.versions(ResourceType::RouteConfiguration),
-            collect_kv_str![("example-route", "123")],
+            versions![("example-route", "v123")],
+        );
+        assert_eq!(
+            cache.versions(ResourceType::Cluster),
+            versions![("cluster.example:8008", "v123")],
         );
         assert!(cache
             .versions(ResourceType::ClusterLoadAssignment)
             .is_empty());
+        assert_eq!(
+            Vec::<ResourceName>::new(),
+            cache.subscriptions(ResourceType::ClusterLoadAssignment),
+        );
 
         // add the second listener/route-config pointing to the same cluster
         // and remove the first one
         cache.remove(
             ResourceType::Listener,
-            &["listener.example.svc.cluster.local".to_string()],
+            &[ResourceName::from("listener.example.svc.cluster.local")],
         );
-        assert_insert(cache.insert(ResourceVec::from_listeners(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![xds_test::listener!(
                 "listener.local",
                 "better-example-route",
             )],
-        )));
-        assert_insert(cache.insert(ResourceVec::from_route_configs(
-            "123".into(),
+        );
+        assert_insert(
+            &mut cache,
             vec![xds_test::route_config!(
                 "better-example-route",
                 vec![xds_test::vhost!(
@@ -1798,7 +1460,7 @@ mod test {
                     [xds_test::route!(default "cluster.example:8008")]
                 )]
             )],
-        )));
+        );
 
         // should add a remove for the RouteConfig. the cache is still subscribed
         // to the removed Listener, so it shouldn't appear here.
@@ -1807,7 +1469,7 @@ mod test {
             resources,
             enum_map::enum_map! {
                 ResourceType::RouteConfiguration => Changes {
-                    removed: collect_str!("example-route"),
+                    removed: resource_names!["example-route"],
                     ..Default::default()
                 },
                 _ => Changes::default()
@@ -1818,40 +1480,37 @@ mod test {
         // cache should only contain the data versions for what's there, but
         // should have subscriptions to the original two listeners and the
         // cluster lb config listener
-        assert_eq!(
-            cache.subscriptions(ResourceType::Listener),
-            vec![
-                "listener.example.svc.cluster.local",
-                "listener.local",
-                "cluster.example.lb.jct:8008",
-            ],
-        );
+        assert_eq!(cache.subscriptions(ResourceType::Listener), {
+            let names: Vec<_> =
+                resource_names!["listener.example.svc.cluster.local", "listener.local",];
+            names
+        },);
 
         assert_eq!(
             cache.versions(ResourceType::Listener),
-            collect_kv_str![
-                ("listener.local", "123"),
-                ("cluster.example.lb.jct:8008", "123"),
-            ],
+            versions![("listener.local", "v123")],
         );
         assert_eq!(
             cache.versions(ResourceType::RouteConfiguration),
-            collect_kv_str![("better-example-route", "123")],
+            versions![("better-example-route", "v123")],
         );
         assert_eq!(
             cache.versions(ResourceType::Cluster),
-            collect_kv_str![("cluster.example:8008", "123")],
+            versions![("cluster.example:8008", "v123")],
         );
 
         // removing the other listener should drop all data from cache,
         // but keep both subscriptions.
-        cache.remove(ResourceType::Listener, &["listener.local".to_string()]);
+        cache.remove(
+            ResourceType::Listener,
+            &[ResourceName::from("listener.local")],
+        );
         let (resources, dns) = cache.collect();
         assert_eq!(
             dns,
             DnsUpdates {
                 add: BTreeSet::new(),
-                remove: [(Hostname::from_static("cluster.example"), 8008)]
+                remove: [Hostname::from_static("cluster.example")]
                     .into_iter()
                     .collect(),
                 sync: false,
@@ -1862,25 +1521,25 @@ mod test {
             resources,
             enum_map::enum_map! {
                 ResourceType::Listener => Changes {
-                    removed: collect_str!("cluster.example.lb.jct:8008"),
                     ..Default::default()
                 },
                 ResourceType::RouteConfiguration => Changes {
-                    removed: collect_str!("better-example-route"),
+                    removed: resource_names!("better-example-route"),
                     ..Default::default()
                 },
                 ResourceType::Cluster => Changes {
-                    removed: collect_str!("cluster.example:8008"),
+                    removed: resource_names!("cluster.example:8008"),
                     ..Default::default()
                 },
                 ResourceType::ClusterLoadAssignment => Changes::default(),
             }
         );
 
-        assert_eq!(
-            cache.subscriptions(ResourceType::Listener),
-            vec!["listener.example.svc.cluster.local", "listener.local"],
-        );
+        assert_eq!(cache.subscriptions(ResourceType::Listener), {
+            let names: Vec<_> =
+                resource_names!["listener.example.svc.cluster.local", "listener.local"];
+            names
+        });
         for &rtype in ResourceType::all() {
             assert_eq!(cache.versions(rtype), HashMap::new());
         }
@@ -1893,19 +1552,22 @@ mod test {
         cache.set_wildcard(ResourceType::Listener, true);
 
         // subscribe to one listener
-        cache.subscribe(ResourceType::Listener, "listener.example.svc.cluster.local");
+        cache.subscribe(
+            ResourceType::Listener,
+            &ResourceName::from("listener.example.svc.cluster.local"),
+        );
         let _ = cache.collect();
 
         // insert two listener->route pairs pointing at the same cluster
-        assert_insert(cache.insert(ResourceVec::from_listeners(
-            "123".into(),
+        assert_insert(
+            &mut cache,
             vec![
                 xds_test::listener!("listener.example.svc.cluster.local", "example-route"),
                 xds_test::listener!("listener.local", "better-example-route"),
             ],
-        )));
-        assert_insert(cache.insert(ResourceVec::from_route_configs(
-            "123".into(),
+        );
+        assert_insert(
+            &mut cache,
             vec![
                 xds_test::route_config!(
                     "example-route",
@@ -1924,40 +1586,28 @@ mod test {
                     )]
                 ),
             ],
-        )));
-        assert_insert(cache.insert(ResourceVec::from_clusters(
-            "123".into(),
-            vec![xds_test::cluster!("cluster.example:8008")],
-        )));
-        assert_insert(cache.insert(ResourceVec::from_listeners(
-            "123".into(),
-            vec![xds_test::listener!(
-                "cluster.example.lb.jct:8008",
-                "lb-route" => [xds_test::vhost!(
-                    "lb-vhost",
-                    ["cluster.example.lb.jct:8080"],
-                    [xds_test::route!(default "cluster.example:8008")],
-                )],
-            )],
-        )));
+        );
+        assert_insert(
+            &mut cache,
+            vec![xds_test::cluster!(logical_dns => "cluster.example", 8008)],
+        );
 
         // check that the first set of resources makes sense
         let _ = cache.collect();
         assert_eq!(
             cache.versions(ResourceType::Cluster),
-            collect_kv_str![("cluster.example:8008", "123")],
+            versions![("cluster.example:8008", "v123")],
         );
         assert_eq!(
             cache.versions(ResourceType::Listener),
-            collect_kv_str![
-                ("listener.local", "123"),
-                ("listener.example.svc.cluster.local", "123"),
-                ("cluster.example.lb.jct:8008", "123"),
+            versions![
+                ("listener.local", "v123"),
+                ("listener.example.svc.cluster.local", "v123"),
             ],
         );
         assert_eq!(
             cache.versions(ResourceType::RouteConfiguration),
-            collect_kv_str![("example-route", "123"), ("better-example-route", "123")],
+            versions![("example-route", "v123"), ("better-example-route", "v123")],
         );
         assert!(cache
             .versions(ResourceType::ClusterLoadAssignment)
@@ -1966,7 +1616,7 @@ mod test {
         // remove the explicitly subscribed listener
         cache.remove(
             ResourceType::Listener,
-            &["listener.example.svc.cluster.local".to_string()],
+            &[ResourceName::from("listener.example.svc.cluster.local")],
         );
 
         let (resources, dns) = cache.collect();
@@ -1974,7 +1624,7 @@ mod test {
             resources,
             enum_map::enum_map! {
                 ResourceType::RouteConfiguration => Changes {
-                    removed: collect_str!("example-route"),
+                    removed: resource_names!["example-route"],
                     ..Default::default()
                 },
                 _ => Changes::default()
@@ -1982,38 +1632,34 @@ mod test {
         );
         assert!(dns.is_noop());
 
-        assert_eq!(
-            cache.subscriptions(ResourceType::Listener),
-            vec![
-                "listener.example.svc.cluster.local",
-                "cluster.example.lb.jct:8008"
-            ],
-        );
-
+        assert_eq!(cache.subscriptions(ResourceType::Listener), {
+            let name: Vec<_> = resource_names!["listener.example.svc.cluster.local",];
+            name
+        });
         assert_eq!(
             cache.versions(ResourceType::Listener),
-            collect_kv_str![
-                ("listener.local", "123"),
-                ("cluster.example.lb.jct:8008", "123"),
-            ],
+            versions![("listener.local", "v123"),],
         );
         assert_eq!(
             cache.versions(ResourceType::RouteConfiguration),
-            collect_kv_str![("better-example-route", "123")],
+            versions![("better-example-route", "v123")],
         );
         assert_eq!(
             cache.versions(ResourceType::Cluster),
-            collect_kv_str![("cluster.example:8008", "123")],
+            versions![("cluster.example:8008", "v123")],
         );
 
         // removing the wildcard listener should drop the rest of the data
-        cache.remove(ResourceType::Listener, &["listener.local".to_string()]);
+        cache.remove(
+            ResourceType::Listener,
+            &[ResourceName::from("listener.local")],
+        );
         let (resources, dns) = cache.collect();
         assert_eq!(
             dns,
             DnsUpdates {
                 add: BTreeSet::new(),
-                remove: [(Hostname::from_static("cluster.example"), 8008)]
+                remove: [Hostname::from_static("cluster.example")]
                     .into_iter()
                     .collect(),
                 sync: false,
@@ -2023,25 +1669,24 @@ mod test {
             resources,
             enum_map::enum_map! {
                 ResourceType::Listener => Changes {
-                    removed: collect_str!("cluster.example.lb.jct:8008"),
                     ..Default::default()
                 },
                 ResourceType::RouteConfiguration => Changes {
-                    removed: collect_str!("better-example-route"),
+                    removed: resource_names!("better-example-route"),
                     ..Default::default()
                 },
                 ResourceType::Cluster => Changes {
-                    removed: collect_str!("cluster.example:8008"),
+                    removed: resource_names!("cluster.example:8008"),
                     ..Default::default()
                 },
                 ResourceType::ClusterLoadAssignment => Changes::default(),
             }
         );
 
-        assert_eq!(
-            cache.subscriptions(ResourceType::Listener),
-            vec!["listener.example.svc.cluster.local"],
-        );
-        assert_eq!(cache.versions(ResourceType::Listener), collect_kv_str![]);
+        assert_eq!(cache.subscriptions(ResourceType::Listener), {
+            let names: Vec<_> = resource_names!["listener.example.svc.cluster.local"];
+            names
+        },);
+        assert_eq!(cache.versions(ResourceType::Listener), versions![]);
     }
 }

@@ -27,7 +27,7 @@ use junction_api::Hostname;
 use rand::Rng;
 use tokio::sync::Notify;
 
-use crate::endpoints::EndpointGroup;
+use crate::xds::endpoints::EndpointGroup;
 
 /// An error that occurred while parsing a system DNS configuration.
 #[derive(Debug, thiserror::Error)]

@@ -33,7 +33,8 @@ use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::{FutureExt, TryStreamExt};
-use junction_api::{backend::BackendId, http::Route, Hostname, Service};
+use junction_api::Hostname;
+pub(crate) use resources::ResourceName;
 use std::{
     borrow::Cow, collections::BTreeSet, future::Future, io::ErrorKind, sync::Arc, time::Duration,
 };
@@ -53,12 +54,16 @@ use xds_api::pb::{
 };
 
 mod cache;
-
+mod load_balancer;
 mod resources;
-pub use resources::ResourceVersion;
-pub(crate) use resources::{ResourceType, ResourceVec};
 
-use crate::{dns::StdlibResolver, BackendLb, ConfigCache};
+pub use resources::ResourceVersion;
+pub(crate) use resources::{
+    clusters, endpoints, listeners, route_configs, ApiListener, Cluster, LoadAssignment,
+    ResourceType, RouteConfiguration,
+};
+
+use crate::{client::XdsCache, dns::StdlibResolver};
 
 mod csds;
 
@@ -78,16 +83,8 @@ pub struct XdsConfig {
 
 #[derive(Debug)]
 enum SubscriptionUpdate {
-    AddHosts(Vec<String>),
-    AddBackends(Vec<BackendId>),
-    AddEndpoints(Vec<BackendId>),
-
-    #[allow(unused)]
-    RemoveHosts(Vec<String>),
-    #[allow(unused)]
-    RemoveBackends(Vec<BackendId>),
-    #[allow(unused)]
-    RemoveEndpoints(Vec<BackendId>),
+    Add(ResourceType, ResourceName),
+    Remove(ResourceType, ResourceName),
 }
 
 /// A Junction ADS client that manages long-lived xDS state by connecting to a
@@ -168,57 +165,29 @@ impl AdsClient {
         csds::local_server(self.cache.clone(), port)
     }
 
-    pub(super) fn iter_routes(&self) -> impl Iterator<Item = Arc<Route>> + '_ {
-        self.cache.iter_routes()
-    }
-
-    pub(super) fn iter_backends(&self) -> impl Iterator<Item = Arc<BackendLb>> + '_ {
-        self.cache.iter_backends()
-    }
-
     pub(super) fn iter_xds(&self) -> impl Iterator<Item = XdsConfig> + '_ {
         self.cache.iter_xds()
     }
 }
 
-// TODO: the whole add-a-subscription-on-get thing is a bit werid but we don't
-// have a better signal yet. there probably is one, but we need some way to
-// distinguish between "get_endpoints was called because client.resolve_http was
-// called and its downstream of a listener" and "get_endpoints was called
-// because there is a DNS cluster in a static config".
-impl ConfigCache for AdsClient {
-    async fn get_route<S: AsRef<str>>(&self, host: S) -> Option<Arc<Route>> {
-        let hosts = vec![host.as_ref().to_string()];
-        let _ = self.subs.send(SubscriptionUpdate::AddHosts(hosts)).await;
-
-        self.cache.get_route(host).await
+impl XdsCache for AdsClient {
+    async fn subscribe(&self, rtype: self::ResourceType, name: self::ResourceName) {
+        let _ = self.subs.send(SubscriptionUpdate::Add(rtype, name));
     }
 
-    async fn get_backend(
-        &self,
-        backend: &junction_api::backend::BackendId,
-    ) -> Option<std::sync::Arc<crate::BackendLb>> {
-        let bs = vec![backend.clone()];
-        let _ = self.subs.send(SubscriptionUpdate::AddBackends(bs)).await;
-
-        self.cache.get_backend(backend).await
+    async fn get_listener(&self, name: &self::ResourceName) -> Option<Arc<self::ApiListener>> {
+        self.cache.get_listener(name).await
+    }
+    async fn get_route_config(&self, name: &ResourceName) -> Option<Arc<self::RouteConfiguration>> {
+        self.cache.get_route_config(name).await
     }
 
-    async fn get_endpoints(
-        &self,
-        backend: &junction_api::backend::BackendId,
-    ) -> Option<std::sync::Arc<crate::EndpointGroup>> {
-        let bs = vec![backend.clone()];
-        let _ = self.subs.send(SubscriptionUpdate::AddEndpoints(bs)).await;
+    async fn get_cluster(&self, target: &ResourceName) -> Option<Arc<self::Cluster>> {
+        self.cache.get_cluster(target).await
+    }
 
-        match &backend.service {
-            junction_api::Service::Dns(dns) => {
-                self.dns
-                    .get_endpoints_await(&dns.hostname, backend.port)
-                    .await
-            }
-            _ => self.cache.get_endpoints(backend).await,
-        }
+    async fn get_load_assignment(&self, name: &ResourceName) -> Option<Arc<self::LoadAssignment>> {
+        self.cache.get_load_assignment(name).await
     }
 }
 
@@ -352,7 +321,10 @@ impl AdsTask {
         let mut incoming = stream_response.into_inner();
 
         // set DNS names
-        self.dns.set_names(self.cache.dns_names());
+        //
+        // FIXME: lol, lmao, etc
+        let dns_names = self.cache.dns_names().map(|h| (h, 80));
+        self.dns.set_names(dns_names);
 
         // set up the xDS connection and start sending messages
         let (mut conn, initial_requests) =
@@ -407,6 +379,9 @@ impl AdsTask {
 // awaits until an update is recvd from either subscriptions or xds, and then
 // immediately grabs any pending updates as well. returns as soon as there's
 // nothing to immediately do and handling updates would block.
+//
+// TODO: the whole should_exit thing is weird. ignore it, keep a ref to both
+// ends of the channel, and use an explicit shutodwn token maybe?
 async fn handle_update_batch(
     conn: &mut AdsConnection<'_>,
     subs: &mut Receiver<SubscriptionUpdate>,
@@ -480,16 +455,14 @@ async fn handle_update_batch(
 }
 
 #[inline]
-fn update_dns(
-    dns: &StdlibResolver,
-    add: BTreeSet<(Hostname, u16)>,
-    remove: BTreeSet<(Hostname, u16)>,
-) {
-    for (name, port) in add {
-        dns.subscribe(name, port);
+fn update_dns(dns: &StdlibResolver, add: BTreeSet<Hostname>, remove: BTreeSet<Hostname>) {
+    for name in add {
+        // FIXME: lol, lmao, etc
+        dns.subscribe(name, 80);
     }
-    for (name, port) in remove {
-        dns.unsubscribe(&name, port);
+    for name in remove {
+        // FIXME: lol, lmao, etc
+        dns.unsubscribe(&name, 80);
     }
 }
 
@@ -562,18 +535,23 @@ impl<'a> AdsConnection<'a> {
             let initial_versions = cache.versions(rtype);
             let mut subscribe = cache.initial_subscriptions(rtype);
             if cache.is_wildcard(rtype) && !subscribe.is_empty() {
-                subscribe.push("*".to_string());
+                subscribe.push(ResourceName::wildcard());
             }
 
             if !cache.is_wildcard(rtype) && subscribe.is_empty() && initial_versions.is_empty() {
                 continue;
             }
 
+            let resource_names_subscribe = subscribe.into_iter().map(|n| n.to_string()).collect();
+            let initial_resource_versions = initial_versions
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
             requests.push(DeltaDiscoveryRequest {
                 node: node.take(),
                 type_url: rtype.type_url().to_string(),
-                resource_names_subscribe: subscribe,
-                initial_resource_versions: initial_versions,
+                resource_names_subscribe,
+                initial_resource_versions,
                 ..Default::default()
             });
         }
@@ -623,9 +601,11 @@ impl<'a> AdsConnection<'a> {
 
             let node = self.node.take();
             let (response_nonce, error_detail) = ack.map(|a| a.into_ack()).unwrap_or_default();
-            let resource_names_subscribe = changes.added.into_iter().collect();
-            let resource_names_unsubscribe = changes.removed.into_iter().collect();
 
+            let resource_names_subscribe =
+                changes.added.into_iter().map(|r| r.to_string()).collect();
+            let resource_names_unsubscribe =
+                changes.removed.into_iter().map(|r| r.to_string()).collect();
             responses.push(DeltaDiscoveryRequest {
                 node,
                 type_url: rtype.type_url().to_string(),
@@ -647,21 +627,7 @@ impl<'a> AdsConnection<'a> {
             return;
         };
 
-        // add resources
-        let resources = match ResourceVec::from_resources(rtype, resp.resources) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::trace!(err = %e, "invalid proto");
-                self.set_ack(
-                    rtype,
-                    resp.nonce,
-                    Some(format!("invalid resource: {e}").into()),
-                );
-                return;
-            }
-        };
-
-        let resource_errors = self.cache.insert(resources);
+        let resource_errors = self.cache.insert(rtype, resp.resources);
         let error = match &resource_errors[..] {
             &[] => None,
             // TOOD: actually generate a useful error message here
@@ -670,64 +636,18 @@ impl<'a> AdsConnection<'a> {
         self.set_ack(rtype, resp.nonce, error);
 
         // remove resources
-        self.cache.remove(rtype, &resp.removed_resources);
+        let removed_resources: Vec<_> = resp
+            .removed_resources
+            .into_iter()
+            .map(ResourceName::from)
+            .collect();
+        self.cache.remove(rtype, &removed_resources);
     }
 
     fn handle_subscription_update(&mut self, update: SubscriptionUpdate) {
         match update {
-            SubscriptionUpdate::AddHosts(hosts) => {
-                for host in hosts {
-                    self.cache.subscribe(ResourceType::Listener, &host);
-                }
-            }
-            SubscriptionUpdate::RemoveHosts(hosts) => {
-                for host in hosts {
-                    self.cache.unsubscribe(ResourceType::Listener, &host);
-                }
-            }
-            SubscriptionUpdate::AddBackends(backends) => {
-                for backend in backends {
-                    if let Service::Dns(dns) = &backend.service {
-                        self.cache.subscribe_dns(dns.hostname.clone(), backend.port);
-                    }
-                    self.cache.subscribe(ResourceType::Cluster, &backend.name());
-                }
-            }
-            SubscriptionUpdate::RemoveBackends(backends) => {
-                for backend in backends {
-                    if let Service::Dns(dns) = &backend.service {
-                        self.cache
-                            .unsubscribe_dns(dns.hostname.clone(), backend.port);
-                    }
-                    self.cache
-                        .unsubscribe(ResourceType::Cluster, &backend.name());
-                }
-            }
-            SubscriptionUpdate::AddEndpoints(backends) => {
-                for backend in backends {
-                    match &backend.service {
-                        Service::Dns(dns) => {
-                            self.cache.subscribe_dns(dns.hostname.clone(), backend.port);
-                        }
-                        _ => self
-                            .cache
-                            .subscribe(ResourceType::ClusterLoadAssignment, &backend.name()),
-                    }
-                }
-            }
-            SubscriptionUpdate::RemoveEndpoints(backends) => {
-                for backend in backends {
-                    match &backend.service {
-                        Service::Dns(dns) => {
-                            self.cache
-                                .unsubscribe_dns(dns.hostname.clone(), backend.port);
-                        }
-                        _ => self
-                            .cache
-                            .unsubscribe(ResourceType::ClusterLoadAssignment, &backend.name()),
-                    }
-                }
-            }
+            SubscriptionUpdate::Add(rtype, name) => self.cache.subscribe(rtype, &name),
+            SubscriptionUpdate::Remove(rtype, name) => self.cache.unsubscribe(rtype, &name),
         }
     }
 
@@ -744,10 +664,10 @@ impl<'a> AdsConnection<'a> {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct DnsUpdates {
-    add: BTreeSet<(Hostname, u16)>,
-    remove: BTreeSet<(Hostname, u16)>,
+    add: BTreeSet<Hostname>,
+    remove: BTreeSet<Hostname>,
     sync: bool,
 }
 
@@ -760,8 +680,6 @@ impl DnsUpdates {
 
 #[cfg(test)]
 mod test_ads_conn {
-    use std::collections::HashMap;
-
     use cache::Cache;
     use once_cell::sync::Lazy;
     use pretty_assertions::assert_eq;
@@ -827,8 +745,14 @@ mod test_ads_conn {
         cache.set_wildcard(ResourceType::Listener, false);
         cache.set_wildcard(ResourceType::Cluster, true);
 
-        cache.subscribe(ResourceType::Cluster, "cluster.example:7891");
-        cache.subscribe(ResourceType::ClusterLoadAssignment, "cluster.example:7891");
+        cache.subscribe(
+            ResourceType::Cluster,
+            &ResourceName::from("cluster.example:7891"),
+        );
+        cache.subscribe(
+            ResourceType::ClusterLoadAssignment,
+            &ResourceName::from("cluster.example:7891"),
+        );
 
         // only the Clusters should have the wildcard sub, CLA should not, since it's
         // not a wildcard-capable resource type
@@ -856,8 +780,14 @@ mod test_ads_conn {
         cache.set_wildcard(ResourceType::Listener, false);
         cache.set_wildcard(ResourceType::Cluster, false);
 
-        cache.subscribe(ResourceType::Cluster, "cluster.example:7891");
-        cache.subscribe(ResourceType::ClusterLoadAssignment, "cluster.example:7891");
+        cache.subscribe(
+            ResourceType::Cluster,
+            &ResourceName::from("cluster.example:7891"),
+        );
+        cache.subscribe(
+            ResourceType::ClusterLoadAssignment,
+            &ResourceName::from("cluster.example:7891"),
+        );
 
         let (_, outgoing) = new_conn(&mut cache);
         assert_eq!(
@@ -883,25 +813,34 @@ mod test_ads_conn {
         assert!(cache.is_wildcard(ResourceType::Listener));
         assert!(!cache.is_wildcard(ResourceType::RouteConfiguration));
 
-        cache.insert(ResourceVec::from_listeners(
-            "123".into(),
-            vec![xds_test::listener!("cooler.example.org", "cool-route")],
-        ));
-        cache.insert(ResourceVec::from_listeners(
-            "456".into(),
-            vec![xds_test::listener!("warmer.example.org", "warm-route")],
-        ));
-        cache.insert(ResourceVec::from_route_configs(
-            "789".into(),
+        cache.insert(
+            ResourceType::Listener,
+            vec![xds_test::listener!(
+                "cooler.example.org",
+                "123",
+                "cool-route"
+            )],
+        );
+        cache.insert(
+            ResourceType::Listener,
+            vec![xds_test::listener!(
+                "warmer.example.org",
+                "456",
+                "warm-route"
+            )],
+        );
+        cache.insert(
+            ResourceType::RouteConfiguration,
             vec![xds_test::route_config!(
                 "cool-route",
+                "789",
                 vec![xds_test::vhost!(
                     "an-vhost",
                     ["cooler.example.org"],
                     [xds_test::route!(default "cooler.example.internal:8008")]
                 )]
             )],
-        ));
+        );
 
         // both wildcard and non-wildcard should start with an empty add list
         // but resources in init
@@ -929,64 +868,30 @@ mod test_ads_conn {
     }
 
     #[test]
-    fn test_handle_subscribe_hostname() {
+    fn test_handle_subscribe_listener() {
         let mut cache = Cache::default();
         let (mut conn, _) = new_conn(&mut cache);
 
-        conn.handle_subscription_update(SubscriptionUpdate::AddHosts(vec![
-            Service::dns("website.internal").unwrap().name(),
-            Service::kube("default", "nginx")
-                .unwrap()
-                .as_backend_id(4443)
-                .name(),
-        ]));
+        conn.handle_subscription_update(SubscriptionUpdate::Add(
+            ResourceType::Listener,
+            ResourceName::from("website.internal"),
+        ));
+        conn.handle_subscription_update(SubscriptionUpdate::Add(
+            ResourceType::Cluster,
+            ResourceName::from("nginx.default.svc.cluster.local:4443"),
+        ));
 
         let (outgoing, dns) = conn.outgoing();
-        // dns should not update on listeners
         assert!(dns.is_noop());
         assert_eq!(
             outgoing,
-            vec![xds_test::req!(
-                t = ResourceType::Listener,
-                add = vec!["nginx.default.svc.cluster.local:4443", "website.internal"],
-            )]
-        );
-    }
-
-    #[test]
-    fn test_handle_subscribe_backend() {
-        let mut cache = Cache::default();
-        let (mut conn, _) = new_conn(&mut cache);
-
-        conn.handle_subscription_update(SubscriptionUpdate::AddBackends(vec![
-            Service::dns("website.internal").unwrap().as_backend_id(80),
-            Service::kube("default", "nginx")
-                .unwrap()
-                .as_backend_id(4443),
-        ]));
-
-        let (outgoing, dns) = conn.outgoing();
-        // dns shouldn't preemptively update on dns backends
-        assert_eq!(
-            dns,
-            DnsUpdates {
-                add: [(Hostname::from_static("website.internal"), 80)]
-                    .into_iter()
-                    .collect(),
-                ..Default::default()
-            }
-        );
-
-        // should generate xds for clusters
-        assert_eq!(
-            outgoing,
-            vec![xds_test::req!(
-                t = ResourceType::Cluster,
-                add = vec![
-                    "nginx.default.svc.cluster.local:4443",
-                    "website.internal:80"
-                ],
-            )]
+            vec![
+                xds_test::req!(
+                    t = ResourceType::Cluster,
+                    add = vec!["nginx.default.svc.cluster.local:4443"],
+                ),
+                xds_test::req!(t = ResourceType::Listener, add = vec!["website.internal"],),
+            ]
         );
     }
 
@@ -999,33 +904,33 @@ mod test_ads_conn {
 
         conn.handle_ads_message(xds_test::resp!(
             n = "1",
-            add = ResourceVec::from_listeners(
-                "123".into(),
-                vec![xds_test::listener!("cooler.example.org", "cool-route")],
-            ),
+            add = vec![xds_test::listener!(
+                "cooler.example.org",
+                "123",
+                "cool-route"
+            )],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "2",
-            add = ResourceVec::from_listeners(
-                "456".into(),
-                vec![xds_test::listener!("warmer.example.org", "warm-route")],
-            ),
+            add = vec![xds_test::listener!(
+                "warmer.example.org",
+                "456",
+                "warm-route"
+            )],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "3",
-            add = ResourceVec::from_route_configs(
-                "789".into(),
-                vec![xds_test::route_config!(
-                    "cool-route",
-                    vec![xds_test::vhost!(
-                        "an-vhost",
-                        ["cooler.example.org"],
-                        [xds_test::route!(default "cooler.example.internal:8008")]
-                    )]
-                )],
-            ),
+            add = vec![xds_test::route_config!(
+                "cool-route",
+                "789",
+                vec![xds_test::vhost!(
+                    "an-vhost",
+                    ["cooler.example.org"],
+                    [xds_test::route!(default "cooler.example.internal:8008")]
+                )]
+            )],
             remove = vec![],
         ));
 
@@ -1053,6 +958,14 @@ mod test_ads_conn {
         );
     }
 
+    macro_rules! resource_versions {
+        ($(($k:expr, $v:expr)),* $(,)?) => {
+            [$(
+                (ResourceName::from($k.to_string()), ResourceVersion::from($v.to_string())),
+            )*].into_iter().collect()
+        }
+    }
+
     #[test]
     fn test_handle_ads_message_listener_swap_route() {
         let mut cache = Cache::default();
@@ -1063,25 +976,24 @@ mod test_ads_conn {
         // get set up with a listener pointing to a route
         conn.handle_ads_message(xds_test::resp!(
             n = "1",
-            add = ResourceVec::from_listeners(
-                "111".into(),
-                vec![xds_test::listener!("cooler.example.org", "cool-route")],
-            ),
+            add = vec![xds_test::listener!(
+                "cooler.example.org",
+                "111",
+                "cool-route"
+            )],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "2",
-            add = ResourceVec::from_route_configs(
-                "222".into(),
-                vec![xds_test::route_config!(
-                    "cool-route",
-                    vec![xds_test::vhost!(
-                        "an-vhost",
-                        ["cooler.example.org"],
-                        [xds_test::route!(default "cooler.example.internal:8008")]
-                    )]
-                )],
-            ),
+            add = vec![xds_test::route_config!(
+                "cool-route",
+                "222",
+                vec![xds_test::vhost!(
+                    "an-vhost",
+                    ["cooler.example.org"],
+                    [xds_test::route!(default "cooler.example.internal:8008")]
+                )]
+            )],
             remove = vec![],
         ));
 
@@ -1104,11 +1016,11 @@ mod test_ads_conn {
 
         assert_eq!(
             conn.cache.versions(ResourceType::Listener),
-            HashMap::from_iter([("cooler.example.org".to_string(), "111".to_string())])
+            resource_versions![("cooler.example.org", "111")],
         );
         assert_eq!(
             conn.cache.versions(ResourceType::RouteConfiguration),
-            HashMap::from_iter([("cool-route".to_string(), "222".to_string())])
+            resource_versions![("cool-route", "222")],
         );
 
         // swap the route and immediately swap it back
@@ -1117,18 +1029,20 @@ mod test_ads_conn {
         // update and the outgoing messages should include a Listener ACK.
         conn.handle_ads_message(xds_test::resp!(
             n = "3",
-            add = ResourceVec::from_listeners(
-                "333".into(),
-                vec![xds_test::listener!("cooler.example.org", "lame-route")],
-            ),
+            add = vec![xds_test::listener!(
+                "cooler.example.org",
+                "333",
+                "lame-route"
+            )],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "4",
-            add = ResourceVec::from_listeners(
-                "444".into(),
-                vec![xds_test::listener!("cooler.example.org", "cool-route")],
-            ),
+            add = vec![xds_test::listener!(
+                "cooler.example.org",
+                "444",
+                "cool-route"
+            )],
             remove = vec![],
         ));
 
@@ -1151,19 +1065,16 @@ mod test_ads_conn {
 
         assert_eq!(
             conn.cache.versions(ResourceType::Listener),
-            HashMap::from_iter([("cooler.example.org".to_string(), "444".to_string())])
+            resource_versions![("cooler.example.org", "444")],
         );
         assert_eq!(
             conn.cache.versions(ResourceType::RouteConfiguration),
-            HashMap::from_iter([("cool-route".to_string(), "222".to_string())])
+            resource_versions![("cool-route", "222")],
         );
     }
 
     #[test]
     fn test_handle_ads_message_add_remove_add() {
-        tracing_subscriber::fmt::init();
-        tracing::trace!("HELLO?");
-
         let mut cache = Cache::default();
         assert!(cache.is_wildcard(ResourceType::Listener));
         assert!(cache.is_wildcard(ResourceType::Cluster));
@@ -1173,48 +1084,45 @@ mod test_ads_conn {
         // set up a listener -> route -> cluster resource chain
         conn.handle_ads_message(xds_test::resp!(
             n = "1",
-            add = ResourceVec::from_listeners(
-                "111".into(),
-                vec![xds_test::listener!("cooler.example.org", "cool-route")],
-            ),
+            add = vec![xds_test::listener!(
+                "cooler.example.org",
+                "111",
+                "cool-route"
+            )],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "2",
-            add = ResourceVec::from_route_configs(
-                "222".into(),
-                vec![xds_test::route_config!(
-                    "cool-route",
-                    vec![xds_test::vhost!(
-                        "an-vhost",
-                        ["cooler.example.org"],
-                        [xds_test::route!(default "cooler.example.internal:8008")]
-                    )]
-                )],
-            ),
+            add = vec![xds_test::route_config!(
+                "cool-route",
+                "222",
+                vec![xds_test::vhost!(
+                    "an-vhost",
+                    ["cooler.example.org"],
+                    [xds_test::route!(default "cooler.example.internal:8008")]
+                )]
+            )],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "3",
-            add = ResourceVec::from_clusters(
-                "333".into(),
-                vec![xds_test::cluster!("cooler.example.internal:8008"),],
-            ),
+            add = vec![xds_test::cluster!(eds => "cooler.example.internal:8008", "333")],
             remove = vec![],
         ));
         let (outgoing, _dns) = conn.outgoing();
         assert_eq!(
             outgoing,
             vec![
-                // cluster ack
+                // ack
                 xds_test::req!(t = ResourceType::Cluster, n = "3"),
-                // should try sub to the cluster lb route
+                // request
                 xds_test::req!(
-                    t = ResourceType::Listener,
-                    n = "1",
-                    add = vec!["cooler.example.internal.lb.jct:8008"]
+                    t = ResourceType::ClusterLoadAssignment,
+                    n = "",
+                    add = vec!["cooler.example.internal:8008"]
                 ),
-                // route config ack
+                // acks
+                xds_test::req!(t = ResourceType::Listener, n = "1"),
                 xds_test::req!(t = ResourceType::RouteConfiguration, n = "2"),
             ],
         );
@@ -1222,33 +1130,33 @@ mod test_ads_conn {
         // swap out the listener for a new route and remove the old route
         conn.handle_ads_message(xds_test::resp!(
             n = "4",
-            add = ResourceVec::from_listeners(
-                "444".into(),
-                vec![xds_test::listener!("cooler.example.org", "very-cool-route")],
-            ),
+            add = vec![xds_test::listener!(
+                "cooler.example.org",
+                "444",
+                "very-cool-route"
+            )],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "5",
-            add = ResourceVec::from_route_configs("444".into(), vec![]),
+            ty = ResourceType::RouteConfiguration,
             remove = vec!["very-cool-route"],
         ));
         let (outgoing, _dns) = conn.outgoing();
         assert_eq!(
             outgoing,
             vec![
-                // cluster remove
+                // cluster and CLA remove
                 xds_test::req!(
                     t = ResourceType::Cluster,
                     remove = vec!["cooler.example.internal:8008"]
                 ),
-                // listener ACK, also removes cluster lb listener
                 xds_test::req!(
-                    t = ResourceType::Listener,
-                    n = "4",
-                    add = vec![],
-                    remove = vec!["cooler.example.internal.lb.jct:8008"]
+                    t = ResourceType::ClusterLoadAssignment,
+                    remove = vec!["cooler.example.internal:8008"]
                 ),
+                // listener ack
+                xds_test::req!(t = ResourceType::Listener, n = "4"),
                 // route config add and remove
                 xds_test::req!(
                     t = ResourceType::RouteConfiguration,
@@ -1263,27 +1171,20 @@ mod test_ads_conn {
         // removes and adds the new route config.
         conn.handle_ads_message(xds_test::resp!(
             n = "6",
-            add = ResourceVec::from_clusters("444".into(), vec![]),
+            ty = ResourceType::Cluster,
             remove = vec!["cooler.example.internal:8008"],
         ));
         conn.handle_ads_message(xds_test::resp!(
-            n = "7",
-            add = ResourceVec::from_listeners("444".into(), vec![]),
-            remove = vec!["cooler.example.internal.lb.jct:8008"],
-        ));
-        conn.handle_ads_message(xds_test::resp!(
             n = "8",
-            add = ResourceVec::from_route_configs(
-                "555".into(),
-                vec![xds_test::route_config!(
-                    "very-cool-route",
-                    vec![xds_test::vhost!(
-                        "an-vhost",
-                        ["cooler.example.org"],
-                        [xds_test::route!(default "cooler.example.internal:8008")]
-                    )]
-                )],
-            ),
+            add = vec![xds_test::route_config!(
+                "very-cool-route",
+                "555",
+                vec![xds_test::vhost!(
+                    "an-vhost",
+                    ["cooler.example.org"],
+                    [xds_test::route!(default "cooler.example.internal:8008")]
+                )]
+            )],
             remove = vec![],
         ));
         let (outgoing, _dns) = conn.outgoing();
@@ -1296,8 +1197,6 @@ mod test_ads_conn {
                     n = "6",
                     add = vec!["cooler.example.internal:8008"]
                 ),
-                // ack the listener
-                xds_test::req!(t = ResourceType::Listener, n = "7"),
                 // ack the route config
                 xds_test::req!(t = ResourceType::RouteConfiguration, n = "8"),
             ],
@@ -1313,33 +1212,33 @@ mod test_ads_conn {
 
         conn.handle_ads_message(xds_test::resp!(
             n = "1",
-            add = ResourceVec::from_listeners(
-                "123".into(),
-                vec![xds_test::listener!("cooler.example.org", "cool-route")],
-            ),
+            add = vec![xds_test::listener!(
+                "cooler.example.org",
+                "123",
+                "cool-route"
+            )],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "2",
-            add = ResourceVec::from_listeners(
-                "456".into(),
-                vec![xds_test::listener!("warmer.example.org", "warm-route")],
-            ),
+            add = vec![xds_test::listener!(
+                "warmer.example.org",
+                "456",
+                "warm-route"
+            )],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "3",
-            add = ResourceVec::from_route_configs(
-                "789".into(),
-                vec![xds_test::route_config!(
-                    "cool-route",
-                    vec![xds_test::vhost!(
-                        "an-vhost",
-                        ["cooler.example.org"],
-                        [xds_test::route!(default "cooler.example.internal:8008")]
-                    )]
-                )],
-            ),
+            add = vec![xds_test::route_config!(
+                "cool-route",
+                "789",
+                vec![xds_test::vhost!(
+                    "an-vhost",
+                    ["cooler.example.org"],
+                    [xds_test::route!(default "cooler.example.internal:8008")]
+                )]
+            )],
             remove = vec![],
         ));
 
@@ -1369,7 +1268,7 @@ mod test_ads_conn {
         // the server gets a delete for the listener we already have
         conn.handle_ads_message(xds_test::resp!(
             n = "4",
-            add = ResourceVec::from_listeners("123".into(), vec![]),
+            ty = ResourceType::Listener,
             remove = vec!["warmer.example.org"],
         ));
 
@@ -1398,41 +1297,19 @@ mod test_ads_conn {
 
         conn.handle_ads_message(xds_test::resp!(
             n = "1",
-            add = ResourceVec::from_clusters(
-                "123".into(),
-                vec![
-                    xds_test::cluster!("cooler.example.org:2345"),
-                    xds_test::cluster!("thing.default.svc.cluster.local:9876"),
-                ],
-            ),
+            add = vec![
+                xds_test::cluster!(logical_dns => "cooler.example.org", 2345, "123"),
+                xds_test::cluster!(eds => "thing.default.svc.cluster.local:9876", "123"),
+            ],
             remove = vec![],
         ));
         conn.handle_ads_message(xds_test::resp!(
             n = "2",
-            add = ResourceVec::from_load_assignments(
-                "123".into(),
-                vec![xds_test::cla!(
-                    "thing.default.svc.cluster.local:9876" => {
-                        "zone1" => ["1.1.1.1"]
-                    }
-                )],
-            ),
-            remove = vec![],
-        ));
-        conn.handle_ads_message(xds_test::resp!(
-            n = "3",
-            add = ResourceVec::from_listeners("555".into(), vec![
-                xds_test::listener!("cooler.example.org.lb.jct:2345", "lb-route" => [xds_test::vhost!(
-                    "lb-vhost",
-                    ["cooler.example.org.lb.jct:2345"],
-                    [xds_test::route!(default ring_hash = "x-user", "cooler.example.org:2345")],
-                )]),
-                xds_test::listener!("thing.default.svc.cluster.local.lb.jct:9876", "lb-route" => [xds_test::vhost!(
-                    "lb-vhost",
-                    ["cooler.example.org.lb.jct:2345"],
-                    [xds_test::route!(default ring_hash = "x-user", "thing.default.svc.cluster.local:9876")],
-                )])
-            ]),
+            add = vec![xds_test::cla!(
+                "thing.default.svc.cluster.local:9876", "123" => {
+                    "zone1" => ["1.1.1.1"]
+                }
+            )],
             remove = vec![],
         ));
 
@@ -1441,9 +1318,7 @@ mod test_ads_conn {
         assert_eq!(
             dns,
             DnsUpdates {
-                add: [(Hostname::from_static("cooler.example.org"), 2345)]
-                    .into_iter()
-                    .collect(),
+                add: BTreeSet::from_iter([Hostname::from_static("cooler.example.org")]),
                 ..Default::default()
             }
         );
@@ -1453,7 +1328,6 @@ mod test_ads_conn {
             vec![
                 xds_test::req!(t = ResourceType::Cluster, n = "1"),
                 xds_test::req!(t = ResourceType::ClusterLoadAssignment, n = "2"),
-                xds_test::req!(t = ResourceType::Listener, n = "3"),
             ]
         );
     }
@@ -1468,11 +1342,20 @@ mod test_ads_conn {
         let (mut conn, outgoing) = new_conn(&mut cache);
         assert!(outgoing.is_empty());
 
-        let svc = Service::dns("website.internal").unwrap().as_backend_id(80);
-        conn.handle_subscription_update(SubscriptionUpdate::AddBackends(vec![svc]));
+        conn.handle_subscription_update(SubscriptionUpdate::Add(
+            ResourceType::Cluster,
+            ResourceName::from("foo.bar:443"),
+        ));
+        conn.handle_subscription_update(SubscriptionUpdate::Add(
+            ResourceType::Listener,
+            ResourceName::from("foo.bar:443"),
+        ));
 
         let (outgoing, _) = conn.outgoing();
         assert_eq!(outgoing[0].node.as_ref(), Some(&*TEST_NODE));
+        for msg in &outgoing[1..] {
+            assert_eq!(msg.node, None);
+        }
     }
 
     #[test]
@@ -1534,15 +1417,19 @@ mod test_ads_conn {
         let mut cache = Cache::default();
         let (mut conn, _) = new_conn(&mut cache);
 
+        let not_found = ResourceName::from("website.internal");
+
         // handle a subscription update
-        let does_not_exist = Service::dns("website.internal").unwrap().name();
-        conn.handle_subscription_update(SubscriptionUpdate::AddHosts(vec![does_not_exist.clone()]));
+        conn.handle_subscription_update(SubscriptionUpdate::Add(
+            ResourceType::Listener,
+            not_found.clone(),
+        ));
         let _ = conn.outgoing();
 
         conn.handle_ads_message(DeltaDiscoveryResponse {
             nonce: "boo".to_string(),
             type_url: ResourceType::Listener.type_url().to_string(),
-            removed_resources: vec![does_not_exist.clone()],
+            removed_resources: vec![not_found.to_string()],
             ..Default::default()
         });
 
@@ -1554,12 +1441,12 @@ mod test_ads_conn {
             vec![xds_test::req!(t = ResourceType::Listener, n = "boo")],
         );
 
-        // route should be tombstoned
-        let route = cache
+        // listener should be tombstoned
+        let listener = cache
             .reader()
-            .get_route("website.internal")
+            .get_listener(&not_found)
             .now_or_never()
             .unwrap();
-        assert_eq!(route, None);
+        assert!(listener.is_none());
     }
 }

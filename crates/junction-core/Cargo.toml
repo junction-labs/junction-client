@@ -20,6 +20,7 @@ rust-version.workspace = true
 arc-swap = { workspace = true }
 bytes = { workspace = true }
 crossbeam-skiplist = { workspace = true }
+dashmap = { workspace = true }
 enum-map = { workspace = true }
 form_urlencoded = { workspace = true }
 futures = { workspace = true }
