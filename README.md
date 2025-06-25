@@ -2,6 +2,9 @@
 
 An xDS dynamically-configurable API load-balancer library.
 
+> NOTE: We're currently overhauling the client for 0.4 to be more xDS
+forward and compatible with GRPC. This branch may be broken and unstable!
+
 ## What is it?
 
 Junction is a library that allows you to dynamically configure application 
