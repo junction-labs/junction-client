@@ -116,61 +116,51 @@ fn path_str(path: &[PathEntry]) -> String {
     buf
 }
 
+#[allow(unused)]
 impl ResourceError {
-    pub fn invalid(msg: &'static str) -> Self {
+    pub(crate) fn invalid(msg: &'static str) -> Self {
         Self {
             kind: ResourceErrorKind::Invalid(Cow::Borrowed(msg)),
             path: Vec::new(),
         }
     }
 
-    pub fn invalid_with(msg: String) -> Self {
+    pub(crate) fn invalid_with(msg: String) -> Self {
         Self {
             kind: ResourceErrorKind::Invalid(Cow::Owned(msg)),
             path: Vec::new(),
         }
     }
 
-    pub fn is_decode(&self) -> bool {
-        matches!(&self.kind, ResourceErrorKind::Decode(_))
-    }
-
-    pub fn is_invalid(&self) -> bool {
-        matches!(&self.kind, ResourceErrorKind::Invalid(_))
-    }
-
-    pub fn path(&self) -> String {
-        path_str(&self.path)
-    }
-
-    pub fn with_field(mut self, field: &'static str) -> Self {
+    pub(crate) fn with_field(mut self, field: &'static str) -> Self {
         self.path.push(PathEntry::Field(field));
         self
     }
 
-    pub fn with_index(mut self, idx: usize) -> Self {
+    pub(crate) fn with_index(mut self, idx: usize) -> Self {
         self.path.push(PathEntry::Index(idx));
         self
     }
 
     #[inline(always)]
-    pub fn with_field_index(self, field: &'static str, index: usize) -> Self {
+    pub(crate) fn with_field_index(self, field: &'static str, index: usize) -> Self {
         self.with_index(index).with_field(field)
     }
 
-    pub fn with_map_key(mut self, key: String) -> Self {
+    pub(crate) fn with_map_key(mut self, key: String) -> Self {
         self.path.push(PathEntry::MapIndex(key));
         self
     }
 
     #[inline(always)]
-    pub fn with_field_key<T: std::fmt::Display>(self, field: &'static str, key: T) -> Self {
+    pub(crate) fn with_field_key<T: std::fmt::Display>(self, field: &'static str, key: T) -> Self {
         self.with_map_key(key.to_string()).with_field(field)
     }
 }
 
 // use a trait here so we can implement methods on Result<T, Error> instead of
 // on Error directly. this makes life saner when doing ingest.
+#[allow(unused)]
 pub trait ErrorCtx<T>: Sized {
     fn with_field(self, field: &'static str) -> Result<T, ResourceError>;
     fn with_index(self, idx: usize) -> Result<T, ResourceError>;
@@ -335,10 +325,6 @@ impl std::fmt::Display for ResourceName {
 }
 
 impl ResourceName {
-    pub fn as_str(&self) -> &str {
-        &self.name
-    }
-
     pub fn wildcard() -> Self {
         Self {
             name: "*".to_string(),

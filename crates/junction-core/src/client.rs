@@ -1,6 +1,6 @@
 use crate::{
     dns::{self, StdlibResolver},
-    xds::{self, AdsClient, ResourceType},
+    xds::{self, AdsClient, ResourceType, XdsCache},
     Endpoint, Error, Trace,
 };
 use futures::{stream::FuturesOrdered, StreamExt};
@@ -394,20 +394,6 @@ impl Client {
     }
 }
 
-pub(crate) trait XdsCache {
-    async fn subscribe(&self, rtype: xds::ResourceType, name: xds::ResourceName);
-    async fn get_listener(&self, name: &xds::ResourceName) -> Option<Arc<xds::ApiListener>>;
-    async fn get_route_config(
-        &self,
-        name: &xds::ResourceName,
-    ) -> Option<Arc<xds::RouteConfiguration>>;
-    async fn get_cluster(&self, target: &xds::ResourceName) -> Option<Arc<xds::Cluster>>;
-    async fn get_load_assignment(
-        &self,
-        backend: &xds::ResourceName,
-    ) -> Option<Arc<xds::LoadAssignment>>;
-}
-
 // this is basically Either<_, > so that we don't have to deal with borrowck
 // while resolving_routes
 enum RouteConfigRef {
@@ -427,12 +413,13 @@ impl AsRef<xds::RouteConfiguration> for RouteConfigRef {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct ResolvedRoute {
-    cluster: xds::ResourceName,
-    request_hash: u64,
-    retries: Option<xds::route_configs::Retries>,
-    timeouts: Option<xds::route_configs::Timeouts>,
-    trace: Trace,
+    pub(crate) cluster: xds::ResourceName,
+    pub(crate) request_hash: u64,
+    pub(crate) retries: Option<xds::route_configs::Retries>,
+    pub(crate) timeouts: Option<xds::route_configs::Timeouts>,
+    pub(crate) trace: Trace,
 }
 
 pub(crate) async fn resolve_route(
@@ -462,11 +449,11 @@ pub(crate) async fn resolve_route(
             cache
                 .subscribe(xds::ResourceType::Listener, name.clone())
                 .await;
-            cache.get_listener(&name).await.map(|l| (name, l))
+            cache.get_listener(&name).await.map(|l| (name, url, l))
         });
     }
 
-    let (listener_name, listener) = loop {
+    let (listener_name, url, listener) = loop {
         match with_deadline!(futures_ordered.next(), deadline, "fetching listener", trace) {
             Some(Some(found)) => break found,
             Some(None) => {
@@ -476,13 +463,21 @@ pub(crate) async fn resolve_route(
                 return Err(Error::no_route_matched(
                     request.url.authority().to_string(),
                     trace,
-                ))
+                ));
             }
         }
     };
     trace.lookup_listener(listener_name.to_string());
 
-    // immdediately try to fetch the route
+    // rewrite the request so that we're now using the URL from the search path
+    // that matched instead of the raw URL.
+    let request = HttpRequest {
+        url: url.as_ref(),
+        headers: request.headers,
+        method: request.method,
+    };
+
+    // immdediately try to fetch the route with the listener name.
     let route_config = match &listener.route_config {
         xds::listeners::RouteConfig::Rds(name) => {
             match with_deadline!(
@@ -675,9 +670,9 @@ fn find_match<'a>(
     //
     // https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto#envoy-v3-api-msg-config-route-v3-routematch
     let mut matching_vhost = None;
-    let authority = request.url.authority();
+    let hostname = request.url.hostname();
     for vhost in &route.vhosts {
-        if vhost.domains.iter().any(|d| d.matches_hostname(&authority)) {
+        if vhost.domains.iter().any(|d| d.matches_hostname(&hostname)) {
             matching_vhost = Some(vhost);
         }
     }
@@ -702,7 +697,7 @@ fn is_method_match(
     method_match: &Option<xds::route_configs::MethodMatcher>,
     method: &http::Method,
 ) -> bool {
-    method_match.as_ref().is_some_and(|m| m.is_match(method))
+    method_match.as_ref().is_none_or(|m| m.is_match(method))
 }
 
 #[inline]
@@ -838,9 +833,10 @@ fn search<'a>(search_config: &SearchConfig, url: &'a crate::Url) -> Vec<Cow<'a, 
 
 #[cfg(test)]
 mod test {
-    use crate::Url;
+    use crate::{xds::ResourceName, Url};
     use std::str::FromStr;
 
+    use futures::FutureExt;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -892,402 +888,210 @@ mod test {
         );
     }
 
-    // #[track_caller]
-    // fn assert_resolve_routes(cache: &impl ConfigCache, request: HttpRequest<'_>) -> ResolvedRoute {
-    //     resolve_routes(cache, Trace::new(), request, None, &SearchConfig::default())
-    //         .now_or_never()
-    //         .unwrap()
-    //         .unwrap()
-    // }
+    #[track_caller]
+    fn assert_resolve_routes(cache: &impl XdsCache, request: HttpRequest<'_>) -> ResolvedRoute {
+        resolve_route(cache, &SearchConfig::default(), Trace::new(), request, None)
+            .now_or_never()
+            .unwrap()
+            .unwrap()
+    }
 
-    // #[track_caller]
-    // fn assert_resolve_err(cache: &impl ConfigCache, request: HttpRequest<'_>) -> crate::Error {
-    //     resolve_routes(cache, Trace::new(), request, None, &SearchConfig::default())
-    //         .now_or_never()
-    //         .unwrap()
-    //         .unwrap_err()
-    // }
+    #[track_caller]
+    fn assert_resolve_err(cache: &impl XdsCache, request: HttpRequest<'_>) -> crate::Error {
+        resolve_route(cache, &SearchConfig::default(), Trace::new(), request, None)
+            .now_or_never()
+            .unwrap()
+            .unwrap_err()
+    }
 
-    // #[test]
-    // fn test_resolve_passthrough_route() {
-    //     let svc = Service::dns("example.com").unwrap();
+    #[test]
+    fn resolve_route_any_match() {
+        let cache = xds::StaticCache::with_xds(
+            [
+                xds::test::listener!("example.com:80", "passthrough-route"),
+                xds::test::listener!("example.com:443", "passthrough-route"),
+                xds::test::listener!("example.com:8008", "passthrough-route"),
+                xds::test::route_config!(
+                    "passthrough-route",
+                    vec![xds::test::vhost!(
+                        "test-vhost",
+                        ["example.com"],
+                        [xds::test::route!(default "cluster.example:8008")]
+                    )]
+                ),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
 
-    //     let routes = StaticConfig::new(
-    //         vec![Route::passthrough_route(
-    //             Name::from_static("example"),
-    //             svc.clone(),
-    //         )],
-    //         vec![],
-    //     );
+        // check with no port
+        let url = Url::from_str("http://example.com/test-path").unwrap();
+        let headers = http::HeaderMap::default();
+        let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers);
 
-    //     // check with no port
-    //     let url = Url::from_str("http://example.com/test-path").unwrap();
-    //     let headers = http::HeaderMap::default();
-    //     let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
+        let resolved = assert_resolve_routes(&cache, request);
+        assert_eq!(resolved.cluster, ResourceName::from("cluster.example:8008"));
 
-    //     let resolved = assert_resolve_routes(&routes, request);
-    //     assert_eq!(resolved.backend, svc.as_backend_id(80));
+        // check with explicit ports
+        for port in [80, 443, 8008] {
+            let url = Url::from_str(&format!("http://example.com:{port}/test-path")).unwrap();
+            let headers = http::HeaderMap::default();
+            let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers);
 
-    //     // check with explicit ports
-    //     for port in [443, 8008] {
-    //         let url = Url::from_str(&format!("http://example.com:{port}/test-path")).unwrap();
-    //         let headers = http::HeaderMap::default();
-    //         let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
+            let resolved = assert_resolve_routes(&cache, request);
+            assert_eq!(resolved.cluster, ResourceName::from("cluster.example:8008"));
+        }
+    }
 
-    //         let resolved = assert_resolve_routes(&routes, request);
-    //         assert_eq!(resolved.backend, svc.as_backend_id(port));
-    //     }
-    // }
+    #[test]
+    fn resolve_route_any_match_search() {
+        let cache = xds::StaticCache::with_xds(
+            [
+                xds::test::listener!("example.default.svc.cluster.local:443", "test-route"),
+                xds::test::route_config!(
+                    "test-route",
+                    vec![xds::test::vhost!(
+                        "test-vhost",
+                        ["example.default.svc.cluster.local"],
+                        [xds::test::route!(default "example.default.svc.cluster.local:8008")]
+                    )]
+                ),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
 
-    // #[test]
-    // fn test_resolve_route_no_rules() {
-    //     let route = Route {
-    //         id: Name::from_static("no-rules"),
-    //         hostnames: vec![Hostname::from_static("example.com").into()],
-    //         ports: vec![],
-    //         tags: Default::default(),
-    //         rules: vec![],
-    //     };
+        let search_config = SearchConfig {
+            ndots: 5,
+            search: [
+                "default.svc.cluster.local",
+                "svc.cluster.local",
+                "cluster.local",
+            ]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        };
 
-    //     let routes = StaticConfig::new(vec![route], vec![]);
+        for hostname in ["example", "example.default"] {
+            let url = Url::from_str(&format!("https://{hostname}/test-path")).unwrap();
+            let headers = http::HeaderMap::default();
+            let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers);
 
-    //     let url = Url::from_str("http://example.com:3214/users/123").unwrap();
-    //     let headers = http::HeaderMap::default();
-    //     let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
+            let resolved = resolve_route(&cache, &search_config, Trace::new(), request, None)
+                .now_or_never()
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                resolved.cluster,
+                ResourceName::from("example.default.svc.cluster.local:8008")
+            );
+        }
+    }
 
-    //     let err = assert_resolve_err(&routes, request);
-    //     assert!(err.to_string().contains("no rules matched the request"));
-    //     assert!(!err.is_temporary());
-    // }
+    #[test]
+    fn resolve_path_match() {
+        let cache = xds::StaticCache::with_xds(
+            [
+                xds::test::listener!("example.com:80", "passthrough-route"),
+                crate::xds::test::route_config!(
+                    "passthrough-route",
+                    "v123",
+                    (vec![xds::test::vhost!(
+                        "test-vhost",
+                        ["example.com"],
+                        [
+                            xds::test::route!(exact_path "/v1/users" => "cluster2.example:8008"),
+                            xds::test::route!(default "cluster.example:8008"),
+                        ]
+                    )])
+                ),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
 
-    // #[test]
-    // fn test_resolve_route_no_rules_with_search_config() {
-    //     let route = Route {
-    //         id: Name::from_static("no-rules"),
-    //         hostnames: vec![Hostname::from_static("example.com").into()],
-    //         ports: vec![],
-    //         tags: Default::default(),
-    //         rules: vec![],
-    //     };
+        // check with no port
+        let url = Url::from_str("http://example.com/test-path").unwrap();
+        let headers = http::HeaderMap::default();
+        let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers);
 
-    //     let routes = StaticConfig::new(vec![route], vec![]);
+        let resolved = assert_resolve_routes(&cache, request);
+        assert_eq!(resolved.cluster, ResourceName::from("cluster.example:8008"));
 
-    //     let url = Url::from_str("http://example.com:3214/users/123").unwrap();
-    //     let headers = http::HeaderMap::default();
-    //     let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers).unwrap();
+        let url = Url::from_str("http://example.com/v1/users").unwrap();
+        let headers = http::HeaderMap::default();
+        let request = HttpRequest::from_parts(&http::Method::GET, &url, &headers);
 
-    //     let err = resolve_routes(
-    //         &routes,
-    //         Trace::new(),
-    //         request,
-    //         None,
-    //         &SearchConfig::new(2, vec![Hostname::from_static("example.com")]),
-    //     )
-    //     .now_or_never()
-    //     .unwrap()
-    //     .unwrap_err();
+        let resolved = assert_resolve_routes(&cache, request);
+        assert_eq!(
+            resolved.cluster,
+            ResourceName::from("cluster2.example:8008")
+        );
+    }
 
-    //     assert!(err.to_string().contains("no rules matched the request"));
-    //     assert!(!err.is_temporary());
-    // }
+    #[test]
+    fn test_resolve_query_match() {
+        let cache = xds::StaticCache::with_xds(
+            [
+                xds::test::listener!("example.com:80", "passthrough-route"),
+                crate::xds::test::route_config!(
+                    "passthrough-route",
+                    "v123",
+                    (vec![xds::test::vhost!(
+                        "test-vhost",
+                        ["example.com"],
+                        [
+                            xds::test::route!(query "qp1", "potato" => "new-cluster.example:8008"),
+                            xds::test::route!(default "default-cluster.example:8008"),
+                        ]
+                    )])
+                ),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
 
-    // #[test]
-    // fn test_resolve_route_no_backends() {
-    //     let route = Route {
-    //         id: Name::from_static("no-backends"),
-    //         hostnames: vec![Hostname::from_static("example.com").into()],
-    //         ports: vec![],
-    //         tags: Default::default(),
-    //         rules: vec![RouteRule {
-    //             matches: vec![RouteMatch {
-    //                 path: Some(PathMatch::Prefix {
-    //                     value: "".to_string(),
-    //                 }),
-    //                 ..Default::default()
-    //             }],
-    //             ..Default::default()
-    //         }],
-    //     };
+        dbg!(cache.get_route_config(&ResourceName::from("passthrough-route")));
 
-    //     let routes = StaticConfig::new(vec![route], vec![]);
+        let wont_match = [
+            "http://example.com?qp1=tomato",
+            "http://example.com?qp1=potatooo",
+            "http://example.com?qp2=barfoo",
+            "http://example.com?qp2=fobar",
+            "http://example.com?qp1=potat&qp2=foobar",
+        ];
 
-    //     for port in [80, 7887] {
-    //         let method = &http::Method::GET;
-    //         let url = &Url::from_str(&format!("http://example.com:{port}/users/123")).unwrap();
-    //         let headers = &http::HeaderMap::default();
-    //         let request = HttpRequest::from_parts(method, url, headers).unwrap();
+        for url in wont_match {
+            let url = Url::from_str(url).unwrap();
+            let headers = &http::HeaderMap::default();
+            let request = HttpRequest::from_parts(&http::Method::GET, &url, headers);
 
-    //         let err = assert_resolve_err(&routes, request);
-    //         assert_eq!(err.to_string(), "invalid route configuration");
-    //         assert!(!err.is_temporary());
-    //     }
-    // }
+            let resolved = assert_resolve_routes(&cache, request);
+            // should match the fallthrough rule
+            assert_eq!(
+                resolved.cluster,
+                ResourceName::from("default-cluster.example:8008"),
+                "{url}",
+            );
+        }
 
-    // #[test]
-    // fn test_resolve_path_match() {
-    //     let backend_one = Service::kube("web", "svc1").unwrap();
-    //     let backend_two = Service::kube("web", "svc2").unwrap();
+        let will_match = [
+            "http://example.com?qp1=potato&qp2=foobar",
+            "http://example.com?qp1=potato&qp2=foobazbar",
+            "http://example.com?qp1=potato&qp2=fooooooooooooooobar",
+        ];
 
-    //     let route = Route {
-    //         id: Name::from_static("path-match"),
-    //         hostnames: vec![Hostname::from_static("example.com").into()],
-    //         ports: vec![],
-    //         tags: Default::default(),
-    //         rules: vec![
-    //             RouteRule {
-    //                 matches: vec![RouteMatch {
-    //                     path: Some(PathMatch::Prefix {
-    //                         value: "/users".to_string(),
-    //                     }),
-    //                     ..Default::default()
-    //                 }],
-    //                 backends: vec![BackendRef {
-    //                     weight: 1,
-    //                     service: backend_one.clone(),
-    //                     port: Some(8910),
-    //                 }],
-    //                 ..Default::default()
-    //             },
-    //             RouteRule {
-    //                 backends: vec![BackendRef {
-    //                     weight: 1,
-    //                     service: backend_two.clone(),
-    //                     port: Some(8919),
-    //                 }],
-    //                 ..Default::default()
-    //             },
-    //         ],
-    //     };
+        for url in will_match {
+            let url = Url::from_str(url).unwrap();
+            let headers = &http::HeaderMap::default();
+            let request = HttpRequest::from_parts(&http::Method::GET, &url, headers);
 
-    //     let routes = StaticConfig::new(vec![route], vec![]);
-
-    //     let url = &Url::from_str("http://example.com/test-path").unwrap();
-    //     let headers = &http::HeaderMap::default();
-    //     let request = HttpRequest::from_parts(&http::Method::GET, url, headers).unwrap();
-    //     let resolved = assert_resolve_routes(&routes, request);
-
-    //     // should match the fallthrough rule
-    //     assert_eq!(resolved.rule, 1);
-    //     assert_eq!(resolved.backend, backend_two.as_backend_id(8919));
-
-    //     let url = Url::from_str("http://example.com/users/123").unwrap();
-    //     let headers = &http::HeaderMap::default();
-    //     let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
-    //     let resolved = assert_resolve_routes(&routes, request);
-
-    //     // should match the first rule, with the path match
-    //     assert_eq!(resolved.backend, backend_one.as_backend_id(8910));
-    //     assert!(!resolved.route.rules[resolved.rule].matches.is_empty());
-
-    //     let url = Url::from_str("http://example.com/users/123").unwrap();
-    //     let headers = &http::HeaderMap::default();
-    //     let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
-
-    //     let resolved = assert_resolve_routes(&routes, request);
-    //     // should match the first rule, with the path match
-    //     assert_eq!(resolved.rule, 0);
-    //     assert_eq!(resolved.backend, backend_one.as_backend_id(8910));
-    // }
-
-    // #[test]
-    // fn test_resolve_query_match() {
-    //     let backend_one = Service::kube("web", "svc1").unwrap();
-    //     let backend_two = Service::kube("web", "svc2").unwrap();
-
-    //     let route = Route {
-    //         id: Name::from_static("query-match"),
-    //         hostnames: vec![Hostname::from_static("example.com").into()],
-    //         ports: vec![],
-    //         tags: Default::default(),
-    //         rules: vec![
-    //             RouteRule {
-    //                 matches: vec![RouteMatch {
-    //                     query_params: vec![
-    //                         QueryParamMatch::Exact {
-    //                             name: "qp1".to_string(),
-    //                             value: "potato".to_string(),
-    //                         },
-    //                         QueryParamMatch::RegularExpression {
-    //                             name: "qp2".to_string(),
-    //                             value: Regex::from_str("foo.*bar").unwrap(),
-    //                         },
-    //                     ],
-    //                     ..Default::default()
-    //                 }],
-    //                 backends: vec![BackendRef {
-    //                     weight: 1,
-    //                     service: backend_one.clone(),
-    //                     port: Some(8910),
-    //                 }],
-    //                 ..Default::default()
-    //             },
-    //             RouteRule {
-    //                 backends: vec![BackendRef {
-    //                     weight: 1,
-    //                     service: backend_two.clone(),
-    //                     port: Some(8919),
-    //                 }],
-    //                 ..Default::default()
-    //             },
-    //         ],
-    //     };
-
-    //     let routes = StaticConfig::new(vec![route], vec![]);
-
-    //     let wont_match = [
-    //         "http://example.com?qp1=tomato",
-    //         "http://example.com?qp1=potatooo",
-    //         "http://example.com?qp2=barfoo",
-    //         "http://example.com?qp2=fobar",
-    //         "http://example.com?qp1=potat&qp2=foobar",
-    //         "http://example.com?qp1=potato&qp2=fbar",
-    //     ];
-
-    //     for url in wont_match {
-    //         let url = Url::from_str(url).unwrap();
-    //         let headers = &http::HeaderMap::default();
-    //         let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
-
-    //         let resolved = assert_resolve_routes(&routes, request);
-    //         // should match the fallthrough rule
-    //         assert_eq!(resolved.rule, 1);
-    //         assert_eq!(resolved.backend, backend_two.as_backend_id(8919));
-    //     }
-
-    //     let will_match = [
-    //         "http://example.com?qp1=potato&qp2=foobar",
-    //         "http://example.com?qp1=potato&qp2=foobazbar",
-    //         "http://example.com?qp1=potato&qp2=fooooooooooooooobar",
-    //     ];
-
-    //     for url in will_match {
-    //         let url = Url::from_str(url).unwrap();
-    //         let headers = &http::HeaderMap::default();
-    //         let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
-
-    //         let resolved = assert_resolve_routes(&routes, request);
-    //         // should match one of the query matches
-    //         assert_eq!(
-    //             (resolved.rule, &resolved.backend),
-    //             (0, &backend_one.as_backend_id(8910)),
-    //             "should match the first rule: {url}"
-    //         );
-    //     }
-    // }
-
-    // #[test]
-    // fn test_resolve_routes_resolves_ndots() {
-    //     let backend = Service::kube("web", "svc1").unwrap();
-
-    //     let route = Route {
-    //         id: Name::from_static("ndots-match"),
-    //         hostnames: vec![Hostname::from_static("example.foo.bar.com").into()],
-    //         ports: vec![],
-    //         tags: Default::default(),
-    //         rules: vec![RouteRule {
-    //             matches: vec![],
-    //             backends: vec![BackendRef {
-    //                 weight: 1,
-    //                 service: backend.clone(),
-    //                 port: Some(8910),
-    //             }],
-    //             ..Default::default()
-    //         }],
-    //     };
-
-    //     let routes = StaticConfig::new(vec![route], vec![]);
-
-    //     let will_match = [
-    //         "http://example",
-    //         "http://example.foo",
-    //         "http://example.foo.bar",
-    //         "http://example.foo.bar.com",
-    //     ];
-    //     let will_match_hostnames = vec![
-    //         Hostname::from_static("foo.bar.com"),
-    //         Hostname::from_static("bar.com"),
-    //         Hostname::from_static("com"),
-    //     ];
-
-    //     for url in will_match {
-    //         let url = crate::Url::from_str(url).unwrap();
-    //         let headers = &http::HeaderMap::default();
-    //         let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
-
-    //         let resolved = resolve_routes(
-    //             &routes,
-    //             Trace::new(),
-    //             request,
-    //             None,
-    //             &SearchConfig::new(3, will_match_hostnames.clone()),
-    //         )
-    //         .now_or_never()
-    //         .unwrap()
-    //         .unwrap();
-
-    //         // should match one of the query matches
-    //         assert_eq!(
-    //             (resolved.rule, &resolved.backend),
-    //             (0, &backend.as_backend_id(8910)),
-    //             "should match the first rule: {url}"
-    //         );
-    //     }
-    // }
-
-    // #[test]
-    // fn test_resolve_routes_resolves_ndots_no_search() {
-    //     let backend = Service::kube("web", "svc1").unwrap();
-
-    //     let will_match = [
-    //         "http://example.com",
-    //         "http://example.foo.com",
-    //         "http://example.foo.bar.com",
-    //     ];
-
-    //     let route = Route {
-    //         id: Name::from_static("ndots-match"),
-    //         hostnames: vec![
-    //             Hostname::from_static("example.com").into(),
-    //             Hostname::from_static("example.foo.com").into(),
-    //             Hostname::from_static("example.foo.bar.com").into(),
-    //         ],
-    //         ports: vec![],
-    //         tags: Default::default(),
-    //         rules: vec![RouteRule {
-    //             matches: vec![],
-    //             backends: vec![BackendRef {
-    //                 weight: 1,
-    //                 service: backend.clone(),
-    //                 port: Some(8910),
-    //             }],
-    //             ..Default::default()
-    //         }],
-    //     };
-
-    //     let routes = StaticConfig::new(vec![route], vec![]);
-
-    //     for url in will_match {
-    //         let url = crate::Url::from_str(url).unwrap();
-    //         let headers = &http::HeaderMap::default();
-    //         let request = HttpRequest::from_parts(&http::Method::GET, &url, headers).unwrap();
-
-    //         let resolved = resolve_routes(
-    //             &routes,
-    //             Trace::new(),
-    //             request,
-    //             None,
-    //             &SearchConfig::new(3, vec![]),
-    //         )
-    //         .now_or_never()
-    //         .unwrap()
-    //         .unwrap();
-
-    //         // should match one of the query matches
-    //         assert_eq!(
-    //             (resolved.rule, &resolved.backend),
-    //             (0, &backend.as_backend_id(8910)),
-    //             "should match the first rule: {url}"
-    //         );
-    //     }
-    // }
+            let resolved = assert_resolve_routes(&cache, request);
+            assert_eq!(
+                resolved.cluster,
+                ResourceName::from("new-cluster.example:8008")
+            );
+        }
+    }
 }

@@ -3,7 +3,7 @@ use super::{ErrorCtx, Resource, ResourceError, ResourceName, ResourceType};
 use junction_api::Hostname;
 use regex::Regex;
 use std::{collections::HashSet, str::FromStr, time::Duration};
-use xds_api::pb::envoy::config::route::v3::{self as xds_route};
+use xds_api::pb::envoy::{config::route::v3 as xds_route, r#type::matcher::v3 as xds_matcher};
 
 macro_rules! vec_from_xds {
     ($xs:expr, $field:literal, $type:ty) => {{
@@ -286,13 +286,33 @@ impl Matcher {
             .and_then(|p| PathMatcher::from_xds(p))
             .with_field("path_specifier")?;
 
-        Ok(Matcher {
+        let query = vec_from_xds!(xds.query_parameters, "query_parameters", QueryMatcher)?;
+        let (method, headers) = from_xds_headers(&xds.headers).with_field("headers")?;
+
+        Ok(Self {
             path,
-            method: None,
-            headers: vec![],
-            query: vec![],
+            method,
+            headers,
+            query,
         })
     }
+}
+
+#[inline]
+fn from_xds_headers(
+    xds: &[xds_route::HeaderMatcher],
+) -> Result<(Option<MethodMatcher>, Vec<HeaderMatcher>), ResourceError> {
+    let mut method = None;
+    let mut headers = Vec::with_capacity(xds.len());
+
+    for (i, header) in xds.iter().enumerate() {
+        if header.name == ":method" {
+            method = Some(MethodMatcher::from_xds(header).with_index(i)?);
+        }
+        headers.push(HeaderMatcher::from_xds(header).with_index(i)?);
+    }
+
+    Ok((method, headers))
 }
 
 #[derive(Debug, Clone)]
@@ -337,6 +357,19 @@ pub(crate) struct MethodMatcher {
 impl MethodMatcher {
     pub(crate) fn is_match(&self, method: &http::Method) -> bool {
         self.method == method
+    }
+
+    fn from_xds(xds: &xds_route::HeaderMatcher) -> Result<Self, ResourceError> {
+        use xds_route::header_matcher::HeaderMatchSpecifier;
+
+        let method = match &xds.header_match_specifier {
+            Some(HeaderMatchSpecifier::ExactMatch(method)) => http::Method::from_str(method)
+                .map_err(|_| ResourceError::invalid("invalid http method")),
+            _ => Err(ResourceError::invalid("expected an exact string match")),
+        };
+
+        let method = method.with_field("header_match_specifier")?;
+        Ok(Self { method })
     }
 }
 
@@ -392,6 +425,42 @@ impl HeaderMatcher {
         // if invert is true, we need to flip the conditional
         matches && !self.invert
     }
+
+    // TODO: for full GRPC compat we need to support StringMatcher and ContainsMatch
+    fn from_xds(xds: &xds_route::HeaderMatcher) -> Result<Self, ResourceError> {
+        use xds_route::header_matcher::HeaderMatchSpecifier;
+
+        let name = xds.name.clone();
+        let invert = xds.invert_match;
+
+        let matcher = xds
+            .header_match_specifier
+            .as_ref()
+            .map(|xds_matcher| match xds_matcher {
+                HeaderMatchSpecifier::ExactMatch(value) => Ok(StringMatcher::Exact {
+                    value: value.clone(),
+                }),
+                HeaderMatchSpecifier::SafeRegexMatch(m) => Ok(StringMatcher::RegularExpression {
+                    value: Regex::new(&m.regex)
+                        .map_err(|_| ResourceError::invalid("invalid regex"))?,
+                }),
+                HeaderMatchSpecifier::PrefixMatch(value) => Ok(StringMatcher::Prefix {
+                    value: value.clone(),
+                }),
+                HeaderMatchSpecifier::SuffixMatch(value) => Ok(StringMatcher::Suffix {
+                    value: value.clone(),
+                }),
+                HeaderMatchSpecifier::StringMatch(matcher) => StringMatcher::from_xds(matcher),
+                _ => Err(ResourceError::invalid("unsupported match type")),
+            });
+        let matcher = matcher.transpose().with_field("header_match_specifier")?;
+
+        Ok(Self {
+            invert,
+            matcher,
+            name,
+        })
+    }
 }
 
 #[inline]
@@ -415,8 +484,29 @@ impl QueryMatcher {
             None => s.is_some(),
         }
     }
+
+    fn from_xds(xds: &xds_route::QueryParameterMatcher) -> Result<Self, ResourceError> {
+        use xds_route::query_parameter_matcher::QueryParameterMatchSpecifier;
+
+        let name = xds.name.clone();
+        let matcher = xds
+            .query_parameter_match_specifier
+            .as_ref()
+            .and_then(|xds_matcher| match xds_matcher {
+                QueryParameterMatchSpecifier::StringMatch(matcher) => {
+                    Some(StringMatcher::from_xds(matcher))
+                }
+
+                QueryParameterMatchSpecifier::PresentMatch(_) => None,
+            })
+            .transpose()
+            .with_field("query_parameter_match_specifier")?;
+
+        Ok(Self { name, matcher })
+    }
 }
 
+// TODO: support ignore_case
 #[derive(Debug, Clone)]
 enum StringMatcher {
     Prefix { value: String },
@@ -432,6 +522,27 @@ impl StringMatcher {
             StringMatcher::Suffix { value } => s.ends_with(value),
             Self::RegularExpression { value } => value.is_match(s),
             Self::Exact { value } => value == s,
+        }
+    }
+
+    fn from_xds(xds: &xds_matcher::StringMatcher) -> Result<Self, ResourceError> {
+        use xds_matcher::string_matcher::MatchPattern;
+
+        let Some(match_pattern) = &xds.match_pattern else {
+            return Err(ResourceError::invalid("missing match_pattern").with_field("match_pattern"));
+        };
+
+        match &match_pattern {
+            MatchPattern::Exact(s) => Ok(StringMatcher::Exact { value: s.clone() }),
+            MatchPattern::Prefix(s) => Ok(StringMatcher::Prefix { value: s.clone() }),
+            MatchPattern::Suffix(s) => Ok(StringMatcher::Suffix { value: s.clone() }),
+            MatchPattern::SafeRegex(re) => {
+                let value = Regex::from_str(&re.regex)
+                    .map_err(|_| ResourceError::invalid("invalid regex"))
+                    .with_field("regex")?;
+                Ok(StringMatcher::RegularExpression { value })
+            }
+            _ => Err(ResourceError::invalid("unsupported matcher type")),
         }
     }
 }

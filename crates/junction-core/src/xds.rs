@@ -29,11 +29,17 @@
 //    `envoy.lb.does_not_support_overprovisioning` and friends. See
 //    <https://github.com/grpc/proposal/blob/master/A27-xds-global-load-balancing.md>.
 
+mod cache;
+mod csds;
+mod load_balancer;
+mod resources;
+
+use crate::dns::{DnsUpdates, StdlibResolver};
 use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::{FutureExt, TryStreamExt};
-pub(crate) use resources::ResourceName;
+use resources::ResourceError;
 use std::{borrow::Cow, future::Future, io::ErrorKind, sync::Arc, time::Duration};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio_stream::wrappers::ReceiverStream;
@@ -43,6 +49,7 @@ use xds_api::pb::{
     envoy::{
         config::core::v3 as xds_core,
         service::discovery::v3::{
+            self as xds_discovery,
             aggregated_discovery_service_client::AggregatedDiscoveryServiceClient,
             DeltaDiscoveryRequest, DeltaDiscoveryResponse,
         },
@@ -50,25 +57,14 @@ use xds_api::pb::{
     google::{protobuf, rpc::Status as GrpcStatus},
 };
 
-mod cache;
-mod load_balancer;
-mod resources;
-
-pub use resources::ResourceVersion;
+pub(crate) use cache::StaticCache;
 pub(crate) use resources::{
     clusters, endpoints, listeners, route_configs, ApiListener, Cluster, LoadAssignment,
-    ResourceType, RouteConfiguration,
+    ResourceName, ResourceType, ResourceVersion, RouteConfiguration,
 };
-
-use crate::{
-    client::XdsCache,
-    dns::{DnsUpdates, StdlibResolver},
-};
-
-mod csds;
 
 #[cfg(test)]
-mod test;
+pub(crate) mod test;
 
 /// A single xDS configuration object, with additional metadata about when it
 /// was fetched and processed.
@@ -81,10 +77,92 @@ pub struct XdsConfig {
     pub last_error: Option<(ResourceVersion, String)>,
 }
 
-#[derive(Debug)]
-enum SubscriptionUpdate {
-    Add(ResourceType, ResourceName),
-    Remove(ResourceType, ResourceName),
+/// Cached xDS data, keyed by [ResourceName].
+pub(crate) trait XdsCache {
+    async fn subscribe(&self, rtype: ResourceType, name: ResourceName);
+    async fn get_listener(&self, name: &ResourceName) -> Option<Arc<ApiListener>>;
+    async fn get_route_config(&self, name: &ResourceName) -> Option<Arc<RouteConfiguration>>;
+    async fn get_cluster(&self, target: &ResourceName) -> Option<Arc<Cluster>>;
+    async fn get_load_assignment(&self, backend: &ResourceName) -> Option<Arc<LoadAssignment>>;
+}
+
+/// Any type that can be converted into xDS.
+pub trait IntoXds {
+    /// The associated protobuf message type.
+    type Xds: prost::Name;
+
+    /// Convert this type into a k,v pair of a unique name and an xDS message.
+    fn into_xds(&self) -> (String, Self::Xds);
+
+    /// Convert this type into a k,v pair of a unique name and an xDS message,
+    /// serialized as a protobuf `Any`.
+    fn into_any(&self) -> (String, protobuf::Any) {
+        let (name, msg) = self.into_xds();
+        let any = protobuf::Any::from_msg(&msg).expect("failed to allocate Any");
+        (name, any)
+    }
+}
+
+impl IntoXds for xds_discovery::Resource {
+    type Xds = protobuf::Any;
+
+    fn into_xds(&self) -> (String, Self::Xds) {
+        self.into_any()
+    }
+
+    fn into_any(&self) -> (String, protobuf::Any) {
+        (self.name.clone(), self.resource.clone().unwrap())
+    }
+}
+
+impl StaticCache {
+    pub(crate) fn with_xds<T: IntoXds>(
+        xds: impl IntoIterator<Item = T>,
+    ) -> Result<Self, Vec<ResourceError>> {
+        let xds = xds.into_iter().map(|x| {
+            let (name, any) = x.into_any();
+            let name = ResourceName::from(name);
+            (name, any)
+        });
+
+        let mut cache = StaticCache::default();
+        let errors = cache.insert(ResourceVersion::from("static"), xds);
+        if errors.is_empty() {
+            Ok(cache)
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+impl XdsCache for StaticCache {
+    async fn subscribe(&self, rtype: self::ResourceType, name: self::ResourceName) {
+        let _ = rtype;
+        let _ = name;
+        // do nothing
+    }
+
+    async fn get_listener(&self, name: &self::ResourceName) -> Option<Arc<self::ApiListener>> {
+        self.get_listener(name)
+    }
+
+    async fn get_route_config(
+        &self,
+        name: &self::ResourceName,
+    ) -> Option<Arc<self::RouteConfiguration>> {
+        self.get_route_config(name)
+    }
+
+    async fn get_cluster(&self, name: &self::ResourceName) -> Option<Arc<self::Cluster>> {
+        self.get_cluster(name)
+    }
+
+    async fn get_load_assignment(
+        &self,
+        name: &self::ResourceName,
+    ) -> Option<Arc<self::LoadAssignment>> {
+        self.get_load_assignment(name)
+    }
 }
 
 /// A Junction ADS client that manages long-lived xDS state by connecting to a
@@ -105,6 +183,14 @@ pub(super) struct AdsClient {
     // a handle to the currently running task.
     #[allow(unused)]
     task_handle: Arc<tokio::task::JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+enum SubscriptionUpdate {
+    Add(ResourceType, ResourceName),
+
+    #[allow(unused)]
+    Remove(ResourceType, ResourceName),
 }
 
 impl AdsClient {

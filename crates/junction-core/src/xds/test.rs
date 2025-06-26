@@ -12,6 +12,7 @@ use xds_api::pb::{
             listener::v3 as xds_listener,
             route::v3::{self as xds_route, route_action::hash_policy::Header},
         },
+        r#type::matcher::v3 as xds_matcher,
         service::discovery::v3::{
             self as xds_discovery, DeltaDiscoveryRequest, DeltaDiscoveryResponse,
         },
@@ -113,19 +114,29 @@ pub(crate) use route_config;
 
 macro_rules! route {
     (default $cluster:expr) => {{
-        crate::xds::test::route!(_INTERNAL path Some("/"), ring_hash None, header None => $cluster)
+        crate::xds::test::route!(_INTERNAL path None, ring_hash None, header None, query None => $cluster)
     }};
     (default ring_hash = $header:expr, $cluster:expr) => {{
-        crate::xds::test::route!(_INTERNAL path Some("/"), ring_hash Some($header), header None => $cluster)
+        crate::xds::test::route!(_INTERNAL path None, ring_hash Some($header), header None, query None => $cluster)
     }};
     (header $header_name:expr => $cluster:expr) => {{
-        crate::xds::test::route!(_INTERNAL path None, ring_hash None, header Some($header_name) => $cluster)
+        crate::xds::test::route!(_INTERNAL path None, ring_hash None, header Some($header_name), query None => $cluster)
     }};
-    (path $path:expr => $cluster:expr) => {{
-        crate::xds::test::route!(_INTERNAL path Some($path), header None => $cluster)
+    (exact_path $path:expr => $cluster:expr) => {{
+        crate::xds::test::route!(_INTERNAL path Some($path), ring_hash None, header None, query None => $cluster)
     }};
-    (_INTERNAL path $path:expr, ring_hash $hash_header:expr, header $header_name:expr => $cluster:expr) => {
-        crate::xds::test::route_to_cluster($path, $hash_header, $header_name, $cluster)
+    (query $name:expr, $value:expr => $cluster:expr) => {{
+        crate::xds::test::route!(_INTERNAL path None, ring_hash None, header None, query Some(($name, $value))=> $cluster)
+    }};
+    (
+        _INTERNAL
+        path $path:expr,
+        ring_hash $hash_header:expr,
+        header $header_name:expr,
+        query $query:expr
+        => $cluster:expr
+    ) => {
+        crate::xds::test::route_to_cluster($path, $hash_header, $header_name, $query, $cluster)
     };
 }
 
@@ -384,17 +395,21 @@ pub fn route_to_cluster(
     path: Option<&str>,
     hash_header: Option<&str>,
     match_header: Option<&str>,
+    match_query: Option<(&str, &str)>,
     cluster_name: &str,
 ) -> xds_route::Route {
     let mut route_match = xds_route::RouteMatch {
         ..Default::default()
     };
 
-    if let Some(path) = path {
-        route_match.path_specifier = Some(xds_route::route_match::PathSpecifier::Path(
+    route_match.path_specifier = match path {
+        Some(path) => Some(xds_route::route_match::PathSpecifier::Path(
             path.to_string(),
-        ));
-    }
+        )),
+        None => Some(xds_route::route_match::PathSpecifier::Prefix(
+            "".to_string(),
+        )),
+    };
 
     if let Some(header_name) = match_header {
         let header_matcher = xds_route::HeaderMatcher {
@@ -405,6 +420,24 @@ pub fn route_to_cluster(
             ..Default::default()
         };
         route_match.headers = vec![header_matcher];
+    }
+
+    if let Some((name, value)) = match_query {
+        let query_matcher = xds_route::QueryParameterMatcher {
+            name: name.to_string(),
+            query_parameter_match_specifier: Some(
+                xds_route::query_parameter_matcher::QueryParameterMatchSpecifier::StringMatch(
+                    xds_matcher::StringMatcher {
+                        ignore_case: false,
+                        match_pattern: Some(xds_matcher::string_matcher::MatchPattern::Exact(
+                            value.to_string(),
+                        )),
+                    },
+                ),
+            ),
+            ..Default::default()
+        };
+        route_match.query_parameters = vec![query_matcher];
     }
 
     let hash_policy = hash_header
