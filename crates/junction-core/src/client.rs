@@ -298,22 +298,13 @@ impl Client {
             return Err(Error::no_backend(todo!(), resolved.trace));
         };
 
-        // if there's nothign in the request that matches this hash policy, fall
-        // back to essentially random with sticky sessions. this is what envoy
-        // does with the rationale that this is better than failing the request
-        // if the config is bad.
-        //
-        // https://github.com/envoyproxy/envoy/blob/73fe00fc139fd5053f4c4a5d66569cc254449896/source/extensions/load_balancing_policies/common/thread_aware_lb_impl.cc#L157-L164
-        let request_hash = hash_request(request.clone(), &resolved.hash_policy)
-            .unwrap_or_else(crate::rand::random);
-
         // select endpoints using the result of route resolution
         let selected = select_endpoint(
             &self.config.ads,
             resolved.trace,
             RequestContext {
                 request,
-                request_hash,
+                request_hash: resolved.request_hash,
                 previous_addrs: &[],
             },
             cluster,
@@ -328,11 +319,11 @@ impl Client {
             method: method.clone(),
             url: url.clone(),
             headers: headers.clone(),
-            request_hash,
-            address,
+            request_hash: resolved.request_hash,
             cluster_name: resolved.cluster,
-            trace,
+            address,
             previous_addrs: vec![],
+            trace,
         })
     }
 
@@ -496,7 +487,7 @@ impl AsRef<xds::RouteConfiguration> for RouteConfigRef {
 
 pub(crate) struct ResolvedRoute {
     cluster: xds::ResourceName,
-    hash_policy: Vec<xds::route_configs::HashPolicy>,
+    request_hash: u64,
     retries: xds::route_configs::Retries,
     timeouts: xds::route_configs::Timeouts,
     trace: Trace,
@@ -577,10 +568,20 @@ pub(crate) async fn resolve_route(
     // pick a target at random from the list, respecting weights. if there are
     // no backends listed we should blackhole here.
     let cluster = crate::rand::with_thread_rng(|rng| pick_cluster(rng, &action.cluster))?;
+
+    // if there's nothign in the request that matches this hash policy, fall
+    // back to essentially random with sticky sessions. this is what envoy
+    // does with the rationale that this is better than failing the request
+    // if the config is bad.
+    //
+    // https://github.com/envoyproxy/envoy/blob/73fe00fc139fd5053f4c4a5d66569cc254449896/source/extensions/load_balancing_policies/common/thread_aware_lb_impl.cc#L157-L164
+    let request_hash =
+        hash_request(request.clone(), &action.hash_policies).unwrap_or_else(crate::rand::random);
+
     Ok(ResolvedRoute {
         trace,
         cluster: cluster.clone(),
-        hash_policy: action.hash_policies.clone(),
+        request_hash,
         retries: action.retries.clone(),
         timeouts: action.timeouts.clone(),
     })
