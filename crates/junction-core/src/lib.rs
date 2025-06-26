@@ -3,6 +3,7 @@
 //! * [Getting Started](https://docs.junctionlabs.io/getting-started/rust)
 
 mod error;
+mod trace;
 mod url;
 pub use crate::error::{Error, Result};
 pub use crate::url::Url;
@@ -18,9 +19,9 @@ mod dns;
 mod xds;
 
 pub use client::{Client, HttpRequest, HttpResult, SearchConfig, SelectedEndpoint};
-use error::Trace;
 use futures::FutureExt;
 use junction_api::Name;
+use trace::Trace;
 pub use xds::{ResourceVersion, XdsConfig};
 
 use junction_api::backend::BackendId;

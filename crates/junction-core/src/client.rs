@@ -1,12 +1,11 @@
 use crate::{
     dns,
-    error::Trace,
-    xds::{self, AdsClient},
-    Endpoint, Error,
+    xds::{self, AdsClient, ResourceType},
+    Endpoint, Error, Trace,
 };
 use futures::{stream::FuturesOrdered, StreamExt};
 use junction_api::Hostname;
-use rand::{distributions::WeightedError, rngs::StdRng, seq::SliceRandom};
+use rand::{distributions::WeightedError, seq::SliceRandom};
 use serde::Deserialize;
 use std::{
     borrow::Cow,
@@ -291,11 +290,15 @@ impl Client {
         let cluster = with_deadline!(
             self.config.ads.get_cluster(&resolved.cluster),
             Some(deadline),
-            "timed out fetching backend",
+            "fetching backend",
             resolved.trace,
         );
         let Some(cluster) = cluster else {
-            return Err(Error::no_backend(todo!(), resolved.trace));
+            return Err(Error::not_found(
+                ResourceType::Cluster.type_url().to_string(),
+                resolved.cluster.to_string(),
+                resolved.trace,
+            ));
         };
 
         // select endpoints using the result of route resolution
@@ -362,11 +365,15 @@ impl Client {
         let cluster = with_deadline!(
             self.config.ads.get_cluster(&endpoint.cluster_name),
             Some(deadline),
-            "timed out fetching backend",
+            "fetching cluster",
             endpoint.trace,
         );
         let Some(cluster) = cluster else {
-            return Err(Error::no_backend(todo!(), endpoint.trace));
+            return Err(Error::not_found(
+                ResourceType::Cluster.type_url().to_string(),
+                endpoint.cluster_name.to_string(),
+                endpoint.trace,
+            ));
         };
 
         let next = select_endpoint(
@@ -524,9 +531,8 @@ pub(crate) async fn resolve_route(
         });
     }
 
-    let msg = "timed out fetching route";
     let listener = loop {
-        match with_deadline!(futures_ordered.next(), deadline, msg, trace) {
+        match with_deadline!(futures_ordered.next(), deadline, "fetching listener", trace) {
             Some(Some(found)) => break found,
             Some(None) => {
                 continue;
@@ -543,12 +549,17 @@ pub(crate) async fn resolve_route(
     // immdediately try to fetch the route
     let route_config = match &listener.route_config {
         xds::listeners::RouteConfig::Rds(name) => {
-            let msg = "timed out fetching route";
-            match with_deadline!(cache.get_route_config(&name), deadline, msg, trace) {
+            match with_deadline!(
+                cache.get_route_config(&name),
+                deadline,
+                "fetching route",
+                trace
+            ) {
                 Some(route) => RouteConfigRef::Route(route),
                 None => {
-                    return Err(Error::no_route_matched(
-                        request.url.authority().to_string(),
+                    return Err(Error::not_found(
+                        ResourceType::Listener.type_url().to_string(),
+                        name.to_string(),
                         trace,
                     ))
                 }
@@ -562,12 +573,28 @@ pub(crate) async fn resolve_route(
     // need to match headers/url params/method and so on.
     let action = match find_match(route_config.as_ref(), request.clone()) {
         Some(route) => route,
-        None => return Err(Error::no_rule_matched(todo!(), trace)),
+        None => {
+            return Err(Error::no_route_matched(
+                request.url.authority().to_string(),
+                trace,
+            ))
+        }
     };
 
     // pick a target at random from the list, respecting weights. if there are
     // no backends listed we should blackhole here.
-    let cluster = crate::rand::with_thread_rng(|rng| pick_cluster(rng, &action.cluster))?;
+    let cluster = match &action.cluster {
+        xds::route_configs::ClusterSpecifier::Cluster(name) => name,
+        xds::route_configs::ClusterSpecifier::Weighted(clusters) => {
+            match crate::rand::with_thread_rng(|rng| clusters.choose_weighted(rng, |c| c.weight)) {
+                Ok(cluster) => &cluster.name,
+                Err(WeightedError::NoItem) => {
+                    return Err(Error::unavailable(trace, "route has no backends"));
+                }
+                Err(_) => return Err(Error::unavailable(trace, "route has invalid weights")),
+            }
+        }
+    };
 
     // if there's nothign in the request that matches this hash policy, fall
     // back to essentially random with sticky sessions. this is what envoy
@@ -603,22 +630,31 @@ async fn select_endpoint(
 ) -> crate::Result<SelectedEndpoint> {
     // lookup endpoints for a cluster
     let load_assignment = match &cluster.endpoints {
-        xds::clusters::Endpoints::Eds(name) => with_deadline!(
-            cache.get_load_assignment(&name),
-            deadline,
-            "timed out fetching endpoints",
-            trace
-        ),
+        xds::clusters::Endpoints::Eds(name) => {
+            let load_assignment = with_deadline!(
+                cache.get_load_assignment(&name),
+                deadline,
+                "fetching endpoints",
+                trace
+            );
+            match load_assignment {
+                Some(load_assignment) => load_assignment,
+                None => {
+                    return Err(Error::not_found(
+                        ResourceType::ClusterLoadAssignment.type_url().to_string(),
+                        name.to_string(),
+                        trace,
+                    ));
+                }
+            }
+        }
         xds::clusters::Endpoints::LogicalDns { hostname, port } => {
             // get a handle to the DNS resolver here and call into it
             todo!("support LOGICAL_DNS clusters")
         }
     };
-    let Some(load_assignment) = load_assignment else {
-        return Err(Error::no_reachable_endpoints(todo!(), trace));
-    };
     let Some(endpoints) = load_assignment.endpoints.first() else {
-        return Err(Error::no_reachable_endpoints(todo!(), trace));
+        return Err(Error::unavailable(trace, "no available endpoints"));
     };
 
     // load balance.
@@ -631,7 +667,7 @@ async fn select_endpoint(
         request.previous_addrs,
     );
     let Some(addr) = addr else {
-        return Err(Error::no_reachable_endpoints(todo!(), trace));
+        return Err(Error::unavailable(trace, "no available endpoints"));
     };
 
     Ok(SelectedEndpoint { addr: *addr, trace })
@@ -716,25 +752,6 @@ fn is_query_match(query_matches: &[xds::route_configs::QueryMatcher], url: &crat
         let query_val = query.get(&Cow::Borrowed(q.name.as_str()));
         q.matches(query_val.as_ref().map(|cow| cow.as_ref()))
     })
-}
-
-fn pick_cluster<'a>(
-    rng: &mut StdRng,
-    action: &'a xds::route_configs::ClusterSpecifier,
-) -> Result<&'a xds::ResourceName, Error> {
-    match action {
-        xds::route_configs::ClusterSpecifier::Cluster(name) => Ok(name),
-        xds::route_configs::ClusterSpecifier::Weighted(clusters) => {
-            match clusters.choose_weighted(rng, |c| c.weight) {
-                Ok(cluster) => Ok(&cluster.name),
-                Err(WeightedError::NoItem) => {
-                    // TODO: should this just return a special endpoint that 500s?
-                    return Err(todo!());
-                }
-                Err(_) => return Err(todo!()),
-            }
-        }
-    }
 }
 
 /// Hash an outgoing request based on a set of hash policies.

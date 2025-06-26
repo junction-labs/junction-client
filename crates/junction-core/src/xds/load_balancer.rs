@@ -1,7 +1,7 @@
 use crate::{
-    error::Trace,
     hash::thread_local_xxhash,
     xds::{clusters::LbPolicy, endpoints::EndpointGroup},
+    Trace,
 };
 use smol_str::ToSmolStr;
 use std::{

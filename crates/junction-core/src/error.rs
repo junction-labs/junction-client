@@ -1,151 +1,6 @@
-use std::{borrow::Cow, net::SocketAddr, time::Instant};
+use std::borrow::Cow;
 
-use junction_api::{backend::BackendId, http::Route, Name};
-use smol_str::{SmolStr, ToSmolStr};
-
-#[derive(Clone, Debug)]
-pub(crate) struct Trace {
-    start: Instant,
-    phase: TracePhase,
-    events: Vec<TraceEvent>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TraceEvent {
-    pub(crate) phase: TracePhase,
-    pub(crate) kind: TraceEventKind,
-    pub(crate) at: Instant,
-    pub(crate) kv: Vec<TraceData>,
-}
-
-type TraceData = (&'static str, SmolStr);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TracePhase {
-    RouteResolution,
-    EndpointSelection(u8),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum TraceEventKind {
-    RouteLookup,
-    RouteRuleMatched,
-    BackendSelected,
-    BackendLookup,
-    EndpointsLookup,
-    SelectAddr,
-}
-
-impl Trace {
-    pub(crate) fn new() -> Self {
-        Trace {
-            start: Instant::now(),
-            phase: TracePhase::RouteResolution,
-            events: Vec::new(),
-        }
-    }
-
-    pub(crate) fn events(&self) -> impl Iterator<Item = &TraceEvent> {
-        self.events.iter()
-    }
-
-    pub(crate) fn start(&self) -> Instant {
-        self.start
-    }
-
-    pub(crate) fn lookup_route(&mut self, route: &Route) {
-        debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
-
-        self.events.push(TraceEvent {
-            kind: TraceEventKind::RouteLookup,
-            phase: TracePhase::RouteResolution,
-            at: Instant::now(),
-            kv: vec![("route", route.id.to_smolstr())],
-        })
-    }
-
-    pub(crate) fn matched_rule(&mut self, rule: usize, rule_name: Option<&Name>) {
-        debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
-
-        let kv = match rule_name {
-            Some(name) => vec![("rule-name", name.to_smolstr())],
-            None => vec![("rule-idx", rule.to_smolstr())],
-        };
-
-        self.events.push(TraceEvent {
-            kind: TraceEventKind::RouteRuleMatched,
-            phase: TracePhase::RouteResolution,
-            at: Instant::now(),
-            kv,
-        })
-    }
-
-    pub(crate) fn select_backend(&mut self, backend: &BackendId) {
-        debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
-
-        self.events.push(TraceEvent {
-            phase: self.phase,
-            kind: TraceEventKind::BackendSelected,
-            at: Instant::now(),
-            kv: vec![("name", backend.to_smolstr())],
-        });
-    }
-
-    pub(crate) fn start_endpoint_selection(&mut self) {
-        let next_phase = match self.phase {
-            TracePhase::RouteResolution => TracePhase::EndpointSelection(0),
-            TracePhase::EndpointSelection(n) => TracePhase::EndpointSelection(n + 1),
-        };
-        self.phase = next_phase;
-    }
-
-    pub(crate) fn lookup_backend(&mut self, backend: &BackendId) {
-        debug_assert!(matches!(self.phase, TracePhase::EndpointSelection(_)));
-
-        self.events.push(TraceEvent {
-            kind: TraceEventKind::BackendLookup,
-            phase: self.phase,
-            at: Instant::now(),
-            kv: vec![("backend-id", backend.to_smolstr())],
-        })
-    }
-
-    pub(crate) fn lookup_endpoints(&mut self, backend: &BackendId) {
-        debug_assert!(matches!(self.phase, TracePhase::EndpointSelection(_)));
-
-        self.events.push(TraceEvent {
-            kind: TraceEventKind::EndpointsLookup,
-            phase: self.phase,
-            at: Instant::now(),
-            kv: vec![("backend-id", backend.to_smolstr())],
-        })
-    }
-
-    pub(crate) fn load_balance(
-        &mut self,
-        lb_name: &'static str,
-        addr: Option<&SocketAddr>,
-        extra: Vec<TraceData>,
-    ) {
-        debug_assert!(matches!(self.phase, TracePhase::EndpointSelection(_)));
-
-        let mut kv = Vec::with_capacity(extra.len() + 2);
-        kv.push(("type", lb_name.to_smolstr()));
-        kv.push((
-            "addr",
-            addr.map(|a| a.to_smolstr())
-                .unwrap_or_else(|| "-".to_smolstr()),
-        ));
-        kv.extend(extra);
-
-        self.events.push(TraceEvent {
-            kind: TraceEventKind::SelectAddr,
-            phase: self.phase,
-            at: Instant::now(),
-            kv,
-        });
-    }
-}
+use crate::Trace;
 
 /// A `Result` alias where the `Err` case is `junction_core::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -172,25 +27,11 @@ impl Error {
     /// Temporary errors may occur because of a network timeout or because of
     /// lag fetching a configuration from a Junction server.
     pub fn is_temporary(&self) -> bool {
-        matches!(*self.inner, ErrorImpl::NoReachableEndpoints { .. })
+        matches!(*self.inner, ErrorImpl::TimedOut { .. })
     }
 }
 
 impl Error {
-    // timeouts
-
-    pub(crate) fn timed_out(message: &'static str, trace: Trace) -> Self {
-        let inner = ErrorImpl::TimedOut(Cow::from(message));
-        Self {
-            trace: Some(trace),
-            inner: Box::new(inner),
-        }
-    }
-
-    // url problems
-    //
-    // TODO: should this be a separate type? thye don't need a Trace or anything
-
     pub(crate) fn into_invalid_url(message: String) -> Self {
         let inner = ErrorImpl::InvalidUrl(Cow::Owned(message));
         Self {
@@ -207,7 +48,13 @@ impl Error {
         }
     }
 
-    // route problems
+    pub(crate) fn timed_out(message: &'static str, trace: Trace) -> Self {
+        let inner = ErrorImpl::TimedOut(Cow::from(message));
+        Self {
+            trace: Some(trace),
+            inner: Box::new(inner),
+        }
+    }
 
     pub(crate) fn no_route_matched(authority: String, trace: Trace) -> Self {
         Self {
@@ -216,66 +63,41 @@ impl Error {
         }
     }
 
-    pub(crate) fn no_rule_matched(route: Name, trace: Trace) -> Self {
+    pub(crate) fn not_found(resource_type: String, resource_name: String, trace: Trace) -> Self {
         Self {
             trace: Some(trace),
-            inner: Box::new(ErrorImpl::NoRuleMatched { route }),
+            inner: Box::new(ErrorImpl::NotFound {
+                resource_type,
+                resource_name,
+            }),
         }
     }
 
-    pub(crate) fn invalid_route(
-        message: &'static str,
-        id: Name,
-        rule: usize,
-        trace: Trace,
-    ) -> Self {
+    pub(crate) fn unavailable(trace: Trace, msg: &'static str) -> Self {
         Self {
             trace: Some(trace),
-            inner: Box::new(ErrorImpl::InvalidRoute { id, message, rule }),
-        }
-    }
-
-    // backend problems
-
-    pub(crate) fn no_backend(backend: BackendId, trace: Trace) -> Self {
-        Self {
-            trace: Some(trace),
-            inner: Box::new(ErrorImpl::NoBackend { backend }),
-        }
-    }
-
-    pub(crate) fn no_reachable_endpoints(backend: BackendId, trace: Trace) -> Self {
-        Self {
-            trace: Some(trace),
-            inner: Box::new(ErrorImpl::NoReachableEndpoints { backend }),
+            inner: Box::new(ErrorImpl::Unavailable(Cow::Borrowed(msg))),
         }
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 enum ErrorImpl {
-    #[error("timed out: {0}")]
-    TimedOut(Cow<'static, str>),
-
     #[error("invalid url: {0}")]
     InvalidUrl(Cow<'static, str>),
 
-    #[error("invalid route configuration")]
-    InvalidRoute {
-        message: &'static str,
-        id: Name,
-        rule: usize,
-    },
+    #[error("timed out {0}")]
+    TimedOut(Cow<'static, str>),
 
     #[error("no route matched: '{authority}'")]
     NoRouteMatched { authority: String },
 
-    #[error("{route}: no rules matched the request")]
-    NoRuleMatched { route: Name },
+    #[error("xds {resource_type} not found: {resource_name}")]
+    NotFound {
+        resource_type: String,
+        resource_name: String,
+    },
 
-    #[error("{backend}: backend not found")]
-    NoBackend { backend: BackendId },
-
-    #[error("{backend}: no reachable endpoints")]
-    NoReachableEndpoints { backend: BackendId },
+    #[error("unavailable")]
+    Unavailable(Cow<'static, str>),
 }
