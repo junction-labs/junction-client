@@ -270,47 +270,24 @@ impl Client {
 
         let request = HttpRequest::from_parts(method, url, headers);
 
-        let trace = Trace::new();
         let resolved = resolve_route(
             &self.config.ads,
             &self.search_config,
-            trace,
+            Trace::new(),
             request.clone(),
             Some(deadline),
         )
         .await?;
-
-        // fetch the cluster for this request and compute the request hash. both
-        // cluster selection and endpoint hashing should be done at this point,
-        // even if the request gets retried.
-        //
-        // this happens here so that in THEORY we can switch out the hash
-        // function. in practice, there's no reason to do it here since there
-        // is exactly one hash function we support at the moment.
-        let cluster = with_deadline!(
-            self.config.ads.get_cluster(&resolved.cluster),
-            Some(deadline),
-            "fetching backend",
-            resolved.trace,
-        );
-        let Some(cluster) = cluster else {
-            return Err(Error::not_found(
-                ResourceType::Cluster.type_url().to_string(),
-                resolved.cluster.to_string(),
-                resolved.trace,
-            ));
-        };
 
         // select endpoints using the result of route resolution
         let selected = select_endpoint(
             &self.config.ads,
             resolved.trace,
             RequestContext {
-                request,
                 request_hash: resolved.request_hash,
                 previous_addrs: &[],
             },
-            cluster,
+            &resolved.cluster,
             Some(deadline),
         )
         .await?;
@@ -357,43 +334,25 @@ impl Client {
         // used in the initial request, and the same request hash, but should
         // not necessarily pick the same endpoint.
         let deadline = Instant::now() + self.resolve_timeout;
-        let context = RequestContext {
-            request: HttpRequest::from_parts(&endpoint.method, &endpoint.url, &endpoint.headers),
-            request_hash: endpoint.request_hash,
-            previous_addrs: &endpoint.previous_addrs,
-        };
-        let cluster = with_deadline!(
-            self.config.ads.get_cluster(&endpoint.cluster_name),
-            Some(deadline),
-            "fetching cluster",
-            endpoint.trace,
-        );
-        let Some(cluster) = cluster else {
-            return Err(Error::not_found(
-                ResourceType::Cluster.type_url().to_string(),
-                endpoint.cluster_name.to_string(),
-                endpoint.trace,
-            ));
-        };
-
         let next = select_endpoint(
             &self.config.ads,
             endpoint.trace,
-            context,
-            cluster,
+            RequestContext {
+                request_hash: endpoint.request_hash,
+                previous_addrs: &endpoint.previous_addrs,
+            },
+            &endpoint.cluster_name,
             Some(deadline),
         )
         .await?;
-        let address = next.addr;
-        let trace = next.trace;
 
         // track address history
         let mut previous_addrs = endpoint.previous_addrs;
         previous_addrs.push(endpoint.address);
 
         Ok(Endpoint {
-            address,
-            trace,
+            address: next.addr,
+            trace: next.trace,
             previous_addrs,
             ..endpoint
         })
@@ -503,7 +462,7 @@ pub(crate) struct ResolvedRoute {
 pub(crate) async fn resolve_route(
     cache: &impl XdsCache,
     search_config: &SearchConfig,
-    trace: Trace,
+    mut trace: Trace,
     request: HttpRequest<'_>,
     deadline: Option<Instant>,
 ) -> crate::Result<ResolvedRoute> {
@@ -527,11 +486,11 @@ pub(crate) async fn resolve_route(
             cache
                 .subscribe(xds::ResourceType::Listener, name.clone())
                 .await;
-            cache.get_listener(&name).await
+            cache.get_listener(&name).await.map(|l| (name, l))
         });
     }
 
-    let listener = loop {
+    let (listener_name, listener) = loop {
         match with_deadline!(futures_ordered.next(), deadline, "fetching listener", trace) {
             Some(Some(found)) => break found,
             Some(None) => {
@@ -545,6 +504,7 @@ pub(crate) async fn resolve_route(
             }
         }
     };
+    trace.lookup_listener(listener_name.to_string());
 
     // immdediately try to fetch the route
     let route_config = match &listener.route_config {
@@ -555,10 +515,13 @@ pub(crate) async fn resolve_route(
                 "fetching route",
                 trace
             ) {
-                Some(route) => RouteConfigRef::Route(route),
+                Some(route) => {
+                    trace.lookup_route(name.to_string());
+                    RouteConfigRef::Route(route)
+                }
                 None => {
                     return Err(Error::not_found(
-                        ResourceType::Listener.type_url().to_string(),
+                        ResourceType::RouteConfiguration.type_url().to_string(),
                         name.to_string(),
                         trace,
                     ))
@@ -572,7 +535,7 @@ pub(crate) async fn resolve_route(
     // request. the hostname and port of the request have already matched but we
     // need to match headers/url params/method and so on.
     let action = match find_match(route_config.as_ref(), request.clone()) {
-        Some(route) => route,
+        Some(action) => action,
         None => {
             return Err(Error::no_route_matched(
                 request.url.authority().to_string(),
@@ -580,6 +543,7 @@ pub(crate) async fn resolve_route(
             ))
         }
     };
+    trace.matched_route();
 
     // pick a target at random from the list, respecting weights. if there are
     // no backends listed we should blackhole here.
@@ -595,6 +559,7 @@ pub(crate) async fn resolve_route(
             }
         }
     };
+    trace.select_cluster();
 
     // if there's nothign in the request that matches this hash policy, fall
     // back to essentially random with sticky sessions. this is what envoy
@@ -604,6 +569,7 @@ pub(crate) async fn resolve_route(
     // https://github.com/envoyproxy/envoy/blob/73fe00fc139fd5053f4c4a5d66569cc254449896/source/extensions/load_balancing_policies/common/thread_aware_lb_impl.cc#L157-L164
     let request_hash =
         hash_request(request.clone(), &action.hash_policies).unwrap_or_else(crate::rand::random);
+    trace.hash_request(request_hash);
 
     Ok(ResolvedRoute {
         trace,
@@ -616,7 +582,6 @@ pub(crate) async fn resolve_route(
 
 #[derive(Debug, Clone)]
 struct RequestContext<'a> {
-    request: HttpRequest<'a>,
     request_hash: u64,
     previous_addrs: &'a [SocketAddr],
 }
@@ -625,9 +590,27 @@ async fn select_endpoint(
     cache: &impl XdsCache,
     mut trace: Trace,
     request: RequestContext<'_>,
-    cluster: Arc<xds::Cluster>,
+    cluster_name: &xds::ResourceName,
     deadline: Option<Instant>,
 ) -> crate::Result<SelectedEndpoint> {
+    trace.start_endpoint_selection();
+
+    // lookup cluster
+    let cluster = with_deadline!(
+        cache.get_cluster(&cluster_name),
+        deadline,
+        "fetching cluster",
+        trace,
+    );
+    let Some(cluster) = cluster else {
+        return Err(Error::not_found(
+            ResourceType::Cluster.type_url().to_string(),
+            cluster_name.to_string(),
+            trace,
+        ));
+    };
+    trace.lookup_cluster(cluster_name.to_string());
+
     // lookup endpoints for a cluster
     let load_assignment = match &cluster.endpoints {
         xds::clusters::Endpoints::Eds(name) => {
@@ -638,7 +621,10 @@ async fn select_endpoint(
                 trace
             );
             match load_assignment {
-                Some(load_assignment) => load_assignment,
+                Some(load_assignment) => {
+                    trace.lookup_endpoints(name.to_string());
+                    load_assignment
+                }
                 None => {
                     return Err(Error::not_found(
                         ResourceType::ClusterLoadAssignment.type_url().to_string(),

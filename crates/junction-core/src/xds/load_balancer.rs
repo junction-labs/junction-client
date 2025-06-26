@@ -75,7 +75,7 @@ impl RoundRobinLb {
         let idx = self.idx.fetch_add(1, Ordering::SeqCst) % endpoint_group.len();
         let addr = endpoint_group.nth(idx);
 
-        trace.load_balance("ROUND_ROBIN", addr, Vec::new());
+        trace.load_balance("RoundRobin", addr, Vec::new());
 
         addr
     }
@@ -120,7 +120,7 @@ impl RingHashLb {
         let endpoint_idx = self.with_ring(endpoints, |r| r.pick(request_hash))?;
         let addr = endpoints.nth(endpoint_idx);
 
-        trace.load_balance("RING_HASH", addr, vec![("hash", request_hash.to_smolstr())]);
+        trace.load_balance("RingHash", addr, vec![("hash", request_hash.to_smolstr())]);
 
         addr
     }

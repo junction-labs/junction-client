@@ -17,8 +17,9 @@ pub struct Endpoint {
     // matched route info
     // TODO: do we need the matched route here???? is it enough to have the name and
     // version? is it enough to have it in the trace?
-    pub(crate) address: SocketAddr,
     pub(crate) cluster_name: xds::ResourceName,
+    pub(crate) address: SocketAddr,
+    pub(crate) previous_addrs: Vec<SocketAddr>,
 
     // FIXME: figure out what the type is here and expose it
     // pub(crate) timeouts: Option<RouteTimeouts>,
@@ -26,7 +27,6 @@ pub struct Endpoint {
 
     // debugging data
     pub(crate) trace: Trace,
-    pub(crate) previous_addrs: Vec<SocketAddr>,
 }
 
 impl Endpoint {

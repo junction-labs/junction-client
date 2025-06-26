@@ -1,6 +1,5 @@
 use std::{net::SocketAddr, time::Instant};
 
-use junction_api::{backend::BackendId, http::Route, Name};
 use smol_str::{SmolStr, ToSmolStr};
 
 #[derive(Clone, Debug)]
@@ -26,14 +25,18 @@ pub(crate) enum TracePhase {
     EndpointSelection(u8),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TraceEventKind {
-    RouteLookup,
-    RouteRuleMatched,
-    BackendSelected,
-    BackendLookup,
-    EndpointsLookup,
-    SelectAddr,
+    // RouteResolution
+    LookupListener,
+    LookupRoute,
+    MatchRoute,
+    SelectCluster,
+    HashRequest,
+    // EndpointSelection
+    LookupCluster,
+    LookupEndpoints,
+    LoadBalance,
 }
 
 impl Trace {
@@ -53,43 +56,64 @@ impl Trace {
         self.start
     }
 
-    pub(crate) fn lookup_route(&mut self, route: &Route) {
+    // Route Resolution builders
+
+    pub(crate) fn lookup_listener(&mut self, listener: String) {
         debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
 
         self.events.push(TraceEvent {
-            kind: TraceEventKind::RouteLookup,
+            kind: TraceEventKind::LookupListener,
             phase: TracePhase::RouteResolution,
             at: Instant::now(),
-            kv: vec![("route", route.id.to_smolstr())],
+            kv: vec![("listener", listener.to_smolstr())],
         })
     }
 
-    pub(crate) fn matched_rule(&mut self, rule: usize, rule_name: Option<&Name>) {
+    pub(crate) fn lookup_route(&mut self, route: String) {
         debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
 
-        let kv = match rule_name {
-            Some(name) => vec![("rule-name", name.to_smolstr())],
-            None => vec![("rule-idx", rule.to_smolstr())],
-        };
-
         self.events.push(TraceEvent {
-            kind: TraceEventKind::RouteRuleMatched,
+            kind: TraceEventKind::LookupRoute,
             phase: TracePhase::RouteResolution,
             at: Instant::now(),
-            kv,
+            kv: vec![("route", route.to_smolstr())],
         })
     }
 
-    pub(crate) fn select_backend(&mut self, backend: &BackendId) {
+    pub(crate) fn matched_route(&mut self) {
+        debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
+
+        self.events.push(TraceEvent {
+            kind: TraceEventKind::MatchRoute,
+            phase: TracePhase::RouteResolution,
+            at: Instant::now(),
+            kv: vec![],
+        })
+    }
+
+    pub(crate) fn select_cluster(&mut self) {
         debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
 
         self.events.push(TraceEvent {
             phase: self.phase,
-            kind: TraceEventKind::BackendSelected,
+            kind: TraceEventKind::SelectCluster,
             at: Instant::now(),
-            kv: vec![("name", backend.to_smolstr())],
+            kv: vec![],
         });
     }
+
+    pub(crate) fn hash_request(&mut self, request_hash: u64) {
+        debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
+
+        self.events.push(TraceEvent {
+            phase: self.phase,
+            kind: TraceEventKind::HashRequest,
+            at: Instant::now(),
+            kv: vec![("request-hash", request_hash.to_smolstr())],
+        });
+    }
+
+    // Endpoint Selection builders
 
     pub(crate) fn start_endpoint_selection(&mut self) {
         let next_phase = match self.phase {
@@ -99,26 +123,22 @@ impl Trace {
         self.phase = next_phase;
     }
 
-    pub(crate) fn lookup_backend(&mut self, backend: &BackendId) {
-        debug_assert!(matches!(self.phase, TracePhase::EndpointSelection(_)));
-
+    pub(crate) fn lookup_cluster(&mut self, cluster: String) {
         self.events.push(TraceEvent {
-            kind: TraceEventKind::BackendLookup,
             phase: self.phase,
+            kind: TraceEventKind::LookupCluster,
             at: Instant::now(),
-            kv: vec![("backend-id", backend.to_smolstr())],
-        })
+            kv: vec![("cluster", cluster.to_smolstr())],
+        });
     }
 
-    pub(crate) fn lookup_endpoints(&mut self, backend: &BackendId) {
-        debug_assert!(matches!(self.phase, TracePhase::EndpointSelection(_)));
-
+    pub(crate) fn lookup_endpoints(&mut self, endpoints: String) {
         self.events.push(TraceEvent {
-            kind: TraceEventKind::EndpointsLookup,
             phase: self.phase,
+            kind: TraceEventKind::LookupEndpoints,
             at: Instant::now(),
-            kv: vec![("backend-id", backend.to_smolstr())],
-        })
+            kv: vec![("endpoints", endpoints.to_smolstr())],
+        });
     }
 
     pub(crate) fn load_balance(
@@ -139,7 +159,7 @@ impl Trace {
         kv.extend(extra);
 
         self.events.push(TraceEvent {
-            kind: TraceEventKind::SelectAddr,
+            kind: TraceEventKind::LoadBalance,
             phase: self.phase,
             at: Instant::now(),
             kv,
