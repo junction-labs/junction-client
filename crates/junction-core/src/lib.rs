@@ -21,7 +21,7 @@ mod xds;
 pub use client::{Client, HttpRequest, HttpResult, SearchConfig, SelectedEndpoint};
 use futures::FutureExt;
 use trace::Trace;
-pub use xds::{IntoXds, XdsConfig};
+pub use xds::{IntoXds, ResourceVersion, XdsConfig};
 
 /// Check route resolution.
 ///

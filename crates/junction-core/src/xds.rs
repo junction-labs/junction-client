@@ -60,8 +60,10 @@ use xds_api::pb::{
 pub(crate) use cache::StaticCache;
 pub(crate) use resources::{
     clusters, endpoints, listeners, route_configs, ApiListener, Cluster, LoadAssignment,
-    ResourceName, ResourceType, ResourceVersion, RouteConfiguration,
+    ResourceName, ResourceType, RouteConfiguration,
 };
+
+pub use resources::ResourceVersion;
 
 #[cfg(test)]
 pub(crate) mod test;

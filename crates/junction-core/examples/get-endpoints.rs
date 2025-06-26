@@ -1,9 +1,4 @@
 use http::HeaderValue;
-use junction_api::{
-    backend::{Backend, LbPolicy},
-    http::{BackendRef, HeaderMatch, Route, RouteMatch, RouteRule},
-    Name, Regex, Service,
-};
 use junction_core::Client;
 use std::{env, str::FromStr, time::Duration};
 use tracing_subscriber::EnvFilter;

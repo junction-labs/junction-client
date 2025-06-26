@@ -1,10 +1,6 @@
 use std::{env, time::Duration};
 
 use http::Method;
-use junction_api::{
-    backend::{Backend, LbPolicy},
-    Service,
-};
 use junction_core::Client;
 use tracing_subscriber::EnvFilter;
 
