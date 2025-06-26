@@ -2,7 +2,7 @@ use super::{ErrorCtx, Resource, ResourceError, ResourceName, ResourceType};
 
 use junction_api::Hostname;
 use regex::Regex;
-use std::{collections::HashSet, str::FromStr};
+use std::{collections::HashSet, str::FromStr, time::Duration};
 use xds_api::pb::envoy::config::route::v3::{self as xds_route};
 
 macro_rules! vec_from_xds {
@@ -103,8 +103,8 @@ impl Route {
 #[derive(Debug, Clone)]
 pub(crate) struct Action {
     pub hash_policies: Vec<HashPolicy>,
-    pub retries: Retries,
-    pub timeouts: Timeouts,
+    pub retries: Option<Retries>,
+    pub timeouts: Option<Timeouts>,
     pub cluster: ClusterSpecifier,
 }
 
@@ -121,12 +121,14 @@ impl Action {
                     None => todo!(),
                 };
                 let hash_policies = vec_from_xds!(action.hash_policy, "hash_policy", HashPolicy)?;
+                let retries = Retries::from_xds(&action)?;
+                let timeouts = Timeouts::from_xds(&action)?;
 
                 Ok(Self {
                     hash_policies,
                     cluster,
-                    retries: Retries {},   // FIXME
-                    timeouts: Timeouts {}, // FIXME
+                    retries,
+                    timeouts,
                 })
             }
             _ => return Err(ResourceError::invalid("unsupported action")),
@@ -182,11 +184,90 @@ pub(crate) enum RequestHasher {
     QueryParameter { name: String },
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct Retries {}
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Retries {
+    pub(crate) codes: Vec<u16>,
+    pub(crate) attempts: Option<u32>,
+    pub(crate) backoff: Option<Duration>,
+    pub(crate) max_backoff: Option<Duration>,
+}
+
+impl Retries {
+    fn from_xds(xds: &xds_route::RouteAction) -> Result<Option<Self>, ResourceError> {
+        let Some(xds_retry) = xds.retry_policy.as_ref() else {
+            return Ok(None);
+        };
+
+        let codes: Vec<_> = xds_retry
+            .retriable_status_codes
+            .iter()
+            .map(|code| *code as u16)
+            .collect();
+
+        let attempts = xds_retry.num_retries.map(|v| u32::from(v) + 1);
+        let (backoff, max_backoff) = match &xds_retry.retry_back_off {
+            Some(back_off) => {
+                let backoff = back_off
+                    .base_interval
+                    .map(Duration::try_from)
+                    .transpose()
+                    .map_err(|_| ResourceError::invalid("invalid duration"))
+                    .with_fields("retry_policy", "retry_back_off")?;
+
+                let max_backoff = back_off
+                    .max_interval
+                    .map(Duration::try_from)
+                    .transpose()
+                    .map_err(|_| ResourceError::invalid("invalid duration"))
+                    .with_fields("retry_policy", "max_interval")?;
+
+                (backoff, max_backoff)
+            }
+            None => (None, None),
+        };
+
+        let retries = match (&codes, attempts, backoff, max_backoff) {
+            (v, None, None, None) if v.is_empty() => None,
+            _ => Some(Self {
+                codes,
+                attempts,
+                backoff,
+                max_backoff,
+            }),
+        };
+        Ok(retries)
+    }
+}
 
 #[derive(Debug, Clone)]
-pub(crate) struct Timeouts {}
+pub(crate) struct Timeouts {
+    pub(crate) total: Option<Duration>,
+    pub(crate) attempt: Option<Duration>,
+}
+
+impl Timeouts {
+    fn from_xds(xds: &xds_route::RouteAction) -> Result<Option<Self>, ResourceError> {
+        let total = xds
+            .timeout
+            .map(Duration::try_from)
+            .transpose()
+            .map_err(|_| ResourceError::invalid("invalid duration"))
+            .with_field("timeout")?;
+
+        let attempt = xds
+            .retry_policy
+            .as_ref()
+            .and_then(|retry_policy| retry_policy.per_try_timeout.map(Duration::try_from))
+            .transpose()
+            .map_err(|_| ResourceError::invalid("invalid duration"))
+            .with_fields("retry_policy", "per_try_timeout")?;
+
+        match (total, attempt) {
+            (None, None) => Ok(None),
+            (total, attempt) => Ok(Some(Self { total, attempt })),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct Matcher {
