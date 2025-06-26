@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use crate::{error::Trace, xds, HttpRequest, HttpResult};
+use crate::{xds, HttpRequest, HttpResult, Trace};
 
 // TODO: move to Client? all these fields can be private then.
 // TODO: this is way more than just a resolved endpoint, it's the whole request
