@@ -122,7 +122,8 @@ pub struct Client {
     // expanding the search over the set of possible authority matches.
     search_config: SearchConfig,
 
-    config: Arc<DynamicConfig>,
+    // the ADS client used to fetch xDS config from the control plane
+    ads: AdsClient,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -144,17 +145,6 @@ impl SearchConfig {
     }
 }
 
-struct DynamicConfig {
-    ads: AdsClient,
-
-    /// a the shared handle to the task that's actually running the client in
-    /// the background. should not drop until every active client drops.
-    ///
-    /// TODO: should this get bundled into AdsClient? shrug emoji?
-    #[allow(unused)]
-    task_handle: tokio::task::JoinHandle<()>,
-}
-
 // FIXME: Vec<Endpoints> is probably the wrong thing to return from all our
 // resolve methods. We probably need a struct that has something like a list
 // of primary endpoints to cycle through on retries, and a separate list of
@@ -174,22 +164,7 @@ impl Client {
         node_id: String,
         cluster: String,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let (ads, mut ads_task) = AdsClient::build(address, node_id, cluster).unwrap();
-
-        // try to start the ADS connection while blocking. if it fails, fail
-        // fast here instead of letting the client start.
-        //
-        // once it's started, hand off the task to the executor in the
-        // background.
-        ads_task.connect().await?;
-        let handle = tokio::spawn(async move {
-            match ads_task.run().await {
-                Ok(()) => (),
-                Err(e) => panic!(
-                    "junction-core: ads client exited with an unexpected error: {e}. this is a bug in Junction!"
-                ),
-            }
-        });
+        let ads = AdsClient::build(address, node_id, cluster).await?;
 
         // load search-path config from the system.
         //
@@ -203,14 +178,10 @@ impl Client {
         };
 
         // wrap it all up in a dynamic config and return
-        let config = Arc::new(DynamicConfig {
-            ads,
-            task_handle: handle,
-        });
         let client = Self {
             resolve_timeout: Duration::from_secs(5),
             search_config,
-            config,
+            ads,
         };
 
         Ok(client)
@@ -271,7 +242,7 @@ impl Client {
         let request = HttpRequest::from_parts(method, url, headers);
 
         let resolved = resolve_route(
-            &self.config.ads,
+            &self.ads,
             &self.search_config,
             Trace::new(),
             request.clone(),
@@ -281,7 +252,7 @@ impl Client {
 
         // select endpoints using the result of route resolution
         let selected = select_endpoint(
-            &self.config.ads,
+            &self.ads,
             resolved.trace,
             RequestContext {
                 request_hash: resolved.request_hash,
@@ -337,7 +308,7 @@ impl Client {
         // not necessarily pick the same endpoint.
         let deadline = Instant::now() + self.resolve_timeout;
         let next = select_endpoint(
-            &self.config.ads,
+            &self.ads,
             endpoint.trace,
             RequestContext {
                 request_hash: endpoint.request_hash,
@@ -397,7 +368,7 @@ impl Client {
     ///
     /// For static clients, this does nothing.
     pub async fn csds_server(self, port: u16) -> Result<(), tonic::transport::Error> {
-        self.config.ads.csds_server(port).await
+        self.ads.csds_server(port).await
     }
 
     /// Dump the client's current cache of xDS resources, as fetched from the
@@ -406,17 +377,14 @@ impl Client {
     /// This is a programmatic view of the same data that you can fetch over
     /// gRPC by starting a [Client::csds_server].
     pub fn dump_xds(&self) -> impl Iterator<Item = crate::XdsConfig> + '_ {
-        self.config.ads.iter_xds()
+        self.ads.iter_xds()
     }
 
     /// Dump xDS resources that failed to update. This is a view of the data
     /// returned by [Client::dump_xds] that only contains resources with
     /// errors.
     pub fn dump_xds_errors(&self) -> impl Iterator<Item = crate::XdsConfig> + '_ {
-        self.config
-            .ads
-            .iter_xds()
-            .filter(|x| x.last_error.is_some())
+        self.ads.iter_xds().filter(|x| x.last_error.is_some())
     }
 }
 

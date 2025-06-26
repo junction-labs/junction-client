@@ -102,6 +102,10 @@ pub(super) struct AdsClient {
     subs: mpsc::Sender<SubscriptionUpdate>,
     cache: CacheReader,
     dns: StdlibResolver,
+
+    // a handle to the currently running task.
+    #[allow(unused)]
+    task_handle: Arc<tokio::task::JoinHandle<()>>,
 }
 
 impl AdsClient {
@@ -114,11 +118,11 @@ impl AdsClient {
     /// This method doesn't start the background work necessary to communicate with
     /// an ADS server. To do that, call the [run][AdsTask::run] method on the returned
     /// `AdsTask`.
-    pub(super) fn build(
+    pub(super) async fn build(
         address: impl Into<Bytes>,
         node_id: String,
         cluster: String,
-    ) -> Result<(AdsClient, AdsTask), tonic::transport::Error> {
+    ) -> Result<AdsClient, tonic::transport::Error> {
         // FIXME: make this configurable
         let endpoint = Endpoint::from_shared(address)?
             .connect_timeout(Duration::from_secs(5))
@@ -140,22 +144,40 @@ impl AdsClient {
 
         // FIXME: make this configurable
         let dns = StdlibResolver::new_with(Duration::from_secs(5), Duration::from_millis(500), 2);
+        let cache_reader = cache.reader();
 
-        let client = AdsClient {
-            subs: sub_tx,
-            cache: cache.reader(),
-            dns: dns.clone(),
-        };
-        let task = AdsTask {
+        // try to start the ADS connection while blocking. if it fails, fail
+        // fast here instead of letting the client start.
+        //
+        // once it's started, hand off the task to the executor in the
+        // background.
+        let mut task = AdsTask {
             endpoint,
             initial_channel: None,
             node_info,
             cache,
-            dns,
+            dns: dns.clone(),
             subs: sub_rx,
         };
+        task.connect().await?;
+        let task_handle = tokio::spawn({
+            async move {
+                match task.run().await {
+                    Ok(()) => (),
+                    Err(e) => panic!(
+                        "junction-core: ads client exited with an unexpected error: {e}. this is a bug in Junction!"
+                    ),
+                }
+            }
+        });
 
-        Ok((client, task))
+        // bundle up the client and return it
+        Ok(AdsClient {
+            subs: sub_tx,
+            cache: cache_reader,
+            dns,
+            task_handle: Arc::new(task_handle),
+        })
     }
 
     pub(super) fn csds_server(
