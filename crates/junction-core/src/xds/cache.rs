@@ -865,6 +865,91 @@ impl CacheReader {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct StaticCache {
+    data: CacheData,
+}
+
+macro_rules! impl_get_static {
+    ($method_name:ident($field_name:ident)=>$ret:ty) => {
+        impl StaticCache {
+            pub fn $method_name(&self, name: &ResourceName) -> Option<Arc<$ret>> {
+                self.data
+                    .$field_name
+                    .get(name)
+                    .and_then(|e| e.data.as_ref().map(|d| Arc::clone(&d)))
+            }
+        }
+    };
+}
+impl_get_static!(get_listener(listeners)=>ApiListener);
+impl_get_static!(get_route_config(route_configs)=>RouteConfiguration);
+impl_get_static!(get_cluster(clusters)=>Cluster);
+impl_get_static!(get_load_assignment(load_assignments)=>LoadAssignment);
+
+impl StaticCache {
+    pub(crate) fn insert(
+        &mut self,
+        version: ResourceVersion,
+        resources: impl Iterator<Item = (ResourceName, protobuf::Any)>,
+    ) -> Vec<ResourceError> {
+        let mut errors = Vec::new();
+        for (name, resource) in resources {
+            let rtype = match ResourceType::from_type_url(&resource.type_url) {
+                Some(rtype) => rtype,
+                None => {
+                    errors.push(ResourceError::invalid_with(format!(
+                        "unknown resource type: {}",
+                        resource.type_url
+                    )));
+                    continue;
+                }
+            };
+
+            let version = version.clone();
+            macro_rules! dispatch {
+                ($($variant:pat => $field:ident),* $(,)*) => {
+                    match rtype {
+                        $(
+                            $variant => insert_static(
+                                &self.data.$field,
+                                version,
+                                name,
+                                resource,
+                            ),
+                        )*
+                    }
+                }
+            }
+            let err = dispatch!(
+                ResourceType::Cluster => clusters,
+                ResourceType::ClusterLoadAssignment => load_assignments,
+                ResourceType::Listener => listeners,
+                ResourceType::RouteConfiguration => route_configs,
+            );
+            if let Err(e) = err {
+                errors.push(e);
+            }
+        }
+        errors
+    }
+}
+
+fn insert_static<T>(
+    data: &ResourceMap<T>,
+    version: ResourceVersion,
+    name: ResourceName,
+    any: protobuf::Any,
+) -> Result<(), ResourceError>
+where
+    T: Resource,
+{
+    // actually insert the thing
+    let resource = T::from_any(&any)?;
+    data.insert_ok(name, version.clone(), resource);
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use pretty_assertions::assert_eq;
