@@ -303,6 +303,8 @@ impl Client {
             cluster_name: resolved.cluster,
             address,
             previous_addrs: vec![],
+            retries: resolved.retries.map(|r| r.into()),
+            timeouts: resolved.timeouts.map(|t| t.into()),
             trace,
         })
     }
@@ -454,8 +456,8 @@ impl AsRef<xds::RouteConfiguration> for RouteConfigRef {
 pub(crate) struct ResolvedRoute {
     cluster: xds::ResourceName,
     request_hash: u64,
-    retries: xds::route_configs::Retries,
-    timeouts: xds::route_configs::Timeouts,
+    retries: Option<xds::route_configs::Retries>,
+    timeouts: Option<xds::route_configs::Timeouts>,
     trace: Trace,
 }
 
@@ -845,7 +847,7 @@ fn search<'a>(search_config: &SearchConfig, url: &'a crate::Url) -> Vec<Cow<'a, 
 #[cfg(test)]
 mod test {
     use crate::Url;
-    use junction_api::{http::BackendRef, Hostname, Name, Regex, Service};
+    use junction_api::Hostname;
     use std::str::FromStr;
 
     use pretty_assertions::assert_eq;
