@@ -33,11 +33,8 @@ use bytes::Bytes;
 use cache::{Cache, CacheReader};
 use enum_map::EnumMap;
 use futures::{FutureExt, TryStreamExt};
-use junction_api::Hostname;
 pub(crate) use resources::ResourceName;
-use std::{
-    borrow::Cow, collections::BTreeSet, future::Future, io::ErrorKind, sync::Arc, time::Duration,
-};
+use std::{borrow::Cow, future::Future, io::ErrorKind, sync::Arc, time::Duration};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{transport::Endpoint, Streaming};
@@ -63,7 +60,10 @@ pub(crate) use resources::{
     ResourceType, RouteConfiguration,
 };
 
-use crate::{client::XdsCache, dns::StdlibResolver};
+use crate::{
+    client::XdsCache,
+    dns::{DnsUpdates, StdlibResolver},
+};
 
 mod csds;
 
@@ -101,7 +101,6 @@ enum SubscriptionUpdate {
 pub(super) struct AdsClient {
     subs: mpsc::Sender<SubscriptionUpdate>,
     cache: CacheReader,
-    dns: StdlibResolver,
 
     // a handle to the currently running task.
     #[allow(unused)]
@@ -119,6 +118,7 @@ impl AdsClient {
     /// an ADS server. To do that, call the [run][AdsTask::run] method on the returned
     /// `AdsTask`.
     pub(super) async fn build(
+        dns: StdlibResolver,
         address: impl Into<Bytes>,
         node_id: String,
         cluster: String,
@@ -143,7 +143,6 @@ impl AdsClient {
         let cache = Cache::default();
 
         // FIXME: make this configurable
-        let dns = StdlibResolver::new_with(Duration::from_secs(5), Duration::from_millis(500), 2);
         let cache_reader = cache.reader();
 
         // try to start the ADS connection while blocking. if it fails, fail
@@ -156,7 +155,7 @@ impl AdsClient {
             initial_channel: None,
             node_info,
             cache,
-            dns: dns.clone(),
+            dns,
             subs: sub_rx,
         };
         task.connect().await?;
@@ -175,7 +174,6 @@ impl AdsClient {
         Ok(AdsClient {
             subs: sub_tx,
             cache: cache_reader,
-            dns,
             task_handle: Arc::new(task_handle),
         })
     }
@@ -345,7 +343,7 @@ impl AdsTask {
         // set DNS names
         //
         // FIXME: lol, lmao, etc
-        let dns_names = self.cache.dns_names().map(|h| (h, 80));
+        let dns_names = self.cache.dns_names();
         self.dns.set_names(dns_names);
 
         // set up the xDS connection and start sending messages
@@ -373,7 +371,7 @@ impl AdsTask {
                     return Err(ConnectionError::AdsDisconnected);
                 }
             }
-            update_dns(&self.dns, dns_updates.add, dns_updates.remove);
+            self.dns.update_names(dns_updates);
         }
     }
 
@@ -474,18 +472,6 @@ async fn handle_update_batch(
     }
 
     Ok(false)
-}
-
-#[inline]
-fn update_dns(dns: &StdlibResolver, add: BTreeSet<Hostname>, remove: BTreeSet<Hostname>) {
-    for name in add {
-        // FIXME: lol, lmao, etc
-        dns.subscribe(name, 80);
-    }
-    for name in remove {
-        // FIXME: lol, lmao, etc
-        dns.unsubscribe(&name, 80);
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -686,26 +672,14 @@ impl<'a> AdsConnection<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct DnsUpdates {
-    add: BTreeSet<Hostname>,
-    remove: BTreeSet<Hostname>,
-    sync: bool,
-}
-
-#[cfg(test)]
-impl DnsUpdates {
-    fn is_noop(&self) -> bool {
-        self.add.is_empty() && self.remove.is_empty() && !self.sync
-    }
-}
-
 #[cfg(test)]
 mod test_ads_conn {
     use cache::Cache;
     use once_cell::sync::Lazy;
     use pretty_assertions::assert_eq;
     use xds_api::pb::envoy::service::discovery::v3 as xds_discovery;
+
+    use crate::dns::dns_updates;
 
     use super::test as xds_test;
     use super::*;
@@ -1339,9 +1313,9 @@ mod test_ads_conn {
         // dns changes, we got a dns cluster
         assert_eq!(
             dns,
-            DnsUpdates {
-                add: BTreeSet::from_iter([Hostname::from_static("cooler.example.org")]),
-                ..Default::default()
+            dns_updates! {
+                add = [("cooler.example.org", 2345)],
+                remove = [],
             }
         );
         // should generate ACKs

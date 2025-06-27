@@ -88,7 +88,6 @@ use std::{
 
 use dashmap::DashMap;
 use enum_map::EnumMap;
-use junction_api::Hostname;
 use petgraph::{
     graph::{DiGraph, NodeIndex},
     visit::{EdgeRef, Visitable},
@@ -97,6 +96,8 @@ use petgraph::{
 use tokio::sync::Notify;
 use xds_api::pb::envoy::service::discovery::v3 as xds_discovery;
 use xds_api::pb::google::protobuf;
+
+use crate::dns::DnsAddr;
 
 use super::{
     resources::{
@@ -502,17 +503,17 @@ impl Subscriptions {
 /// `collect` is called.
 #[derive(Clone, Debug, Default)]
 struct DnsNames {
-    names: HashMap<Hostname, usize>,
+    names: HashMap<DnsAddr, usize>,
     changes: DnsUpdates,
 }
 
 impl DnsNames {
     /// Add a name to the set.
     /// present.
-    fn add_name(&mut self, name: Hostname) {
+    fn add_name(&mut self, addr: DnsAddr) {
         use std::collections::hash_map::Entry;
 
-        match self.names.entry(name) {
+        match self.names.entry(addr) {
             Entry::Occupied(mut entry) => {
                 *entry.get_mut() += 1;
             }
@@ -529,15 +530,15 @@ impl DnsNames {
     }
 
     /// Remove a name from the tracked set.
-    fn remove_name(&mut self, name: &Hostname) {
-        let Some(val) = self.names.get_mut(name) else {
+    fn remove_name(&mut self, addr: DnsAddr) {
+        let Some(val) = self.names.get_mut(&addr) else {
             return;
         };
 
         if *val == 1 {
-            self.names.remove(name);
-            self.changes.add.remove(name);
-            self.changes.remove.insert(name.clone());
+            self.names.remove(&addr);
+            self.changes.add.remove(&addr);
+            self.changes.remove.insert(addr);
         } else {
             *val -= 1;
         }
@@ -609,11 +610,18 @@ impl Cache {
         self.subs.explicit(rtype).map(|s| s.clone()).collect()
     }
 
-    pub(crate) fn dns_names(&self) -> impl Iterator<Item = Hostname> + '_ {
-        self.data
-            .clusters
-            .iter()
-            .filter_map(|e| e.data.as_ref().and_then(|c| c.dns_name().cloned()))
+    pub(crate) fn dns_names(&self) -> Vec<DnsAddr> {
+        let mut names = Vec::new();
+
+        for entry in self.data.clusters.iter() {
+            let Some(cluster) = &entry.data else {
+                continue;
+            };
+            for dns_name in cluster.dns_names() {
+                names.push(dns_name)
+            }
+        }
+        names
     }
 
     /// Return the list of resources the cache has a registered subscription for
@@ -677,7 +685,7 @@ impl Cache {
             if let Some((_, entry)) = self.data.clusters.remove(cluster_name) {
                 if let Some(cluster) = entry.data {
                     for dns_name in cluster.dns_names() {
-                        self.dns.remove_name(dns_name);
+                        self.dns.remove_name(dns_name.clone());
                     }
                 }
             }
@@ -799,7 +807,7 @@ where
         // like basically the same thing. just accept the Vec::new call and call
         // it a day.
         for dns_name in resource.dns_names() {
-            dns.add_name(dns_name.clone())
+            dns.add_name(dns_name)
         }
 
         // clear any pending changes for this resource - it's no longer pending
@@ -863,7 +871,7 @@ mod test {
     use xds_api::pb::envoy::config::listener::v3 as xds_listener;
 
     use super::*;
-    use crate::xds::test as xds_test;
+    use crate::{dns::dns_updates, xds::test as xds_test};
 
     fn assert_send<T: Send>() {}
     fn assert_sync<T: Sync>() {}
@@ -1112,10 +1120,10 @@ mod test {
         );
         assert_eq!(
             dns,
-            DnsUpdates {
-                add: BTreeSet::from_iter([Hostname::from_static("cluster.example")]),
-                ..Default::default()
-            },
+            dns_updates! {
+                add = [("cluster.example", 7890)],
+                remove = [],
+            }
         );
 
         // subscriptions should be empty but current versions should match
@@ -1508,12 +1516,9 @@ mod test {
         let (resources, dns) = cache.collect();
         assert_eq!(
             dns,
-            DnsUpdates {
-                add: BTreeSet::new(),
-                remove: [Hostname::from_static("cluster.example")]
-                    .into_iter()
-                    .collect(),
-                sync: false,
+            dns_updates! {
+                add = [],
+                remove = [("cluster.example", 8008)],
             }
         );
 
@@ -1657,12 +1662,9 @@ mod test {
         let (resources, dns) = cache.collect();
         assert_eq!(
             dns,
-            DnsUpdates {
-                add: BTreeSet::new(),
-                remove: [Hostname::from_static("cluster.example")]
-                    .into_iter()
-                    .collect(),
-                sync: false,
+            dns_updates! {
+                add = [],
+                remove = [("cluster.example", 8008)],
             }
         );
         assert_eq!(

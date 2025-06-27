@@ -1,10 +1,9 @@
 use crate::{
-    dns,
+    dns::{self, StdlibResolver},
     xds::{self, AdsClient, ResourceType},
     Endpoint, Error, Trace,
 };
 use futures::{stream::FuturesOrdered, StreamExt};
-use junction_api::Hostname;
 use rand::{distributions::WeightedError, seq::SliceRandom};
 use serde::Deserialize;
 use std::{
@@ -124,6 +123,9 @@ pub struct Client {
 
     // the ADS client used to fetch xDS config from the control plane
     ads: AdsClient,
+
+    // the DNS resolver used to fetch DNS endpoints when appropriate
+    dns: StdlibResolver,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -136,11 +138,11 @@ pub struct SearchConfig {
 
     // the list of suffixes searched during hostname lookup. only consulted if the number of
     // dots in a url's hostname is less than `ndots`.
-    pub search: Vec<Hostname>,
+    pub search: Vec<String>,
 }
 
 impl SearchConfig {
-    pub fn new(ndots: u8, search: Vec<Hostname>) -> Self {
+    pub fn new(ndots: u8, search: Vec<String>) -> Self {
         Self { ndots, search }
     }
 }
@@ -164,7 +166,8 @@ impl Client {
         node_id: String,
         cluster: String,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let ads = AdsClient::build(address, node_id, cluster).await?;
+        let dns = StdlibResolver::new_with(Duration::from_secs(5), Duration::from_millis(500), 2);
+        let ads = AdsClient::build(dns.clone(), address, node_id, cluster).await?;
 
         // load search-path config from the system.
         //
@@ -182,6 +185,7 @@ impl Client {
             resolve_timeout: Duration::from_secs(5),
             search_config,
             ads,
+            dns,
         };
 
         Ok(client)
@@ -253,6 +257,7 @@ impl Client {
         // select endpoints using the result of route resolution
         let selected = select_endpoint(
             &self.ads,
+            &self.dns,
             resolved.trace,
             RequestContext {
                 request_hash: resolved.request_hash,
@@ -309,6 +314,7 @@ impl Client {
         let deadline = Instant::now() + self.resolve_timeout;
         let next = select_endpoint(
             &self.ads,
+            &self.dns,
             endpoint.trace,
             RequestContext {
                 request_hash: endpoint.request_hash,
@@ -558,6 +564,7 @@ struct RequestContext<'a> {
 
 async fn select_endpoint(
     cache: &impl XdsCache,
+    dns: &StdlibResolver,
     mut trace: Trace,
     request: RequestContext<'_>,
     cluster_name: &xds::ResourceName,
@@ -605,8 +612,25 @@ async fn select_endpoint(
             }
         }
         xds::clusters::Endpoints::LogicalDns { hostname, port } => {
-            // get a handle to the DNS resolver here and call into it
-            todo!("support LOGICAL_DNS clusters")
+            let load_assignment = with_deadline!(
+                dns.get_endpoints_await(hostname, *port),
+                deadline,
+                "dns resolution",
+                trace
+            );
+            match load_assignment {
+                Some(load_assignment) => {
+                    trace.lookup_endpoints(hostname.clone());
+                    load_assignment
+                }
+                None => {
+                    return Err(Error::not_found(
+                        "dns".to_string(),
+                        hostname.to_string(),
+                        trace,
+                    ));
+                }
+            }
         }
     };
     let Some(endpoints) = load_assignment.endpoints.first() else {
@@ -815,7 +839,6 @@ fn search<'a>(search_config: &SearchConfig, url: &'a crate::Url) -> Vec<Cow<'a, 
 #[cfg(test)]
 mod test {
     use crate::Url;
-    use junction_api::Hostname;
     use std::str::FromStr;
 
     use pretty_assertions::assert_eq;
@@ -834,11 +857,10 @@ mod test {
     #[test]
     fn test_search() {
         let url = Url::from_str("https://tasty.potato.tomato:9876").unwrap();
-        let search_setup: Vec<Hostname> = vec![
-            Hostname::from_static("foo.bar.baz"),
-            Hostname::from_static("bar.baz"),
-            Hostname::from_static("baz"),
-        ];
+        let search_setup: Vec<_> = ["foo.bar.baz", "bar.baz", "baz"]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
 
         // with ndots < dots, should just return the original url
         assert_eq!(

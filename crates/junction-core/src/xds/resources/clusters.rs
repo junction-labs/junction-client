@@ -1,10 +1,12 @@
-use crate::xds::{
-    load_balancer::LoadBalancer,
-    resources::{value_or_default, ErrorCtx},
+use crate::{
+    dns::DnsAddr,
+    xds::{
+        load_balancer::LoadBalancer,
+        resources::{value_or_default, ErrorCtx},
+    },
 };
 
 use super::{ads_config_source, xds_port, ResourceError, ResourceName, ResourceType};
-use junction_api::Hostname;
 use xds_api::pb::envoy::config::{
     cluster::v3 as xds_cluster, core::v3 as xds_core, endpoint::v3 as xds_endpoint,
 };
@@ -29,17 +31,8 @@ pub(crate) struct Cluster {
 #[derive(Clone, Debug)]
 pub(crate) enum Endpoints {
     Eds(ResourceName),
-    LogicalDns { hostname: Hostname, port: u16 },
+    LogicalDns { hostname: String, port: u16 },
     // TODO: Aggregate clusters
-}
-
-impl Cluster {
-    pub(crate) fn dns_name(&self) -> Option<&Hostname> {
-        match &self.endpoints {
-            Endpoints::LogicalDns { hostname, .. } => Some(hostname),
-            _ => None,
-        }
-    }
 }
 
 impl super::Resource for Cluster {
@@ -63,9 +56,12 @@ impl super::Resource for Cluster {
         }
     }
 
-    fn dns_names(&self) -> Vec<&Hostname> {
+    fn dns_names(&self) -> Vec<DnsAddr> {
         match &self.endpoints {
-            Endpoints::LogicalDns { hostname, .. } => vec![hostname],
+            Endpoints::LogicalDns { hostname, port } => vec![DnsAddr {
+                hostname: hostname.clone(),
+                port: *port,
+            }],
             _ => vec![],
         }
     }
@@ -115,9 +111,10 @@ fn eds_service_name(cluster: &xds_cluster::Cluster) -> Result<ResourceName, Reso
     })
 }
 
+// TODO: allow this to take a hostname/port? Figure out how and when GRPC does DNS resolution
 fn logical_dns_name(
     cla: Option<&xds_endpoint::ClusterLoadAssignment>,
-) -> Result<(Hostname, u16), ResourceError> {
+) -> Result<(String, u16), ResourceError> {
     let Some(cla) = cla else {
         return Err(ResourceError::invalid(
             "logical DNS cluster has no load assignment",
@@ -155,10 +152,7 @@ fn logical_dns_name(
 
     // FIXME: we should provide an error path here but things get so tedious and type-error-y
     // that we should probably fix the error API first.
-    let hostname: Hostname = socket_addr
-        .address
-        .parse()
-        .map_err(|_| ResourceError::invalid("invalid hostname"))?;
+    let hostname = socket_addr.address.clone();
     let port = xds_port(socket_addr.port_specifier.as_ref())
         .ok_or_else(|| ResourceError::invalid("invalid port"))?;
 

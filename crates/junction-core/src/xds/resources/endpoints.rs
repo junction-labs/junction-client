@@ -9,7 +9,7 @@ use crate::xds::resources::ErrorCtx;
 
 use super::{xds_port, Resource, ResourceError};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LoadAssignment {
     pub endpoints: Vec<EndpointGroup>,
 }
