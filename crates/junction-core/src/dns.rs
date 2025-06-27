@@ -23,11 +23,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use junction_api::Hostname;
 use rand::Rng;
 use tokio::sync::Notify;
 
-use crate::xds::endpoints::EndpointGroup;
+use crate::xds::{endpoints::EndpointGroup, LoadAssignment};
 
 /// An error that occurred while parsing a system DNS configuration.
 #[derive(Debug, thiserror::Error)]
@@ -50,7 +49,7 @@ pub(crate) enum ConfigError {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SystemConfig {
     pub(crate) ndots: u8,
-    pub(crate) search: Vec<Hostname>,
+    pub(crate) search: Vec<String>,
 }
 
 /// Load a [SystemConfig] from the given path. You probaly want to read
@@ -107,8 +106,10 @@ fn parse_resolv_conf(path: impl AsRef<Path>, content: &[u8]) -> Result<SystemCon
                 }
             }
             [b"search", hostnames @ ..] => {
-                let hostnames: Result<Vec<_>, _> =
-                    hostnames.iter().map(|bs| Hostname::try_from(*bs)).collect();
+                let hostnames: Result<Vec<_>, _> = hostnames
+                    .iter()
+                    .map(|bs| String::from_utf8(bs.to_vec()))
+                    .collect();
 
                 match hostnames {
                     Ok(hostnames) => search = hostnames,
@@ -134,6 +135,54 @@ fn parse_as_str<T: std::str::FromStr>(bs: &[u8]) -> Result<T, ()> {
     let as_str = std::str::from_utf8(bs).map_err(|_| ())?;
     as_str.parse().map_err(|_| ())
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct DnsAddr {
+    pub(crate) hostname: String,
+    pub(crate) port: u16,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DnsUpdates {
+    pub(crate) add: BTreeSet<DnsAddr>,
+    pub(crate) remove: BTreeSet<DnsAddr>,
+    pub(crate) sync: bool,
+}
+
+#[cfg(test)]
+impl DnsUpdates {
+    pub(crate) fn is_noop(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty() && !self.sync
+    }
+}
+
+#[cfg(test)]
+macro_rules! dns_updates {
+    (add = [$(($add_h:literal, $add_p:literal)),* $(,)?], remove = [$(($remove_h:literal, $remove_p:literal)),* $(,)?] $(,)?) => {
+        crate::dns::DnsUpdates {
+            add: std::collections::BTreeSet::from_iter([
+                $(
+                    crate::dns::DnsAddr {
+                        hostname: $add_h.to_string(),
+                        port: $add_p,
+                    }
+                ),*
+            ]),
+            remove: std::collections::BTreeSet::from_iter([
+                $(
+                    crate::dns::DnsAddr {
+                        hostname: $remove_h.to_string(),
+                        port: $remove_p,
+                    }
+                ),*
+            ]),
+            ..Default::default()
+        }
+    };
+}
+
+#[cfg(test)]
+pub(crate) use dns_updates;
 
 /// A blocking resolver that uses the stdlib to resolve hostnames to addresses.
 ///
@@ -216,20 +265,16 @@ impl StdlibResolver {
         resolver
     }
 
-    pub(crate) fn get_endpoints(
-        &self,
-        hostname: &Hostname,
-        port: u16,
-    ) -> Option<Arc<EndpointGroup>> {
+    pub(crate) fn get_endpoints(&self, hostname: &str, port: u16) -> Option<Arc<LoadAssignment>> {
         let tasks = no_poison!(self.inner.tasks.lock());
         tasks.get_endpoints(hostname, port)
     }
 
     pub(crate) async fn get_endpoints_await(
         &self,
-        hostname: &Hostname,
+        hostname: &str,
         port: u16,
-    ) -> Option<Arc<EndpointGroup>> {
+    ) -> Option<Arc<LoadAssignment>> {
         // fast path: the endpoints are in the map.
         if let Some(endpoints) = self.get_endpoints(hostname, port) {
             return Some(endpoints);
@@ -270,29 +315,38 @@ impl StdlibResolver {
         }
     }
 
-    pub(crate) fn subscribe(&self, name: Hostname, port: u16) {
+    pub(crate) fn subscribe(&self, addr: DnsAddr) {
         let mut tasks = no_poison!(self.inner.tasks.lock());
 
         // on a new subscribtion, notify both the background workers and any
         // async tasks waiting on a get.
-        if tasks.pin(name, port) {
+        if tasks.add_name(addr.hostname, addr.port) {
             self.inner.cond.notify_all();
             self.inner.async_notify.notify_waiters();
         }
     }
 
-    pub(crate) fn unsubscribe(&self, name: &Hostname, port: u16) {
+    pub(crate) fn unsubscribe(&self, addr: DnsAddr) {
         let mut tasks = no_poison!(self.inner.tasks.lock());
-        tasks.remove(name, port);
+        tasks.remove_name(&addr.hostname, addr.port);
         self.inner.cond.notify_all();
     }
 
-    pub(crate) fn set_names(&self, new_names: impl IntoIterator<Item = (Hostname, u16)>) {
+    pub(crate) fn set_names(&self, new_names: impl IntoIterator<Item = DnsAddr>) {
         let new_names = new_names.into_iter();
 
         let mut tasks = no_poison!(self.inner.tasks.lock());
-        if tasks.update_all(new_names) {
+        if tasks.set_names(new_names) {
             self.inner.cond.notify_all();
+        }
+    }
+
+    pub(crate) fn update_names(&self, updates: DnsUpdates) {
+        for addr in updates.add {
+            self.subscribe(addr);
+        }
+        for addr in updates.remove {
+            self.unsubscribe(addr);
         }
     }
 
@@ -342,7 +396,7 @@ impl StdlibResolver {
         Arc::strong_count(&self.inner) <= self.inner.worker_count
     }
 
-    fn next_name(&self) -> Option<Hostname> {
+    fn next_name(&self) -> Option<String> {
         let mut tasks = no_poison!(self.inner.tasks.lock());
 
         loop {
@@ -353,7 +407,7 @@ impl StdlibResolver {
             // claim a name older than the cutoff
             let before = Instant::now() - self.inner.lookup_interval;
             if let Some(name) = tasks.next_name(before) {
-                return Some(name.clone());
+                return Some(name.to_string());
             }
 
             // if there's nothing to do, sleep until there is. add a little
@@ -378,7 +432,7 @@ impl StdlibResolver {
 
     fn insert_answer(
         &self,
-        name: Hostname,
+        name: String,
         resolved_at: Instant,
         answer: io::Result<Vec<SocketAddr>>,
     ) {
@@ -403,7 +457,7 @@ fn rng_jitter(max: Duration) -> Duration {
 }
 
 #[derive(Debug, Default)]
-struct ResolverState(BTreeMap<Hostname, NameInfo>);
+struct ResolverState(BTreeMap<String, NameInfo>);
 
 #[derive(Debug, Default)]
 struct NameInfo {
@@ -416,8 +470,7 @@ struct NameInfo {
 
 #[derive(Debug, Default)]
 struct PortInfo {
-    pinned: bool,
-    endpoint_group: Option<Arc<EndpointGroup>>,
+    load_assignment: Option<Arc<LoadAssignment>>,
 }
 
 impl PortInfo {
@@ -426,7 +479,9 @@ impl PortInfo {
             addr.set_port(port);
             addr
         });
-        self.endpoint_group = Some(Arc::new(EndpointGroup::from_dns_addrs(addrs)))
+        self.load_assignment = Some(Arc::new(LoadAssignment {
+            endpoints: vec![EndpointGroup::from_dns_addrs(addrs)],
+        }));
     }
 }
 
@@ -465,92 +520,7 @@ impl NameInfo {
 }
 
 impl ResolverState {
-    fn next_name(&mut self, before: Instant) -> Option<&Hostname> {
-        let mut min: Option<(_, &mut NameInfo)> = None;
-
-        for (name, state) in &mut self.0 {
-            if state.in_flight {
-                continue;
-            }
-
-            match state.resolved_at {
-                Some(t) => {
-                    if t <= before && min.as_ref().map_or(true, |(_, s)| s.resolved_before(t)) {
-                        min = Some((name, state))
-                    }
-                }
-                None => {
-                    state.in_flight = true;
-                    return Some(name);
-                }
-            }
-        }
-
-        min.map(|(name, state)| {
-            state.in_flight = true;
-            name
-        })
-    }
-
-    fn min_resolved_at(&self) -> Option<Instant> {
-        self.0.values().filter_map(|state| state.resolved_at).min()
-    }
-
-    fn get_endpoints(&self, hostname: &Hostname, port: u16) -> Option<Arc<EndpointGroup>> {
-        let name_info = self.0.get(hostname)?;
-        let port_info = name_info.ports.get(&port)?;
-        port_info.endpoint_group.clone()
-    }
-
-    fn insert_answer(
-        &mut self,
-        hostname: &Hostname,
-        resolved_at: Instant,
-        answer: io::Result<Vec<SocketAddr>>,
-    ) {
-        // only update if there's still state for this name.
-        //
-        // if there's no state for this name it's because the set of target
-        // names changed and we're not interested anymore.
-        if let Some(state) = self.0.get_mut(hostname) {
-            state.in_flight = false;
-            state.merge_answer(resolved_at, answer);
-        }
-    }
-
-    fn pin(&mut self, hostname: Hostname, port: u16) -> bool {
-        let (mut created, name_info) = match self.0.entry(hostname) {
-            btree_map::Entry::Vacant(entry) => (true, entry.insert(Default::default())),
-            btree_map::Entry::Occupied(entry) => (false, entry.into_mut()),
-        };
-
-        let (port_created, port_info) = match name_info.ports.entry(port) {
-            btree_map::Entry::Vacant(entry) => (true, entry.insert(Default::default())),
-            btree_map::Entry::Occupied(entry) => (false, entry.into_mut()),
-        };
-        created |= port_created;
-        port_info.pinned = true;
-
-        if let Some(addrs) = &name_info.last_addrs {
-            port_info.set_addrs(port, addrs);
-        }
-
-        created
-    }
-
-    fn remove(&mut self, hostname: &Hostname, port: u16) {
-        let mut remove = false;
-        if let Some(entry) = self.0.get_mut(hostname) {
-            entry.ports.remove(&port);
-            remove = entry.ports.is_empty();
-        };
-
-        if remove {
-            self.0.remove(hostname);
-        }
-    }
-
-    fn update_all(&mut self, new_names: impl IntoIterator<Item = (Hostname, u16)>) -> bool {
+    fn set_names(&mut self, new_names: impl IntoIterator<Item = DnsAddr>) -> bool {
         // build an index of name -> [port] for the union of all names in the
         // new set of names and the old set of names.
         //
@@ -561,23 +531,20 @@ impl ResolverState {
         for name in self.0.keys() {
             names.insert(name.clone(), Vec::new());
         }
-        for (name, port) in new_names {
-            names.entry(name).or_default().push(port);
+        for DnsAddr { hostname, port } in new_names {
+            names.entry(hostname).or_default().push(port);
         }
 
         // iterate through the names index, for every set of ports, modify the
         // name info so it only contains the listed ports or any existing pinned
-        // ports. the APIs for removing an entry we've already creatd here are not
+        // ports. the APIs for removing an entry we've already created here are not
         // good, so don't actually do removal in this step.
         let mut changed = false;
         for (name, new_ports) in &names {
             let name_info = self.0.entry(name.clone()).or_default();
 
             let mut to_remove = BTreeSet::new();
-            for (port, port_info) in &name_info.ports {
-                if port_info.pinned {
-                    continue;
-                }
+            for port in name_info.ports.keys() {
                 to_remove.insert(*port);
             }
 
@@ -601,6 +568,90 @@ impl ResolverState {
         changed
     }
 
+    fn add_name(&mut self, hostname: String, port: u16) -> bool {
+        let (mut created, name_info) = match self.0.entry(hostname) {
+            btree_map::Entry::Vacant(entry) => (true, entry.insert(Default::default())),
+            btree_map::Entry::Occupied(entry) => (false, entry.into_mut()),
+        };
+
+        let (port_created, port_info) = match name_info.ports.entry(port) {
+            btree_map::Entry::Vacant(entry) => (true, entry.insert(Default::default())),
+            btree_map::Entry::Occupied(entry) => (false, entry.into_mut()),
+        };
+        created |= port_created;
+
+        if let Some(addrs) = &name_info.last_addrs {
+            port_info.set_addrs(port, addrs);
+        }
+
+        created
+    }
+
+    fn remove_name(&mut self, hostname: &str, port: u16) {
+        let mut remove = false;
+        if let Some(entry) = self.0.get_mut(hostname) {
+            entry.ports.remove(&port);
+            remove = entry.ports.is_empty();
+        };
+
+        if remove {
+            self.0.remove(hostname);
+        }
+    }
+
+    fn next_name(&mut self, before: Instant) -> Option<&str> {
+        let mut min: Option<(_, &mut NameInfo)> = None;
+
+        for (name, state) in &mut self.0 {
+            if state.in_flight {
+                continue;
+            }
+
+            match state.resolved_at {
+                Some(t) => {
+                    if t <= before && min.as_ref().map_or(true, |(_, s)| s.resolved_before(t)) {
+                        min = Some((name, state))
+                    }
+                }
+                None => {
+                    state.in_flight = true;
+                    return Some(name);
+                }
+            }
+        }
+
+        min.map(|(name, state)| {
+            state.in_flight = true;
+            &name[..]
+        })
+    }
+
+    fn min_resolved_at(&self) -> Option<Instant> {
+        self.0.values().filter_map(|state| state.resolved_at).min()
+    }
+
+    fn get_endpoints(&self, hostname: &str, port: u16) -> Option<Arc<LoadAssignment>> {
+        let name_info = self.0.get(hostname)?;
+        let port_info = name_info.ports.get(&port)?;
+        port_info.load_assignment.clone()
+    }
+
+    fn insert_answer(
+        &mut self,
+        hostname: &str,
+        resolved_at: Instant,
+        answer: io::Result<Vec<SocketAddr>>,
+    ) {
+        // only update if there's still state for this name.
+        //
+        // if there's no state for this name it's because the set of target
+        // names changed and we're not interested anymore.
+        if let Some(state) = self.0.get_mut(hostname) {
+            state.in_flight = false;
+            state.merge_answer(resolved_at, answer);
+        }
+    }
+
     #[cfg(test)]
     fn names_and_ports(&self) -> Vec<(&str, Vec<u16>)> {
         self.0
@@ -621,7 +672,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_resolv_conf_macos() {
+    fn resolv_conf_macos() {
         let macos_resolv = b"
 #
 # macOS Notice
@@ -644,14 +695,14 @@ nameserver 123.456.789.123
         assert_eq!(
             SystemConfig {
                 ndots: 1,
-                search: vec![Hostname::from_static("localdomain")],
+                search: vec!["localdomain".to_string()],
             },
             parse_resolv_conf("/kube/etc/resolv.conf", macos_resolv).unwrap()
         );
     }
 
     #[test]
-    fn test_resolv_conf_kube() {
+    fn resolv_conf_kube() {
         let kube_resolv = b"
 nameserver 192.168.194.138
 ; another comment
@@ -670,7 +721,7 @@ options extra:hello ndots:5 not-valid
                     "cluster.local",
                 ]
                 .into_iter()
-                .map(Hostname::from_static)
+                .map(|s| s.to_string())
                 .collect()
             },
             parse_resolv_conf("/kube/etc/resolv.conf", kube_resolv).unwrap()
@@ -678,16 +729,33 @@ options extra:hello ndots:5 not-valid
     }
 
     #[test]
-    fn test_resolv_conf_invalid_search() {
-        let conf = b"
+    fn resolv_conf_invalid_hostname() {
+        // none of the DNS clients we can find do real hostname
+        // validation before making a query. systemd-resolvd is
+        // happy to set invalid characaters in a name, cares and
+        // GRPC don't do any ahead-of-time validation, etc.
+        let weird_conf = b"
 search default.svc$$$cluster.local svc.cluster.local cluster.local
 options ndots:5";
-        let err = parse_resolv_conf("bad", conf).unwrap_err();
-        assert!(matches!(err, ConfigError::Invalid { line: 1, .. }));
+
+        assert_eq!(
+            SystemConfig {
+                ndots: 5,
+                search: [
+                    "default.svc$$$cluster.local",
+                    "svc.cluster.local",
+                    "cluster.local",
+                ]
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect()
+            },
+            parse_resolv_conf("/kube/etc/resolv.conf", weird_conf).unwrap()
+        );
     }
 
     #[test]
-    fn test_resolv_conf_invalid_ndots() {
+    fn resolv_conf_invalid_ndots() {
         let conf = b"
 search default.svc.cluster.local svc.cluster.local cluster.local
 options ndots:1 ndots:a-potato ndots:3";
@@ -696,64 +764,65 @@ options ndots:1 ndots:a-potato ndots:3";
     }
 
     #[inline]
-    fn update_all(
+    fn set_names(
         resolver: &mut ResolverState,
         names: impl IntoIterator<Item = (&'static str, u16)>,
     ) {
-        resolver.update_all(
-            names
-                .into_iter()
-                .map(|(name, port)| (Hostname::from_static(name), port)),
-        );
+        resolver.set_names(names.into_iter().map(|(name, port)| DnsAddr {
+            hostname: name.to_string(),
+            port,
+        }));
     }
 
     #[test]
-    fn test_answers() {
+    fn insert_answers_multiple_ports() {
         let mut resolver = ResolverState::default();
 
-        update_all(
+        set_names(
             &mut resolver,
             [("www.junctionlabs.io", 80), ("www.junctionlabs.io", 443)],
         );
 
         resolver.insert_answer(
-            &Hostname::from_static("www.junctionlabs.io"),
+            "www.junctionlabs.io",
             Instant::now(),
             // the port here shouldn't matter
             Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234)]),
         );
 
         assert_eq!(
-            resolver
-                .get_endpoints(&Hostname::from_static("www.junctionlabs.io"), 80)
-                .as_deref(),
-            Some(&EndpointGroup::from_dns_addrs(vec![SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                80,
-            )])),
+            resolver.get_endpoints("www.junctionlabs.io", 80).as_deref(),
+            Some(&LoadAssignment {
+                endpoints: vec![EndpointGroup::from_dns_addrs(vec![SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    80,
+                )])],
+            })
         );
         assert_eq!(
             resolver
-                .get_endpoints(&Hostname::from_static("www.junctionlabs.io"), 443)
+                .get_endpoints("www.junctionlabs.io", 443)
                 .as_deref(),
-            Some(&EndpointGroup::from_dns_addrs(vec![SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                443,
-            )])),
+            Some(&LoadAssignment {
+                endpoints: vec![EndpointGroup::from_dns_addrs(vec![SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    443,
+                )])]
+            }),
         );
         assert_eq!(
             resolver
-                .get_endpoints(&Hostname::from_static("www.junctionlabs.io"), 1234)
+                .get_endpoints("www.junctionlabs.io", 1234)
                 .as_deref(),
             None,
         );
     }
 
     #[test]
-    fn test_resolver_tasks_next() {
+    fn resolver_tasks_next() {
         let mut resolver = ResolverState::default();
 
-        update_all(
+        set_names(
             &mut resolver,
             [
                 ("doesnotexistihopereallybad.com", 80),
@@ -779,7 +848,7 @@ options ndots:1 ndots:a-potato ndots:3";
 
         // resolve one name.
         resolver.insert_answer(
-            &Hostname::from_static("www.junctionlabs.io"),
+            "www.junctionlabs.io",
             now,
             Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 80)]),
         );
@@ -799,74 +868,35 @@ options ndots:1 ndots:a-potato ndots:3";
     }
 
     #[test]
-    fn test_pinned_name() {
+    fn add_name_new_port() {
         let mut resolver = ResolverState::default();
 
-        resolver.pin(Hostname::from_static("important.com"), 1234);
-
-        update_all(&mut resolver, [("www.example.com", 80)]);
-        assert_eq!(
-            resolver.names_and_ports(),
-            &[("important.com", vec![1234]), ("www.example.com", vec![80]),]
-        );
-
-        update_all(&mut resolver, [("www.newthing.com", 80)]);
-        assert_eq!(
-            resolver.names_and_ports(),
-            &[
-                ("important.com", vec![1234]),
-                ("www.newthing.com", vec![80]),
-            ]
-        );
-
-        update_all(&mut resolver, [("www.newthing.com", 443)]);
-        assert_eq!(
-            resolver.names_and_ports(),
-            &[
-                ("important.com", vec![1234]),
-                ("www.newthing.com", vec![443]),
-            ]
-        );
-
-        resolver.remove(&Hostname::from_static("important.com"), 1234);
-        update_all(&mut resolver, [("www.newthing.com", 443)]);
-        assert_eq!(
-            resolver.names_and_ports(),
-            &[("www.newthing.com", vec![443]),]
-        );
-    }
-
-    #[test]
-    fn test_pin_new_port() {
-        let mut resolver = ResolverState::default();
-
-        update_all(
+        set_names(
             &mut resolver,
             [("www.junctionlabs.io", 80), ("www.junctionlabs.io", 443)],
         );
 
         resolver.insert_answer(
-            &Hostname::from_static("www.junctionlabs.io"),
+            "www.junctionlabs.io",
             Instant::now(),
             // the port here shouldn't matter
             Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1234)]),
         );
 
         assert!(
-            !resolver.pin(Hostname::from_static("www.junctionlabs.io"), 443),
+            !resolver.add_name("www.junctionlabs.io".to_string(), 443),
             "should not return true when the same port is inserted"
         );
         assert!(
-            resolver.pin(Hostname::from_static("www.junctionlabs.io"), 7777),
+            resolver.add_name("www.junctionlabs.io".to_string(), 7777),
             "should return true when a new port is inserted"
         );
 
-        let endpoints: Vec<_> = resolver
-            .get_endpoints(&Hostname::from_static("www.junctionlabs.io"), 7777)
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect();
+        let load_assigment = resolver
+            .get_endpoints(&"www.junctionlabs.io", 7777)
+            .unwrap();
+        let endpoints = load_assigment.endpoints.first().unwrap();
+        let endpoints: Vec<_> = endpoints.iter().cloned().collect();
         assert_eq!(
             endpoints,
             vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7777,)]
@@ -874,10 +904,10 @@ options ndots:1 ndots:a-potato ndots:3";
     }
 
     #[test]
-    fn test_reset_drops_inflight() {
+    fn reset_drops_inflight() {
         let mut resolver = ResolverState::default();
 
-        update_all(&mut resolver, [("www.example.com", 8910)]);
+        set_names(&mut resolver, [("www.example.com", 8910)]);
 
         let now = Instant::now();
 
@@ -885,13 +915,13 @@ options ndots:1 ndots:a-potato ndots:3";
         assert!(resolver.next_name(now).is_some());
 
         // reset while the name is in-flight. should have one more name to take.
-        update_all(&mut resolver, [("www.junctionlabs.io", 8910)]);
+        set_names(&mut resolver, [("www.junctionlabs.io", 8910)]);
         assert!(resolver.next_name(now).is_some());
         assert!(resolver.next_name(now).is_none());
 
         // inserting the old answer shouldn't do anything
         resolver.insert_answer(
-            &Hostname::from_static("www.example.com"),
+            &"www.example.com",
             now,
             Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 80)]),
         );

@@ -4,7 +4,6 @@ pub(crate) mod listeners;
 pub(crate) mod route_configs;
 pub(crate) use clusters::Cluster;
 pub(crate) use endpoints::LoadAssignment;
-use junction_api::Hostname;
 pub(crate) use listeners::ApiListener;
 pub(crate) use route_configs::RouteConfiguration;
 
@@ -26,6 +25,8 @@ macro_rules! value_or_default {
 }
 pub(crate) use value_or_default;
 
+use crate::dns::DnsAddr;
+
 // FIXME: validate that the all the EDS config sources use ADS instead of just assuming it everywhere.
 
 /// An xDS resource that can be handled, decoded, and cached.
@@ -43,7 +44,7 @@ pub(crate) trait Resource: Sized {
 
     fn from_xds(xds: &Self::Xds) -> Result<Self, ResourceError>;
     fn references(&self) -> Vec<(ResourceType, ResourceName)>;
-    fn dns_names(&self) -> Vec<&Hostname> {
+    fn dns_names(&self) -> Vec<DnsAddr> {
         Vec::new()
     }
 }
