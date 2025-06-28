@@ -22,6 +22,7 @@ once_cell = { workspace = true }
 
 # typeinfo
 junction-typeinfo = { workspace = true, optional = true }
+junction-core = { workspace = true, optional = true }
 
 # xds
 xds-api = { workspace = true, default-features = false, optional = true }
@@ -49,7 +50,7 @@ typeinfo = ["dep:junction-typeinfo"]
 
 
 # enable xds conversion for core types.
-xds = ["dep:xds-api"]
+xds = ["dep:xds-api", "dep:junction-core"]
 
 # enable kube conversion for core types. this is a shorthand for the minimum
 # available kube_v1_* feature.

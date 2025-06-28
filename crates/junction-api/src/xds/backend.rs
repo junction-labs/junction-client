@@ -1,9 +1,12 @@
 use std::str::FromStr;
-use xds_api::pb::envoy::config::{
-    cluster::v3::{self as xds_cluster, cluster::ring_hash_lb_config::HashFunction},
-    core::v3 as xds_core,
-    endpoint::v3 as xds_endpoint,
-    route::v3 as xds_route,
+use xds_api::pb::{
+    envoy::config::{
+        cluster::v3::{self as xds_cluster, cluster::ring_hash_lb_config::HashFunction},
+        core::v3 as xds_core,
+        endpoint::v3 as xds_endpoint,
+        route::v3 as xds_route,
+    },
+    google::protobuf,
 };
 
 use crate::{
@@ -13,6 +16,14 @@ use crate::{
     xds::ads_config_source,
     BackendId, Service,
 };
+
+impl junction_core::IntoXds for Backend {
+    fn into_any(&self) -> Vec<(String, xds_api::pb::google::protobuf::Any)> {
+        let cluster = self.to_xds();
+        let any = protobuf::Any::from_msg(&cluster).unwrap();
+        vec![(cluster.name.clone(), any)]
+    }
+}
 
 impl Backend {
     pub fn from_xds(
