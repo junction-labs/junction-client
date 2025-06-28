@@ -147,82 +147,87 @@ impl SearchConfig {
     }
 }
 
+pub struct ClientBuilder {
+    node: String,
+    cluster: String,
+    resolve_timeout: Duration,
+    search_config: Option<SearchConfig>,
+    dns_lookup_interval: Duration,
+    dns_lookup_jitter: Duration,
+    dns_threads: usize,
+}
+
+// TODO: methods allow configuring dns resolution
+impl ClientBuilder {
+    fn new(node: String, cluster: String) -> Self {
+        Self {
+            node,
+            cluster,
+            resolve_timeout: Duration::from_secs(5),
+            search_config: None,
+            dns_lookup_interval: Duration::from_secs(5),
+            dns_lookup_jitter: Duration::from_millis(500),
+            dns_threads: 2,
+        }
+    }
+
+    /// Set the resolution timeout.
+    pub fn resolve_timeout(mut self, timeout: Duration) -> Self {
+        self.resolve_timeout = timeout;
+        self
+    }
+
+    /// Set the search config. If not set, attempts to parse `/etc/resolv.conf`
+    /// and match it's search and ndots settings.
+    pub fn search_config(mut self, config: SearchConfig) -> Self {
+        self.search_config = Some(config);
+        self
+    }
+
+    /// Build a new dynamic client, spawning a new ADS client in the background.
+    ///
+    /// This method creates a new ADS client and ADS connection. xDS data will
+    /// not be shared with existing clients. To create a client that shares data
+    /// with existing clients, [clone][Client::clone] an existing client.
+    ///
+    /// This function assumes that you're currently running the context of a
+    /// `tokio` runtime and spawns background work on a tokio executor.
+    pub async fn build(self, address: String) -> Result<Client, Box<dyn std::error::Error>> {
+        let resolve_timeout = self.resolve_timeout;
+        let search_config = self.search_config.unwrap_or_else(|| {
+            match dns::load_config("/etc/resolv.conf") {
+                Ok(config) => SearchConfig::new(config.ndots, config.search),
+                // ignore any errors and set this to defaults
+                Err(_) => SearchConfig::default(),
+            }
+        });
+        let dns = StdlibResolver::new_with(
+            self.dns_lookup_interval,
+            self.dns_lookup_jitter,
+            self.dns_threads,
+        );
+
+        let ads = AdsClient::build(dns.clone(), address, self.node, self.cluster).await?;
+
+        Ok(Client {
+            resolve_timeout,
+            search_config,
+            ads,
+            dns,
+        })
+    }
+}
+
 // FIXME: Vec<Endpoints> is probably the wrong thing to return from all our
 // resolve methods. We probably need a struct that has something like a list
 // of primary endpoints to cycle through on retries, and a separate list of
 // endpoints to mirror traffic to. Figure that out once we support mirroring.
 
 impl Client {
-    /// Build a new dynamic client, spawning a new ADS client in the background.
-    ///
-    ///This method creates a new ADS client and ADS connection. Dynamic data
-    ///will not be shared with existing clients. To create a client that shares
-    ///data with existing clients, [clone][Client::clone] an existing client.
-    ///
-    /// This function assumes that you're currently running the context of a
-    /// `tokio` runtime and spawns background work on a tokio executor.
-    pub async fn build(
-        address: String,
-        node_id: String,
-        cluster: String,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let dns = StdlibResolver::new_with(Duration::from_secs(5), Duration::from_millis(500), 2);
-        let ads = AdsClient::build(dns.clone(), address, node_id, cluster).await?;
-
-        // load search-path config from the system.
-        //
-        // this should eventually be configurable, but for now we're trying
-        // resolv.conf to match kube's default behavior out of the box. on other
-        // systems this may not be useful yet - that's ok.
-        let search_config = match dns::load_config("/etc/resolv.conf") {
-            Ok(config) => SearchConfig::new(config.ndots, config.search),
-            // ignore any errors and set this to defaults
-            Err(_) => SearchConfig::default(),
-        };
-
-        // wrap it all up in a dynamic config and return
-        let client = Self {
-            resolve_timeout: Duration::from_secs(5),
-            search_config,
-            ads,
-            dns,
-        };
-
-        Ok(client)
+    /// Create a new client builder.
+    pub fn builder(node: String, cluster: String) -> ClientBuilder {
+        ClientBuilder::new(node, cluster)
     }
-
-    /// Build a client with static configuration. This client will use the
-    /// passed configuration to resolve routes and backends, but will still
-    /// fetch endpoints dynamically.
-    ///
-    /// This method will panic if the client being cloned is fully static. To
-    /// convert a static client to a client that uses dynamic config, create a
-    /// new client.
-    // pub fn with_static_config(self, routes: Vec<Route>, backends: Vec<Backend>) -> Client {
-    //     let static_config = Arc::new(StaticConfig::with_inferred(routes, backends));
-
-    //     let dyn_config = match &self.config {
-    //         Config::Static(_) => panic!("can't use dynamic endpoints with a fully static client"),
-    //         Config::DynamicEndpoints(_, d) => Arc::clone(d),
-    //         Config::Dynamic(d) => Arc::clone(d),
-    //     };
-
-    //     let config = Config::DynamicEndpoints(static_config, dyn_config);
-    //     Client { config, ..self }
-    // }
-
-    /// Construct a client that uses fully static configuration and does not
-    /// connect to a control plane at all.
-    ///
-    /// This is intended to be used to test configuration in controlled settings
-    /// or to use Junction an offline mode. Once a client has been converted to
-    /// fully static, it's not possible to convert it back to using dynamic
-    /// discovery data.
-    // pub fn with_static_endpoints(self, routes: Vec<Route>, backends: Vec<Backend>) -> Client {
-    //     let static_config = Arc::new(StaticConfig::with_inferred(routes, backends));
-    //     let config = Config::Static(static_config);
-    //     Client { config, ..self }
-    // }
 
     /// Resolve an HTTP method, URL, and headers into an [Endpoint].
     ///
@@ -896,32 +901,21 @@ mod test {
             .unwrap()
     }
 
-    #[track_caller]
-    fn assert_resolve_err(cache: &impl XdsCache, request: HttpRequest<'_>) -> crate::Error {
-        resolve_route(cache, &SearchConfig::default(), Trace::new(), request, None)
-            .now_or_never()
-            .unwrap()
-            .unwrap_err()
-    }
-
     #[test]
     fn resolve_route_any_match() {
-        let cache = xds::StaticCache::with_xds(
-            [
-                xds::test::listener!("example.com:80", "passthrough-route"),
-                xds::test::listener!("example.com:443", "passthrough-route"),
-                xds::test::listener!("example.com:8008", "passthrough-route"),
-                xds::test::route_config!(
-                    "passthrough-route",
-                    vec![xds::test::vhost!(
-                        "test-vhost",
-                        ["example.com"],
-                        [xds::test::route!(default "cluster.example:8008")]
-                    )]
-                ),
-            ]
-            .into_iter(),
-        )
+        let cache = xds::StaticCache::with_xds(&[
+            xds::test::listener!("example.com:80", "passthrough-route"),
+            xds::test::listener!("example.com:443", "passthrough-route"),
+            xds::test::listener!("example.com:8008", "passthrough-route"),
+            xds::test::route_config!(
+                "passthrough-route",
+                vec![xds::test::vhost!(
+                    "test-vhost",
+                    ["example.com"],
+                    [xds::test::route!(default "cluster.example:8008")]
+                )]
+            ),
+        ])
         .unwrap();
 
         // check with no port
@@ -945,20 +939,17 @@ mod test {
 
     #[test]
     fn resolve_route_any_match_search() {
-        let cache = xds::StaticCache::with_xds(
-            [
-                xds::test::listener!("example.default.svc.cluster.local:443", "test-route"),
-                xds::test::route_config!(
-                    "test-route",
-                    vec![xds::test::vhost!(
-                        "test-vhost",
-                        ["example.default.svc.cluster.local"],
-                        [xds::test::route!(default "example.default.svc.cluster.local:8008")]
-                    )]
-                ),
-            ]
-            .into_iter(),
-        )
+        let cache = xds::StaticCache::with_xds(&[
+            xds::test::listener!("example.default.svc.cluster.local:443", "test-route"),
+            xds::test::route_config!(
+                "test-route",
+                vec![xds::test::vhost!(
+                    "test-vhost",
+                    ["example.default.svc.cluster.local"],
+                    [xds::test::route!(default "example.default.svc.cluster.local:8008")]
+                )]
+            ),
+        ])
         .unwrap();
 
         let search_config = SearchConfig {
@@ -991,24 +982,21 @@ mod test {
 
     #[test]
     fn resolve_path_match() {
-        let cache = xds::StaticCache::with_xds(
-            [
-                xds::test::listener!("example.com:80", "passthrough-route"),
-                crate::xds::test::route_config!(
-                    "passthrough-route",
-                    "v123",
-                    (vec![xds::test::vhost!(
-                        "test-vhost",
-                        ["example.com"],
-                        [
-                            xds::test::route!(exact_path "/v1/users" => "cluster2.example:8008"),
-                            xds::test::route!(default "cluster.example:8008"),
-                        ]
-                    )])
-                ),
-            ]
-            .into_iter(),
-        )
+        let cache = xds::StaticCache::with_xds(&[
+            xds::test::listener!("example.com:80", "passthrough-route"),
+            crate::xds::test::route_config!(
+                "passthrough-route",
+                "v123",
+                (vec![xds::test::vhost!(
+                    "test-vhost",
+                    ["example.com"],
+                    [
+                        xds::test::route!(exact_path "/v1/users" => "cluster2.example:8008"),
+                        xds::test::route!(default "cluster.example:8008"),
+                    ]
+                )])
+            ),
+        ])
         .unwrap();
 
         // check with no port
@@ -1032,24 +1020,21 @@ mod test {
 
     #[test]
     fn test_resolve_query_match() {
-        let cache = xds::StaticCache::with_xds(
-            [
-                xds::test::listener!("example.com:80", "passthrough-route"),
-                crate::xds::test::route_config!(
-                    "passthrough-route",
-                    "v123",
-                    (vec![xds::test::vhost!(
-                        "test-vhost",
-                        ["example.com"],
-                        [
-                            xds::test::route!(query "qp1", "potato" => "new-cluster.example:8008"),
-                            xds::test::route!(default "default-cluster.example:8008"),
-                        ]
-                    )])
-                ),
-            ]
-            .into_iter(),
-        )
+        let cache = xds::StaticCache::with_xds(&[
+            xds::test::listener!("example.com:80", "passthrough-route"),
+            crate::xds::test::route_config!(
+                "passthrough-route",
+                "v123",
+                (vec![xds::test::vhost!(
+                    "test-vhost",
+                    ["example.com"],
+                    [
+                        xds::test::route!(query "qp1", "potato" => "new-cluster.example:8008"),
+                        xds::test::route!(default "default-cluster.example:8008"),
+                    ]
+                )])
+            ),
+        ])
         .unwrap();
 
         dbg!(cache.get_route_config(&ResourceName::from("passthrough-route")));
