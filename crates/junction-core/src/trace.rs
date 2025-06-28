@@ -36,6 +36,7 @@ pub(crate) enum TraceEventKind {
     // EndpointSelection
     LookupCluster,
     LookupEndpoints,
+    LookupDns,
     LoadBalance,
 }
 
@@ -138,6 +139,15 @@ impl Trace {
             kind: TraceEventKind::LookupEndpoints,
             at: Instant::now(),
             kv: vec![("endpoints", endpoints.to_smolstr())],
+        });
+    }
+
+    pub(crate) fn lookup_dns(&mut self, hostname: String) {
+        self.events.push(TraceEvent {
+            phase: self.phase,
+            kind: TraceEventKind::LookupDns,
+            at: Instant::now(),
+            kv: vec![("hostname", hostname.to_smolstr())],
         });
     }
 
