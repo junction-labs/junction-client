@@ -1,6 +1,5 @@
 use super::{ErrorCtx, Resource, ResourceError, ResourceName, ResourceType};
 
-use junction_api::Hostname;
 use regex::Regex;
 use std::{collections::HashSet, str::FromStr, time::Duration};
 use xds_api::pb::envoy::{config::route::v3 as xds_route, r#type::matcher::v3 as xds_matcher};
@@ -317,8 +316,8 @@ fn from_xds_headers(
 
 #[derive(Debug, Clone)]
 pub(crate) enum DomainMatcher {
-    Exact(Hostname),
-    Subdomain(Hostname),
+    Exact(String),
+    Subdomain(String),
 }
 
 impl DomainMatcher {
@@ -328,7 +327,7 @@ impl DomainMatcher {
                 let (subdomain, domain) = s.split_at(s.len() - d.len());
                 domain == &d[..] && subdomain.ends_with('.')
             }
-            Self::Exact(e) => s == e.as_ref(),
+            Self::Exact(e) => s == e,
         }
     }
 }
@@ -337,14 +336,13 @@ impl FromStr for DomainMatcher {
     type Err = ResourceError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(ResourceError::invalid("empty domain"));
+        }
+
         Ok(match s.strip_prefix("*.") {
-            Some(hostname) => Self::Subdomain(
-                Hostname::from_str(hostname)
-                    .map_err(|_| ResourceError::invalid("invalid hostname"))?,
-            ),
-            None => Self::Exact(
-                Hostname::from_str(s).map_err(|_| ResourceError::invalid("invalid hostname"))?,
-            ),
+            Some(hostname) => Self::Subdomain(hostname.to_string()),
+            None => Self::Exact(s.to_string()),
         })
     }
 }
