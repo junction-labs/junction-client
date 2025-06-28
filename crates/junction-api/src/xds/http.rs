@@ -13,10 +13,14 @@ use crate::{
     shared::{Duration, Regex},
     Name,
 };
+use xds_api::pb::envoy::extensions::filters::{
+    http::router::v3::Router, network::http_connection_manager::v3 as xds_http,
+};
 use xds_api::pb::{
     envoy::{
         config::{
             core::v3 as xds_core,
+            listener::v3 as xds_listener,
             route::v3::{self as xds_route, query_parameter_matcher::QueryParameterMatchSpecifier},
         },
         r#type::matcher::v3::{string_matcher::MatchPattern, StringMatcher},
@@ -40,6 +44,66 @@ impl TryInto<Route> for &xds_route::RouteConfiguration {
 impl From<&Route> for xds_route::RouteConfiguration {
     fn from(route: &Route) -> Self {
         route.to_xds()
+    }
+}
+
+impl junction_core::IntoXds for Route {
+    fn into_any(&self) -> Vec<(String, protobuf::Any)> {
+        let route = self.to_xds();
+        let route_name = route.name.clone();
+
+        let mut xds = vec![];
+        for hostname in &self.hostnames {
+            match &hostname {
+                crate::http::HostnameMatch::Exact(hostname) => {
+                    let ports = if self.ports.is_empty() {
+                        &[80, 443]
+                    } else {
+                        self.ports.as_slice()
+                    };
+
+                    for &port in ports {
+                        let listener = api_listener_rds(hostname, port, &route_name);
+                        let listener_name = listener.name.clone();
+                        xds.push((listener_name, protobuf::Any::from_msg(&listener).unwrap()));
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        xds.push((route_name, protobuf::Any::from_msg(&route).unwrap()));
+        xds
+    }
+}
+
+pub fn api_listener_rds(hostname: &str, port: u16, route_name: &str) -> xds_listener::Listener {
+    use xds_http::{http_connection_manager::RouteSpecifier, http_filter::ConfigType, Rds};
+
+    let http_router_filter = Router::default();
+    let route_specifier = RouteSpecifier::Rds(Rds {
+        config_source: Some(crate::xds::ads_config_source()),
+        route_config_name: route_name.to_string(),
+    });
+
+    let http_connection_manager = xds_http::HttpConnectionManager {
+        route_specifier: Some(route_specifier),
+        http_filters: vec![xds_http::HttpFilter {
+            name: hostname.to_string(),
+            config_type: Some(ConfigType::TypedConfig(
+                protobuf::Any::from_msg(&http_router_filter).expect("generated invalid xds"),
+            )),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    xds_listener::Listener {
+        name: format!("{hostname}:{port}"),
+        api_listener: Some(xds_listener::ApiListener {
+            api_listener: Some(protobuf::Any::from_msg(&http_connection_manager).unwrap()),
+        }),
+        ..Default::default()
     }
 }
 
