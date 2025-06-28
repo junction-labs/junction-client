@@ -90,30 +90,27 @@ pub(crate) trait XdsCache {
 
 /// Any type that can be converted into xDS.
 pub trait IntoXds {
-    /// The associated protobuf message type.
-    type Xds: prost::Name;
-
-    /// Convert this type into a k,v pair of a unique name and an xDS message.
-    fn into_xds(&self) -> (String, Self::Xds);
-
     /// Convert this type into a k,v pair of a unique name and an xDS message,
     /// serialized as a protobuf `Any`.
-    fn into_any(&self) -> (String, protobuf::Any) {
-        let (name, msg) = self.into_xds();
-        let any = protobuf::Any::from_msg(&msg).expect("failed to allocate Any");
-        (name, any)
+    fn into_any(&self) -> Vec<(String, protobuf::Any)>;
+
+    /// Covert this type into a vec of [Resource](xds_discovery::Resource).
+    fn into_resources(&self, version: String) -> Vec<xds_discovery::Resource> {
+        self.into_any()
+            .into_iter()
+            .map(|(name, any)| xds_discovery::Resource {
+                name,
+                version: version.clone(),
+                resource: Some(any),
+                ..Default::default()
+            })
+            .collect()
     }
 }
 
-impl IntoXds for xds_discovery::Resource {
-    type Xds = protobuf::Any;
-
-    fn into_xds(&self) -> (String, Self::Xds) {
-        self.into_any()
-    }
-
-    fn into_any(&self) -> (String, protobuf::Any) {
-        (self.name.clone(), self.resource.clone().unwrap())
+impl IntoXds for &xds_discovery::Resource {
+    fn into_any(&self) -> Vec<(String, protobuf::Any)> {
+        vec![(self.name.clone(), self.resource.clone().unwrap())]
     }
 }
 
@@ -121,11 +118,11 @@ impl StaticCache {
     pub(crate) fn with_xds<T: IntoXds>(
         xds: impl IntoIterator<Item = T>,
     ) -> Result<Self, Vec<ResourceError>> {
-        let xds = xds.into_iter().map(|x| {
-            let (name, any) = x.into_any();
-            let name = ResourceName::from(name);
-            (name, any)
-        });
+        let xds = xds
+            .into_iter()
+            .map(|x| x.into_any())
+            .flatten()
+            .map(|(s, any)| (ResourceName::from(s), any));
 
         let mut cache = StaticCache::default();
         let errors = cache.insert(ResourceVersion::from("static"), xds);
@@ -209,8 +206,8 @@ impl AdsClient {
         dns: StdlibResolver,
         address: impl Into<Bytes>,
         node_id: String,
-        cluster: String,
-    ) -> Result<AdsClient, tonic::transport::Error> {
+        node_cluster: String,
+    ) -> Result<AdsClient, Box<dyn std::error::Error>> {
         // FIXME: make this configurable
         let endpoint = Endpoint::from_shared(address)?
             .connect_timeout(Duration::from_secs(5))
@@ -218,7 +215,7 @@ impl AdsClient {
 
         let node_info = xds_core::Node {
             id: node_id,
-            cluster,
+            cluster: node_cluster,
             client_features: vec![
                 "envoy.lb.does_not_support_overprovisioning".to_string(),
                 "envoy.lrs.supports_send_all_clusters".to_string(),
@@ -228,9 +225,8 @@ impl AdsClient {
 
         // TODO: how should we pick this number?
         let (sub_tx, sub_rx) = mpsc::channel(10);
-        let cache = Cache::default();
 
-        // FIXME: make this configurable
+        let cache = Cache::default();
         let cache_reader = cache.reader();
 
         // try to start the ADS connection while blocking. if it fails, fail

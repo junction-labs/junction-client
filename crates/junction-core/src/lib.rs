@@ -12,7 +12,7 @@ pub(crate) mod hash;
 pub(crate) mod rand;
 
 mod endpoints;
-pub use endpoints::Endpoint;
+pub use endpoints::{Endpoint, Retries, Timeouts};
 
 mod client;
 mod dns;
