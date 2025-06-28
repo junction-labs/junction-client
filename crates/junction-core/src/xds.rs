@@ -192,7 +192,7 @@ impl AdsClient {
 
 impl XdsCache for AdsClient {
     async fn subscribe(&self, rtype: self::ResourceType, name: self::ResourceName) {
-        let _ = self.subs.send(SubscriptionUpdate::Add(rtype, name));
+        let _ = self.subs.send(SubscriptionUpdate::Add(rtype, name)).await;
     }
 
     async fn get_listener(&self, name: &self::ResourceName) -> Option<Arc<self::ApiListener>> {
