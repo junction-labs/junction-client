@@ -620,7 +620,7 @@ async fn select_endpoint(
             );
             match load_assignment {
                 Some(load_assignment) => {
-                    trace.lookup_endpoints(hostname.clone());
+                    trace.lookup_dns(hostname.clone());
                     load_assignment
                 }
                 None => {
