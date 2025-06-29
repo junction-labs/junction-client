@@ -93,7 +93,8 @@ fn new_client(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let cluster_id = arg_value!(cx, JsString, 3);
 
     let build_client = async move {
-        junction_core::Client::build(ads_server, node_id, cluster_id)
+        junction_core::Client::builder(node_id, cluster_id)
+            .build(ads_server)
             .await
             .map_err(|e| e.to_string())
     };
@@ -239,7 +240,7 @@ fn js_endpoint<'a>(
 
 fn js_retry<'a>(
     cx: &mut impl Context<'a>,
-    retry: &junction_api::http::RouteRetry,
+    retry: &junction_core::Retries,
 ) -> JsResult<'a, JsObject> {
     let obj = cx.empty_object();
 
@@ -267,21 +268,21 @@ fn js_retry<'a>(
 
 fn js_timeouts<'a>(
     cx: &mut impl Context<'a>,
-    timeouts: &junction_api::http::RouteTimeouts,
+    timeouts: &junction_core::Timeouts,
 ) -> JsResult<'a, JsObject> {
     let obj = cx.empty_object();
 
-    let request: Handle<JsValue> = match &timeouts.request {
+    let request: Handle<JsValue> = match &timeouts.total {
         Some(request) => js_duration_ms(cx, request)?.upcast(),
         None => cx.undefined().upcast(),
     };
-    obj.set(cx, "request", request)?;
+    obj.set(cx, "total", request)?;
 
-    let backend_request: Handle<JsValue> = match &timeouts.backend_request {
+    let backend_request: Handle<JsValue> = match &timeouts.attempt {
         Some(backend_request) => js_duration_ms(cx, backend_request)?.upcast(),
         None => cx.undefined().upcast(),
     };
-    obj.set(cx, "backendRequest", backend_request)?;
+    obj.set(cx, "attempt", backend_request)?;
 
     Ok(obj)
 }
