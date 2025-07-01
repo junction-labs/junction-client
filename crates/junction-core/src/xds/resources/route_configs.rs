@@ -115,10 +115,37 @@ impl Action {
                     Some(xds_route::route_action::ClusterSpecifier::Cluster(cluster)) => {
                         ClusterSpecifier::Cluster(ResourceName::from(cluster.to_string()))
                     }
-                    Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(_)) => todo!(),
-                    Some(_) => todo!(),
-                    None => todo!(),
+                    Some(xds_route::route_action::ClusterSpecifier::WeightedClusters(clusters)) => {
+                        if clusters.clusters.is_empty() {
+                            return Err(ResourceError::invalid("no clusters specified"))
+                                .with_fields("cluster_specifier", "clusters");
+                        }
+
+                        let mut weights = Vec::with_capacity(clusters.clusters.len());
+                        for (i, cluster) in clusters.clusters.iter().enumerate() {
+                            if cluster.name.is_empty() {
+                                return Err(ResourceError::invalid("empty cluster"))
+                                    .with_field("name")
+                                    .with_field_index("clusters", i);
+                            }
+                            let Some(weight) = &cluster.weight else {
+                                return Err(ResourceError::invalid("missing weight"))
+                                    .with_field("weight")
+                                    .with_field_index("clusters", i);
+                            };
+
+                            weights.push(ClusterWeight {
+                                name: ResourceName::from(cluster.name.clone()),
+                                weight: weight.value,
+                            })
+                        }
+
+                        ClusterSpecifier::Weighted(weights)
+                    }
+                    Some(_) => return Err(ResourceError::invalid("unsupported cluster specifier")),
+                    None => return Err(ResourceError::invalid("missing cluster specifier")),
                 };
+
                 let hash_policies = vec_from_xds!(action.hash_policy, "hash_policy", HashPolicy)?;
                 let retries = Retries::from_xds(&action)?;
                 let timeouts = Timeouts::from_xds(&action)?;
