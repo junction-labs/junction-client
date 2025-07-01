@@ -1,5 +1,5 @@
 import os
-from typing import List, Mapping, Union, Optional
+from typing import Mapping, Union, Optional
 
 import requests
 
@@ -205,8 +205,6 @@ class Session(requests.Session):
 
     def __init__(
         self,
-        static_routes: Optional[List["junction.config.Route"]] = None,
-        static_backends: Optional[List["junction.config.Backend"]] = None,
         junction_client: Optional[junction.Junction] = None,
     ) -> None:
         super().__init__()
@@ -214,9 +212,7 @@ class Session(requests.Session):
         if junction_client:
             self.junction = junction_client
         else:
-            self.junction = junction._default_client(
-                static_routes=static_routes, static_backends=static_backends
-            )
+            self.junction = junction.default_client()
 
         self.mount("https://", HTTPAdapter(junction_client=self.junction))
         self.mount("http://", HTTPAdapter(junction_client=self.junction))

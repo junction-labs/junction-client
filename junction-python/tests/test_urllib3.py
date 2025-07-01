@@ -1,7 +1,7 @@
 from urllib3 import Retry
 
 from junction.urllib3 import _configure_retries
-from junction import RetryPolicy
+from junction import Retries
 
 
 def retry_equals(r1: Retry, r2: Retry):
@@ -11,7 +11,7 @@ def retry_equals(r1: Retry, r2: Retry):
 def test_retry_policy_only():
     expected = Retry(total=1, status_forcelist=[501, 503], backoff_factor=0.5)
     (actual, redirect_retries) = _configure_retries(
-        retries=None, policy=RetryPolicy(codes=[501, 503], attempts=2, backoff=0.5)
+        retries=None, policy=Retries(codes=[501, 503], attempts=2, backoff=0.5)
     )
 
     assert retry_equals(expected, actual)
@@ -31,7 +31,7 @@ def test_retries_only():
 
 def test_merge_retries_and_policy():
     expected = Retry(total=123, redirect=789, connect=123)
-    policy = RetryPolicy(codes=[501, 503], attempts=2, backoff=0.5)
+    policy = Retries(codes=[501, 503], attempts=2, backoff=0.5)
 
     (actual, redirect_retries) = _configure_retries(
         retries=expected,
@@ -44,7 +44,7 @@ def test_merge_retries_and_policy():
 
 def test_merge_default_retries_and_policy():
     default_retry = Retry.from_int(0)
-    policy = RetryPolicy(codes=[501, 503], attempts=2, backoff=0.5)
+    policy = Retries(codes=[501, 503], attempts=2, backoff=0.5)
 
     (actual, redirect_retries) = _configure_retries(
         retries=default_retry,
