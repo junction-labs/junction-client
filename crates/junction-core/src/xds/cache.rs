@@ -245,14 +245,20 @@ impl<T> ResourceMap<T> {
         }
     }
 
-    fn insert_ok(&self, name: ResourceName, version: ResourceVersion, resource: T) {
+    fn insert_ok(
+        &self,
+        name: ResourceName,
+        version: ResourceVersion,
+        resource: T,
+        raw_msg: protobuf::Any,
+    ) {
         self.map.insert(
             name,
             ResourceData {
                 version: Some(version),
                 last_error: None,
                 data: Some(Arc::new(resource)),
-                raw_msg: None,
+                raw_msg: Some(raw_msg),
             },
         );
         self.changed.notify_waiters();
@@ -813,7 +819,7 @@ where
         // clear any pending changes for this resource - it's no longer pending
         subs.clear_changes(rtype, &name);
         // actually insert the thing
-        data.insert_ok(name, version, resource);
+        data.insert_ok(name, version, resource, any);
     }
 
     errors
@@ -847,21 +853,33 @@ impl_get!(get_load_assignment(load_assignments)=>LoadAssignment);
 
 impl CacheReader {
     pub(super) fn iter_xds(&self) -> impl Iterator<Item = XdsConfig> + '_ {
-        self.data.listeners.iter().map(|entry| {
-            let name = entry.key().to_string();
-            let type_url = ResourceType::Listener.type_url().to_string();
-            let version = entry.version.clone();
-            let xds = entry.raw_msg.clone();
-            let last_error = entry.last_error.clone().map(|(v, e)| (v, e.to_string()));
+        macro_rules! data_iter {
+            ($field:ident, $rtype:expr) => {
+                self.data.$field.iter().map(|entry| {
+                    let name = entry.key().to_string();
+                    let type_url = $rtype.type_url().to_string();
+                    let version = entry.version.clone();
+                    let xds = entry.raw_msg.clone();
+                    let last_error = entry.last_error.clone().map(|(v, e)| (v, e.to_string()));
 
-            XdsConfig {
-                name,
-                type_url,
-                version,
-                xds,
-                last_error,
-            }
-        })
+                    XdsConfig {
+                        name,
+                        type_url,
+                        version,
+                        xds,
+                        last_error,
+                    }
+                })
+            };
+        }
+
+        data_iter!(listeners, ResourceType::Listener)
+            .chain(data_iter!(route_configs, ResourceType::RouteConfiguration))
+            .chain(data_iter!(clusters, ResourceType::Cluster))
+            .chain(data_iter!(
+                load_assignments,
+                ResourceType::ClusterLoadAssignment
+            ))
     }
 }
 
@@ -946,7 +964,7 @@ where
 {
     // actually insert the thing
     let resource = T::from_any(&any)?;
-    data.insert_ok(name, version.clone(), resource);
+    data.insert_ok(name, version.clone(), resource, any);
     Ok(())
 }
 
