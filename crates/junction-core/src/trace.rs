@@ -1,32 +1,38 @@
-use std::{net::SocketAddr, time::Instant};
+//! A structured resolution and reporting trace. This is framework/platform
+//! agnostic so that language clients can integrate with their telemetry of
+//! choice.
+//!
+//! # A note on Time
+//!
+//! This struct uses a SystemTime internally for timing to give each event
+//! a sane global timestamp in the context of the rest of the system. This
+//! tends to use `CLOCK_REALTIME` instead of `CLOCK_MONOTONIC` on linux/unix
+//! with all of the timing drawbacks that implies.
+//!
+//! This is the same tradeoff that otel and tracing have to make:
+//! <https://github.com/open-telemetry/opentelemetry-rust/blob/2bf8175d071232eb3667171f2cd8f1eb9324fada/opentelemetry/src/lib.rs#L284>
+
+use std::{fmt::Display, net::SocketAddr, time::SystemTime};
 
 use smol_str::{SmolStr, ToSmolStr};
 
-#[derive(Clone, Debug)]
-pub(crate) struct Trace {
-    start: Instant,
-    phase: TracePhase,
-    events: Vec<TraceEvent>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TraceEvent {
-    pub(crate) phase: TracePhase,
-    pub(crate) kind: TraceEventKind,
-    pub(crate) at: Instant,
-    pub(crate) kv: Vec<TraceData>,
-}
-
-type TraceData = (&'static str, SmolStr);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TracePhase {
+pub enum TracePhase {
     RouteResolution,
     EndpointSelection(u8),
 }
 
+impl Display for TracePhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TracePhase::RouteResolution => write!(f, "RouteResolution"),
+            TracePhase::EndpointSelection(n) => write!(f, "EndpointSelection({n})"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TraceEventKind {
+pub enum EventKind {
     // RouteResolution
     LookupListener,
     LookupRoute,
@@ -40,21 +46,89 @@ pub(crate) enum TraceEventKind {
     LoadBalance,
 }
 
+impl Display for EventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EventKind::LookupListener => write!(f, "LookupListener"),
+            EventKind::LookupRoute => write!(f, "LookupRoute"),
+            EventKind::MatchRoute => write!(f, "MatchRoute"),
+            EventKind::SelectCluster => write!(f, "SelectCluster"),
+            EventKind::HashRequest => write!(f, "HashRequest"),
+            EventKind::LookupCluster => write!(f, "LookupCluster"),
+            EventKind::LookupEndpoints => write!(f, "LookupEndpoints"),
+            EventKind::LookupDns => write!(f, "LookupDns"),
+            EventKind::LoadBalance => write!(f, "LoadBalance"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Event {
+    phase: TracePhase,
+    kind: EventKind,
+    time: SystemTime,
+    fields: Vec<TraceData>,
+}
+
+impl Event {
+    pub fn phase(&self) -> TracePhase {
+        self.phase
+    }
+
+    pub fn kind(&self) -> EventKind {
+        self.kind
+    }
+
+    pub fn time(&self) -> SystemTime {
+        self.time
+    }
+
+    pub fn fields(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
+        self.fields
+            .iter()
+            .map(|data| (data.name, data.value.as_ref()))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Trace {
+    start: SystemTime,
+    phase: TracePhase,
+    events: Vec<Event>,
+}
+
+impl Trace {
+    pub fn start(&self) -> SystemTime {
+        self.start
+    }
+
+    pub fn events(&self) -> impl Iterator<Item = &Event> + '_ {
+        self.events.iter()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TraceData {
+    name: &'static str,
+    value: SmolStr,
+}
+
+impl TraceData {
+    fn new<T: ToSmolStr>(name: &'static str, value: T) -> Self {
+        Self {
+            name,
+            value: value.to_smolstr(),
+        }
+    }
+}
+
 impl Trace {
     pub(crate) fn new() -> Self {
         Trace {
-            start: Instant::now(),
+            start: SystemTime::now(),
             phase: TracePhase::RouteResolution,
             events: Vec::new(),
         }
-    }
-
-    pub(crate) fn events(&self) -> impl Iterator<Item = &TraceEvent> {
-        self.events.iter()
-    }
-
-    pub(crate) fn start(&self) -> Instant {
-        self.start
     }
 
     // Route Resolution builders
@@ -62,55 +136,55 @@ impl Trace {
     pub(crate) fn lookup_listener(&mut self, listener: String) {
         debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
 
-        self.events.push(TraceEvent {
-            kind: TraceEventKind::LookupListener,
+        self.events.push(Event {
+            kind: EventKind::LookupListener,
             phase: TracePhase::RouteResolution,
-            at: Instant::now(),
-            kv: vec![("listener", listener.to_smolstr())],
+            time: SystemTime::now(),
+            fields: vec![TraceData::new("listener", listener)],
         })
     }
 
     pub(crate) fn lookup_route(&mut self, route: String) {
         debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
 
-        self.events.push(TraceEvent {
-            kind: TraceEventKind::LookupRoute,
+        self.events.push(Event {
+            kind: EventKind::LookupRoute,
             phase: TracePhase::RouteResolution,
-            at: Instant::now(),
-            kv: vec![("route", route.to_smolstr())],
+            time: SystemTime::now(),
+            fields: vec![TraceData::new("route", route)],
         })
     }
 
     pub(crate) fn matched_route(&mut self) {
         debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
 
-        self.events.push(TraceEvent {
-            kind: TraceEventKind::MatchRoute,
+        self.events.push(Event {
+            kind: EventKind::MatchRoute,
             phase: TracePhase::RouteResolution,
-            at: Instant::now(),
-            kv: vec![],
+            time: SystemTime::now(),
+            fields: vec![],
         })
     }
 
     pub(crate) fn select_cluster(&mut self) {
         debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
 
-        self.events.push(TraceEvent {
+        self.events.push(Event {
             phase: self.phase,
-            kind: TraceEventKind::SelectCluster,
-            at: Instant::now(),
-            kv: vec![],
+            kind: EventKind::SelectCluster,
+            time: SystemTime::now(),
+            fields: vec![],
         });
     }
 
     pub(crate) fn hash_request(&mut self, request_hash: u64) {
         debug_assert!(matches!(self.phase, TracePhase::RouteResolution));
 
-        self.events.push(TraceEvent {
+        self.events.push(Event {
             phase: self.phase,
-            kind: TraceEventKind::HashRequest,
-            at: Instant::now(),
-            kv: vec![("request-hash", request_hash.to_smolstr())],
+            kind: EventKind::HashRequest,
+            time: SystemTime::now(),
+            fields: vec![TraceData::new("request-hash", request_hash)],
         });
     }
 
@@ -125,54 +199,57 @@ impl Trace {
     }
 
     pub(crate) fn lookup_cluster(&mut self, cluster: String) {
-        self.events.push(TraceEvent {
+        self.events.push(Event {
             phase: self.phase,
-            kind: TraceEventKind::LookupCluster,
-            at: Instant::now(),
-            kv: vec![("cluster", cluster.to_smolstr())],
+            kind: EventKind::LookupCluster,
+            time: SystemTime::now(),
+            fields: vec![TraceData::new("cluster", cluster)],
         });
     }
 
     pub(crate) fn lookup_endpoints(&mut self, endpoints: String) {
-        self.events.push(TraceEvent {
+        self.events.push(Event {
             phase: self.phase,
-            kind: TraceEventKind::LookupEndpoints,
-            at: Instant::now(),
-            kv: vec![("endpoints", endpoints.to_smolstr())],
+            kind: EventKind::LookupEndpoints,
+            time: SystemTime::now(),
+            fields: vec![TraceData::new("endpoints", endpoints)],
         });
     }
 
     pub(crate) fn lookup_dns(&mut self, hostname: String) {
-        self.events.push(TraceEvent {
+        self.events.push(Event {
             phase: self.phase,
-            kind: TraceEventKind::LookupDns,
-            at: Instant::now(),
-            kv: vec![("hostname", hostname.to_smolstr())],
+            kind: EventKind::LookupDns,
+            time: SystemTime::now(),
+            fields: vec![TraceData::new("hostname", hostname)],
         });
     }
 
-    pub(crate) fn load_balance(
+    pub(crate) fn load_balance<T: ToSmolStr>(
         &mut self,
         lb_name: &'static str,
         addr: Option<&SocketAddr>,
-        extra: Vec<TraceData>,
+        extra: impl IntoIterator<Item = (&'static str, T)>,
     ) {
         debug_assert!(matches!(self.phase, TracePhase::EndpointSelection(_)));
 
-        let mut kv = Vec::with_capacity(extra.len() + 2);
-        kv.push(("type", lb_name.to_smolstr()));
-        kv.push((
+        let extra = extra.into_iter().map(|(k, v)| TraceData::new(k, v));
+        let (extra_len, _) = extra.size_hint();
+
+        let mut fields = Vec::with_capacity(2 + extra_len);
+        fields.push(TraceData::new("type", lb_name));
+        fields.push(TraceData::new(
             "addr",
             addr.map(|a| a.to_smolstr())
-                .unwrap_or_else(|| "-".to_smolstr()),
+                .unwrap_or_else(|| SmolStr::new_static("")),
         ));
-        kv.extend(extra);
+        fields.extend(extra);
 
-        self.events.push(TraceEvent {
-            kind: TraceEventKind::LoadBalance,
+        self.events.push(Event {
+            kind: EventKind::LoadBalance,
             phase: self.phase,
-            at: Instant::now(),
-            kv,
+            time: SystemTime::now(),
+            fields,
         });
     }
 }

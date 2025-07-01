@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, time::Duration};
 
-use crate::{xds, HttpResult, Trace};
+use crate::{trace::Trace, xds, HttpResult};
 
 #[derive(Debug, Clone)]
 pub struct Retries {
@@ -104,6 +104,10 @@ impl Endpoint {
         &self.retries
     }
 
+    pub fn trace(&self) -> &Trace {
+        &self.trace
+    }
+
     pub(crate) fn should_retry(&self, result: HttpResult) -> bool {
         let Some(retry) = &self.retries else {
             return false;
@@ -123,30 +127,6 @@ impl Endpoint {
         let attempts = self.previous_addrs.len() + 1;
 
         attempts < allowed
-    }
-
-    // FIXME: lol
-    pub fn print_trace(&self) {
-        let start = self.trace.start();
-        let mut phase = None;
-
-        for event in self.trace.events() {
-            if phase != Some(event.phase) {
-                eprintln!("{:?}", event.phase);
-                phase = Some(event.phase);
-            }
-
-            let elapsed = event.at.duration_since(start).as_secs_f64();
-            eprint!("  {elapsed:.06}: {name:>16?}", name = event.kind);
-            if !event.kv.is_empty() {
-                eprint!(":");
-
-                for (k, v) in &event.kv {
-                    eprint!("  {k}={v}")
-                }
-            }
-            eprintln!();
-        }
     }
 }
 

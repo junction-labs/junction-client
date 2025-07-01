@@ -10,7 +10,7 @@ use pyo3::{
     wrap_pyfunction, Bound, Py, PyAny, PyResult, Python,
 };
 use serde::Serialize;
-use std::{net::IpAddr, str::FromStr};
+use std::{net::IpAddr, str::FromStr, time::SystemTime};
 use tracing_subscriber::EnvFilter;
 use xds_api::pb::google::protobuf;
 
@@ -74,9 +74,6 @@ mod env {
 /// An endpoint that an HTTP call can be made to. Includes the address that the
 /// request should resolve to along with the original request URI, the scheme to
 /// use, and the hostname to use for TLS if appropriate.
-//
-// TODO: add http method and shadowing. we can't switch method right now so
-// method is moot.
 #[derive(Clone, Debug)]
 #[pyclass]
 pub struct Endpoint {
@@ -123,8 +120,10 @@ impl Endpoint {
         self.inner.timeouts().clone().map(|t| t.into())
     }
 
-    fn print_trace(&self) {
-        self.inner.print_trace();
+    #[getter]
+    fn trace<'py>(&self) -> Trace {
+        let trace = self.inner.trace().clone();
+        trace.into()
     }
 }
 
@@ -134,10 +133,6 @@ impl From<junction_core::Endpoint> for Endpoint {
     }
 }
 
-//
-// FIXME: this works fine if you keep want to retrying the one address, but best
-// practices is to vary the addresses on a retry, which requires bigger changes
-//
 /// A policy that describes how a client should retry requests.
 #[derive(Clone, Debug)]
 #[pyclass]
@@ -257,6 +252,82 @@ impl From<junction_core::SearchConfig> for SearchConfig {
             search: value.search.into_iter().map(|s| s.to_string()).collect(),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[pyclass]
+pub struct Trace {
+    #[pyo3(get)]
+    start: f64,
+
+    #[pyo3(get)]
+    events: Vec<TraceEvent>,
+}
+
+#[pymethods]
+impl Trace {
+    fn __repr__(&self) -> String {
+        format!("{self:?}")
+    }
+
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let any = pythonize::pythonize(py, self)?;
+        Ok(any)
+    }
+}
+
+impl From<junction_core::trace::Trace> for Trace {
+    fn from(value: junction_core::trace::Trace) -> Self {
+        let trace = value.clone();
+        Self {
+            start: epoch_seconds(trace.start()),
+            events: trace.events().cloned().map(TraceEvent::from).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[pyclass]
+pub struct TraceEvent {
+    #[pyo3(get)]
+    kind: String,
+
+    #[pyo3(get)]
+    phase: String,
+
+    #[pyo3(get)]
+    time: f64,
+
+    #[pyo3(get)]
+    fields: Vec<(String, String)>,
+}
+
+#[pymethods]
+impl TraceEvent {
+    fn __repr__(&self) -> String {
+        format!("{self:?}")
+    }
+}
+
+impl From<junction_core::trace::Event> for TraceEvent {
+    fn from(value: junction_core::trace::Event) -> Self {
+        Self {
+            kind: value.kind().to_string(),
+            phase: value.phase().to_string(),
+            time: epoch_seconds(value.time()),
+            fields: value
+                .fields()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+}
+
+#[inline]
+fn epoch_seconds(t: SystemTime) -> f64 {
+    t.duration_since(SystemTime::UNIX_EPOCH)
+        .expect("timestamp before unix epoch")
+        .as_secs_f64()
 }
 
 /// Check route resolution.
