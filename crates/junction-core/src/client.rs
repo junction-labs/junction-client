@@ -1,7 +1,8 @@
 use crate::{
     dns::{self, StdlibResolver},
+    trace::Trace,
     xds::{self, AdsClient, ResourceType, XdsCache},
-    Endpoint, Error, Trace,
+    Endpoint, Error,
 };
 use futures::{stream::FuturesOrdered, StreamExt};
 use rand::{distributions::WeightedError, seq::SliceRandom};
@@ -634,7 +635,7 @@ async fn select_endpoint(
         }
     };
     let Some(endpoints) = load_assignment.endpoints.first() else {
-        return Err(Error::unavailable(trace, "no available endpoints"));
+        return Err(Error::unavailable(trace, "no available endpoint groups"));
     };
 
     // load balance.
@@ -647,7 +648,7 @@ async fn select_endpoint(
         request.previous_addrs,
     );
     let Some(addr) = addr else {
-        return Err(Error::unavailable(trace, "no available endpoints"));
+        return Err(Error::unavailable(trace, "no available end points"));
     };
 
     Ok(SelectedEndpoint { addr: *addr, trace })

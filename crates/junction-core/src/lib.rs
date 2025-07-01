@@ -2,26 +2,24 @@
 //!
 //! * [Getting Started](https://docs.junctionlabs.io/getting-started/rust)
 
+mod client;
+mod dns;
+mod endpoints;
 mod error;
-mod trace;
 mod url;
-pub use crate::error::{Error, Result};
-pub use crate::url::Url;
+mod xds;
 
 pub(crate) mod hash;
 pub(crate) mod rand;
 
-mod endpoints;
-pub use endpoints::{Endpoint, Retries, Timeouts};
-
-mod client;
-mod dns;
-mod xds;
-
+pub mod trace;
+pub use crate::error::{Error, Result};
+pub use crate::url::Url;
 pub use client::{Client, HttpRequest, HttpResult, SearchConfig, SelectedEndpoint};
-use futures::FutureExt;
-use trace::Trace;
+pub use endpoints::{Endpoint, Retries, Timeouts};
 pub use xds::{IntoXds, ResourceVersion, XdsConfig};
+
+use futures::FutureExt;
 
 /// Check route resolution.
 ///
@@ -45,11 +43,12 @@ pub fn check_route<T: IntoXds>(
     // resolve_routes is async but we know that with StaticConfig, fetching
     // config should NEVER block. now-or-never just calls Poll with a noop
     // waker and unwraps the result ASAP.
-    let resolved = client::resolve_route(&client, &search_config, Trace::new(), request, None)
-        .now_or_never()
-        .expect(
-            "check_route yielded unexpectedly. this is a bug in Junction, please file an issue",
-        )?;
+    let resolved =
+        client::resolve_route(&client, &search_config, trace::Trace::new(), request, None)
+            .now_or_never()
+            .expect(
+                "check_route yielded unexpectedly. this is a bug in Junction, please file an issue",
+            )?;
 
     Ok(resolved.cluster.to_string())
 }

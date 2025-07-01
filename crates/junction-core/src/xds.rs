@@ -224,7 +224,7 @@ impl AdsClient {
         };
 
         // TODO: how should we pick this number?
-        let (sub_tx, sub_rx) = mpsc::channel(10);
+        let (sub_tx, sub_rx) = mpsc::channel(16);
 
         let cache = Cache::default();
         let cache_reader = cache.reader();

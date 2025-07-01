@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::Trace;
+use crate::trace::Trace;
 
 /// A `Result` alias where the `Err` case is `junction_core::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -28,6 +28,10 @@ impl Error {
     /// lag fetching a configuration from a Junction server.
     pub fn is_temporary(&self) -> bool {
         matches!(*self.inner, ErrorImpl::TimedOut { .. })
+    }
+
+    pub fn trace(&self) -> Option<&Trace> {
+        self.trace.as_ref()
     }
 }
 
