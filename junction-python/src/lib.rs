@@ -1,7 +1,4 @@
-use junction_api::{
-    backend::{Backend, BackendId},
-    http::Route,
-};
+use junction_api::{backend::Backend, http::Route};
 use junction_core::{HttpResult, ResourceVersion};
 use once_cell::sync::Lazy;
 use pyo3::{
@@ -13,11 +10,7 @@ use pyo3::{
     wrap_pyfunction, Bound, Py, PyAny, PyResult, Python,
 };
 use serde::Serialize;
-use std::{
-    net::IpAddr,
-    str::FromStr,
-    time::{Duration, Instant},
-};
+use std::{net::IpAddr, str::FromStr};
 use tracing_subscriber::EnvFilter;
 use xds_api::pb::google::protobuf;
 
@@ -32,7 +25,7 @@ fn junction(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("_build", BUILD)?;
     m.add_class::<Junction>()?;
     m.add_class::<Endpoint>()?;
-    m.add_class::<RetryPolicy>()?;
+    m.add_class::<Retries>()?;
     m.add_class::<SearchConfig>()?;
     m.add_function(wrap_pyfunction!(default_client, m)?)?;
     m.add_function(wrap_pyfunction!(check_route, m)?)?;
@@ -121,12 +114,12 @@ impl Endpoint {
     }
 
     #[getter]
-    fn retry_policy(&self) -> Option<RetryPolicy> {
+    fn retry_policy(&self) -> Option<Retries> {
         self.inner.retry().clone().map(|r| r.into())
     }
 
     #[getter]
-    fn timeout_policy(&self) -> Option<TimeoutPolicy> {
+    fn timeout_policy(&self) -> Option<Timeouts> {
         self.inner.timeouts().clone().map(|t| t.into())
     }
 
@@ -148,19 +141,25 @@ impl From<junction_core::Endpoint> for Endpoint {
 /// A policy that describes how a client should retry requests.
 #[derive(Clone, Debug)]
 #[pyclass]
-pub struct RetryPolicy {
+pub struct Retries {
+    /// The HTTP error codes that retries should be applied to.
     #[pyo3(get)]
     codes: Vec<u16>,
 
+    /// The total number of attempts to make when retrying this request. If
+    /// unset, the client should only ever make a single request.
     #[pyo3(get)]
     attempts: u32,
 
+    /// The initial amount of time to back off between requests during a series
+    /// of retries. Backoff may scale up to `max_backoff` between requests at
+    /// the client's discretion
     #[pyo3(get)]
     backoff: f64,
 }
 
 #[pymethods]
-impl RetryPolicy {
+impl Retries {
     #[new]
     fn new(codes: Option<Vec<u16>>, attempts: Option<u32>, backoff: Option<f64>) -> Self {
         Self {
@@ -172,16 +171,16 @@ impl RetryPolicy {
 
     fn __repr__(&self) -> String {
         format!(
-            "RetryPolicy({attempts}, {min})",
-            //FIXME: add codes
+            "Retries({codes:#?}, {attempts}, {backoff})",
+            codes = self.codes,
             attempts = self.attempts,
-            min = self.backoff,
+            backoff = self.backoff,
         )
     }
 }
 
-impl From<junction_api::http::RouteRetry> for RetryPolicy {
-    fn from(value: junction_api::http::RouteRetry) -> Self {
+impl From<junction_core::Retries> for Retries {
+    fn from(value: junction_core::Retries) -> Self {
         Self {
             codes: value.codes,
             attempts: value.attempts.unwrap_or(1),
@@ -193,33 +192,30 @@ impl From<junction_api::http::RouteRetry> for RetryPolicy {
 /// A policy that describes how a client should do timeouts.
 #[derive(Clone, Debug)]
 #[pyclass]
-pub struct TimeoutPolicy {
+pub struct Timeouts {
     #[pyo3(get)]
-    backend_request: f64,
+    attempt: f64,
 
     #[pyo3(get)]
-    request: f64,
+    total: f64,
 }
 
 #[pymethods]
-impl TimeoutPolicy {
+impl Timeouts {
     fn __repr__(&self) -> String {
         format!(
-            "TimeoutPolicy({backend_request}, {request})",
-            backend_request = self.backend_request,
-            request = self.request,
+            "Timeouts({attempt}, {total})",
+            attempt = self.attempt,
+            total = self.total,
         )
     }
 }
 
-impl From<junction_api::http::RouteTimeouts> for TimeoutPolicy {
-    fn from(value: junction_api::http::RouteTimeouts) -> Self {
+impl From<junction_core::Timeouts> for Timeouts {
+    fn from(value: junction_core::Timeouts) -> Self {
         Self {
-            backend_request: value
-                .backend_request
-                .map(|x| x.as_secs_f64())
-                .unwrap_or(0.0),
-            request: value.request.map(|x| x.as_secs_f64()).unwrap_or(0.0),
+            attempt: value.attempt.map(|x| x.as_secs_f64()).unwrap_or(0.0),
+            total: value.total.map(|x| x.as_secs_f64()).unwrap_or(0.0),
         }
     }
 }
@@ -274,13 +270,12 @@ impl From<junction_core::SearchConfig> for SearchConfig {
 #[pyfunction]
 #[pyo3(signature = (routes, url, *, method=None, headers=None, search_config=None))]
 fn check_route(
-    py: Python<'_>,
     routes: Bound<'_, PyAny>,
     url: &str,
     method: Option<&str>,
     headers: Option<&Bound<PyMapping>>,
     search_config: Option<Bound<'_, PyAny>>,
-) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
+) -> PyResult<String> {
     let url: junction_core::Url = url
         .parse()
         .map_err(|e| PyValueError::new_err(format!("{e}")))?;
@@ -291,14 +286,11 @@ fn check_route(
         .transpose()?;
 
     let routes: Vec<Route> = pythonize::depythonize_bound(routes)?;
-    let resolved =
-        junction_core::check_route(routes, &method, &url, &headers, search_config.as_ref())
+    let cluster_name =
+        junction_core::check_route(routes, search_config.as_ref(), &method, &url, &headers)
             .map_err(|e| PyRuntimeError::new_err(format!("failed to resolve: {e}")))?;
 
-    let route = pythonize::pythonize(py, &resolved.route)?;
-    let backend = pythonize::pythonize(py, &resolved.backend)?;
-
-    Ok((route, resolved.rule, backend))
+    Ok(cluster_name)
 }
 
 /// Dump a Route as Kubernetes YAML.
@@ -358,7 +350,8 @@ fn new_client(
     cluster_name: String,
 ) -> PyResult<junction_core::Client> {
     runtime::block_and_check_signals(async {
-        junction_core::Client::build(ads_address, node_name, cluster_name)
+        junction_core::Client::builder(node_name, cluster_name)
+            .build(ads_address)
             .await
             .map_err(|e| match e.source() {
                 Some(cause) => format!("ads connection failed: {e}: {cause}"),
@@ -374,29 +367,11 @@ fn new_client(
 /// setting the JUNCTION_ADS_SERVER, JUNCTION_NODE, and JUNCTION_CLUSTER
 /// environment variables.
 #[pyfunction]
-#[pyo3(signature = (*, static_routes=None, static_backends=None))]
-fn default_client(
-    static_routes: Option<Bound<'_, PyAny>>,
-    static_backends: Option<Bound<'_, PyAny>>,
-) -> PyResult<Junction> {
-    let mut core = match DEFAULT_CLIENT.as_ref() {
-        Ok(default_client) => default_client.clone(),
-        Err(e) => return Err(PyRuntimeError::new_err(e)),
-    };
-
-    let routes = static_routes
-        .map(|routes| pythonize::depythonize_bound(routes))
-        .transpose()?;
-
-    let backends = static_backends
-        .map(|backends| pythonize::depythonize_bound(backends))
-        .transpose()?;
-
-    if routes.is_some() || backends.is_some() {
-        let routes = routes.unwrap_or_default();
-        let backends = backends.unwrap_or_default();
-        core = core.with_static_config(routes, backends);
-    }
+fn default_client() -> PyResult<Junction> {
+    let core = DEFAULT_CLIENT
+        .as_ref()
+        .map_err(|e| PyRuntimeError::new_err(e))?
+        .clone();
 
     Ok(Junction { core })
 }
@@ -408,15 +383,11 @@ impl Junction {
     #[new]
     #[pyo3(signature = (
         *,
-        static_routes=None,
-        static_backends=None,
         ads_server=None,
         node=None,
         cluster=None,
     ))]
     fn new(
-        static_routes: Option<Bound<'_, PyAny>>,
-        static_backends: Option<Bound<'_, PyAny>>,
         ads_server: Option<String>,
         node: Option<String>,
         cluster: Option<String>,
@@ -427,67 +398,9 @@ impl Junction {
         )?;
         let node = env::node_info(node);
         let cluster = env::cluster_name(cluster);
-        let mut core = new_client(ads, node, cluster).map_err(PyRuntimeError::new_err)?;
 
-        let routes = static_routes
-            .map(|routes| pythonize::depythonize_bound(routes))
-            .transpose()?;
-        let backends = static_backends
-            .map(|backends| pythonize::depythonize_bound(backends))
-            .transpose()?;
-        if routes.is_some() || backends.is_some() {
-            let routes = routes.unwrap_or_default();
-            let backends = backends.unwrap_or_default();
-            core = core.with_static_config(routes, backends);
-        }
-
+        let core = new_client(ads, node, cluster).map_err(PyRuntimeError::new_err)?;
         Ok(Junction { core })
-    }
-
-    /// Perform the route resolution half of resolve_http, returning the
-    /// matched route, the index of the matching rule, and the backend that
-    /// was selected. Use it as a lower level method to debug route resolution,
-    /// or to look up Routes without making a full request.
-    ///
-    /// If `dynamic=False` is passed as a kwarg, the resolution happens without
-    /// fetching any new routing data over the network.
-    #[pyo3(signature = (url, *, method=None, headers=None, timeout=None))]
-    fn resolve_route(
-        &self,
-        py: Python<'_>,
-        url: &str,
-        method: Option<&str>,
-        headers: Option<&Bound<PyMapping>>,
-        timeout: Option<u64>,
-    ) -> PyResult<(Py<PyAny>, usize, Py<PyAny>)> {
-        let method = method_from_py(method)?;
-        let url =
-            junction_core::Url::from_str(url).map_err(|e| PyValueError::new_err(format!("{e}")))?;
-        let headers = headers_from_py(headers)?;
-
-        let deadline = timeout.map(|d| Instant::now() + Duration::from_secs(d));
-
-        let request = junction_core::HttpRequest::from_parts(&method, &url, &headers)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let resolved =
-            runtime::block_and_check_signals(self.core.resolve_route(request, deadline))?;
-
-        let route = pythonize::pythonize(py, &resolved.route)?;
-        let backend = pythonize::pythonize(py, &resolved.backend)?;
-        Ok((route, resolved.rule, backend))
-    }
-
-    /// Return the list of addresses currently in cache for a backend. These
-    /// endpoints are a snapshot of what is currently in cache.
-    #[pyo3(signature = (backend))]
-    fn get_endpoints(&self, backend: Bound<'_, PyAny>) -> PyResult<Vec<(IpAddr, u16)>> {
-        let backend: BackendId = pythonize::depythonize_bound(backend)?;
-        let endpoint_iter = match self.core.dump_endpoints(&backend) {
-            Some(iter) => iter,
-            None => return Ok(Vec::new()),
-        };
-
-        Ok(endpoint_iter.addrs().map(|a| (a.ip(), a.port())).collect())
     }
 
     /// Resolve an endpoint based on an HTTP method, url, and headers.
@@ -553,43 +466,15 @@ impl Junction {
         Ok(())
     }
 
-    /// Dump the client's current route config.
-    ///
-    /// This is the same merged view of dynamic config and static config that
-    /// the client uses to make routing decisions.
-    fn dump_routes(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
-        let mut values = vec![];
-
-        for route in self.core.dump_routes() {
-            values.push(pythonize::pythonize(py, &route)?);
-        }
-
-        Ok(values)
-    }
-
-    /// Dump the client's backend config.
-    ///
-    /// This is the same merged view of dynamic config and static config that
-    /// the client uses to make load balancing decisions.
-    fn dump_backends(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
-        let mut values = vec![];
-
-        for backend in self.core.dump_backends() {
-            values.push(pythonize::pythonize(py, &backend.config)?);
-        }
-
-        Ok(values)
-    }
-
     /// Dump the client's current xDS config as a pbjson dict.
     ///
     /// The xDS config will contain the latest values for all resources and any
     /// errors encountered while trying to fetch updated versions.
-    #[pyo3(signature = (not_found=false))]
-    fn dump_xds(&self, py: Python<'_>, not_found: bool) -> PyResult<Vec<Py<PyAny>>> {
+    #[pyo3(signature = ())]
+    fn dump_xds(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let mut values = vec![];
 
-        for config in self.core.dump_xds(not_found) {
+        for config in self.core.dump_xds() {
             let config: XdsConfig = config.into();
             let as_py = pythonize::pythonize(py, &config)?;
             values.push(as_py);

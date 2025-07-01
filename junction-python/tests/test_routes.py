@@ -23,7 +23,7 @@ def test_check_basic_route_url_port(nginx):
         "rules": [{"backends": [nginx]}],
     }
 
-    (_, _, matched_backend) = junction.check_route(
+    matched_backend = junction.check_route(
         [route],
         "http://nginx.default.svc.cluster.local",
     )
@@ -44,7 +44,7 @@ def test_check_basic_route_url_port_with_ndots(nginx):
         "rules": [{"backends": [nginx]}],
     }
 
-    (_, _, matched_backend) = junction.check_route(
+    matched_backend = junction.check_route(
         [route], "http://nginx.default", search_config=search_config
     )
 

@@ -12,7 +12,7 @@ from urllib3.exceptions import (
 
 import junction
 
-from junction import Endpoint, RetryPolicy
+from junction import Endpoint, Retries
 
 # When integrating with urllib3, it makes the most sense to provide a drop-in
 # replacement for PoolManager - HTTPConnectionPool and friends are pools of
@@ -43,7 +43,7 @@ def _is_redirect_err(e: MaxRetryError) -> bool:
 
 
 def _configure_retries(
-    retries: typing.Optional[urllib3.Retry], policy: RetryPolicy
+    retries: typing.Optional[urllib3.Retry], policy: Retries
 ) -> typing.Tuple[urllib3.Retry, typing.Union[int, bool]]:
     """
     Merge Junction retries with callsite specific urilib3.Retry objects.
@@ -91,8 +91,6 @@ class PoolManager(urllib3.PoolManager):
         num_pools: int = 10,
         headers: typing.Optional[typing.Mapping[str, str]] = None,
         # junction
-        static_routes: typing.Optional[typing.List["junction.config.Route"]] = None,
-        static_backends: typing.Optional[typing.List["junction.config.Backend"]] = None,
         junction_client: typing.Optional[junction.Junction] = None,
         # kwargs
         **kwargs: typing.Any,
@@ -100,9 +98,7 @@ class PoolManager(urllib3.PoolManager):
         if junction_client:
             self.junction = junction_client
         else:
-            self.junction = junction._default_client(
-                static_routes=static_routes, static_backends=static_backends
-            )
+            self.junction = junction.default_client()
 
         super().__init__(num_pools, headers, **kwargs)
 
@@ -145,19 +141,19 @@ class PoolManager(urllib3.PoolManager):
         )
 
         deadline = None
-        if endpoint.timeout_policy and endpoint.timeout_policy.request != 0:
-            deadline = time.time() + endpoint.timeout_policy.request
+        if endpoint.timeout_policy and endpoint.timeout_policy.total != 0:
+            deadline = time.time() + endpoint.timeout_policy.total
 
         while True:
             # we don't clobber a method specific timeout even when there is a
-            # backend_request value.
+            # attempt value.
             if (
                 endpoint.timeout_policy
-                and endpoint.timeout_policy.backend_request != 0
+                and endpoint.timeout_policy.attempt != 0
                 and kwargs.get("timeout", None) is None
             ):
                 kwargs["timeout"] = urllib3.Timeout(
-                    total=endpoint.timeout_policy.backend_request
+                    total=endpoint.timeout_policy.attempt
                 )
 
             # we do clobber a method specific timeout when there is a deadline

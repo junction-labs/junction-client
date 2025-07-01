@@ -41,33 +41,28 @@ class SessionFactory:
         self.delete_resources = []
         self.delete_patches = []
 
-        if self.args.use_gateway_api:
-            if routes:
-                manifests = [
-                    junction.dump_kube_route(route=route, namespace="default")
-                    for route in routes
-                ]
-                self._kubectl_apply(*manifests)
-                self.delete_resources = manifests
-            if backends:
-                manifests = [
-                    junction.dump_kube_backend(backend) for backend in backends
-                ]
-                self._kubectl_patch(*manifests)
-                for manifest in manifests:
-                    spec = yaml.safe_load(manifest)
-                    for key in spec["metadata"]["annotations"].keys():
-                        spec["metadata"]["annotations"][key] = None
-                    self.delete_patches.append(yaml.dump(spec))
+        if routes:
+            manifests = [
+                junction.dump_kube_route(route=route, namespace="default")
+                for route in routes
+            ]
+            self._kubectl_apply(*manifests)
+            self.delete_resources = manifests
+        if backends:
+            manifests = [
+                junction.dump_kube_backend(backend) for backend in backends
+            ]
+            self._kubectl_patch(*manifests)
+            for manifest in manifests:
+                spec = yaml.safe_load(manifest)
+                for key in spec["metadata"]["annotations"].keys():
+                    spec["metadata"]["annotations"][key] = None
+                self.delete_patches.append(yaml.dump(spec))
 
-            # unfortunately, kube/ezbake do not propagate changes instantly
-            # so we need to wait for them to be ready
-            sleep(2)
-            self.session = junction.requests.Session()
-        else:
-            self.session = junction.requests.Session(
-                static_routes=routes, static_backends=backends
-            )
+        # unfortunately, kube/ezbake do not propagate changes instantly
+        # so we need to wait for them to be ready
+        sleep(2)
+        self.session = junction.requests.Session()
 
     def __enter__(self):
         return self.session
@@ -193,7 +188,7 @@ def retry_test(args):
 
 
 def path_match_test(args):
-    print_header("Header Match - 50% of /feature-1/index sent to a different backend")
+    print_header("Path Match - 50% of /feature-1/index sent to a different backend")
 
     service: junction.config.Service = {
         "type": "kube",
@@ -360,7 +355,7 @@ def urllib3_test(args):
         "name": "jct-simple-app",
         "namespace": "default",
     }
-    default_routes: List[junction.config.Route] = [
+    routes: List[junction.config.Route] = [
         {
             "id": "smoke-test-urllib3",
             "hostnames": ["jct-simple-app.default.svc.cluster.local"],
@@ -374,18 +369,19 @@ def urllib3_test(args):
             ],
         }
     ]
-    http = JunctionPoolManger(static_routes=default_routes)
 
-    results = []
-    for sleep_ms in [0, 100]:
-        counters = defaultdict(int)
-        try:
-            http.urlopen("GET", f"{args.base_url}/?sleep_ms={sleep_ms}")
-            counters["success"] += 1
-        except urllib3.exceptions.MaxRetryError:
-            counters["exception"] += 1
-        print(f"With server sleep time '{sleep_ms}'ms call result counts are - ")
-        results.append(print_counters(counters))
+    with SessionFactory(args, routes=routes) as _session:
+        http = JunctionPoolManger()
+        results = []
+        for sleep_ms in [0, 100]:
+            counters = defaultdict(int)
+            try:
+                http.urlopen("GET", f"{args.base_url}/?sleep_ms={sleep_ms}")
+                counters["success"] += 1
+            except urllib3.exceptions.MaxRetryError:
+                counters["exception"] += 1
+            print(f"With server sleep time '{sleep_ms}'ms call result counts are - ")
+            results.append(print_counters(counters))
 
     # now show an override of timeout on the method call still works
     for sleep_ms in [0, 100]:
