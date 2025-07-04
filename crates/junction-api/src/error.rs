@@ -96,7 +96,7 @@ where
         if i > 0 && path_entry.is_field() {
             buf.push('.');
         }
-        let _ = write!(&mut buf, "{}", path_entry);
+        let _ = write!(&mut buf, "{path_entry}");
     }
 
     buf

@@ -54,21 +54,18 @@ impl junction_core::ToXds for Route {
 
         let mut xds = vec![];
         for hostname in &self.hostnames {
-            match &hostname {
-                crate::http::HostnameMatch::Exact(hostname) => {
-                    let ports = if self.ports.is_empty() {
-                        &[80, 443]
-                    } else {
-                        self.ports.as_slice()
-                    };
+            if let crate::http::HostnameMatch::Exact(hostname) = &hostname {
+                let ports = if self.ports.is_empty() {
+                    &[80, 443]
+                } else {
+                    self.ports.as_slice()
+                };
 
-                    for &port in ports {
-                        let listener = api_listener_rds(hostname, port, &route_name);
-                        let listener_name = listener.name.clone();
-                        xds.push((listener_name, protobuf::Any::from_msg(&listener).unwrap()));
-                    }
+                for &port in ports {
+                    let listener = api_listener_rds(hostname, port, &route_name);
+                    let listener_name = listener.name.clone();
+                    xds.push((listener_name, protobuf::Any::from_msg(&listener).unwrap()));
                 }
-                _ => (),
             }
         }
 
