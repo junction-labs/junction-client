@@ -17,7 +17,7 @@ pub use crate::error::{Error, Result};
 pub use crate::url::Url;
 pub use client::{Client, HttpRequest, HttpResult, SearchConfig, SelectedEndpoint};
 pub use endpoints::{Endpoint, Retries, Timeouts};
-pub use xds::{IntoXds, ResourceVersion, XdsConfig};
+pub use xds::{ResourceVersion, ToXds, XdsConfig};
 
 use futures::FutureExt;
 
@@ -29,7 +29,7 @@ use futures::FutureExt;
 /// Use this function to test routing configuration without requiring a full
 /// client or a live connection to a control plane. For route resolution against,
 /// a live control plane, see [Client::resolve_http].
-pub fn check_route<T: IntoXds>(
+pub fn check_route<T: ToXds>(
     resources: impl IntoIterator<Item = T>,
     search_config: Option<&SearchConfig>,
     method: &http::Method,
@@ -37,7 +37,7 @@ pub fn check_route<T: IntoXds>(
     headers: &http::HeaderMap,
 ) -> Result<String> {
     let request = client::HttpRequest::from_parts(method, url, headers);
-    let client = xds::StaticCache::with_xds(resources.into_iter()).unwrap();
+    let client = xds::StaticCache::with_xds(resources).unwrap();
     let search_config = search_config.cloned().unwrap_or_default();
 
     // resolve_routes is async but we know that with StaticConfig, fetching

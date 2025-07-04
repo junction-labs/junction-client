@@ -17,8 +17,8 @@ use crate::{
     BackendId, Service,
 };
 
-impl junction_core::IntoXds for Backend {
-    fn into_any(&self) -> Vec<(String, xds_api::pb::google::protobuf::Any)> {
+impl junction_core::ToXds for Backend {
+    fn to_any(&self) -> Vec<(String, xds_api::pb::google::protobuf::Any)> {
         let cluster = self.to_xds();
         let any = protobuf::Any::from_msg(&cluster).unwrap();
         vec![(cluster.name.clone(), any)]

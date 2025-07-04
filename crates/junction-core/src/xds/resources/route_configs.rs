@@ -147,8 +147,8 @@ impl Action {
                 };
 
                 let hash_policies = vec_from_xds!(action.hash_policy, "hash_policy", HashPolicy)?;
-                let retries = Retries::from_xds(&action)?;
-                let timeouts = Timeouts::from_xds(&action)?;
+                let retries = Retries::from_xds(action)?;
+                let timeouts = Timeouts::from_xds(action)?;
 
                 Ok(Self {
                     hash_policies,
@@ -157,7 +157,7 @@ impl Action {
                     timeouts,
                 })
             }
-            _ => return Err(ResourceError::invalid("unsupported action")),
+            _ => Err(ResourceError::invalid("unsupported action")),
         }
     }
 }
@@ -309,7 +309,7 @@ impl Matcher {
             .path_specifier
             .as_ref()
             .ok_or_else(|| ResourceError::invalid("missing path specifier"))
-            .and_then(|p| PathMatcher::from_xds(p))
+            .and_then(PathMatcher::from_xds)
             .with_field("path_specifier")?;
 
         let query = vec_from_xds!(xds.query_parameters, "query_parameters", QueryMatcher)?;
@@ -493,7 +493,7 @@ fn from_ascii(bs: &[u8]) -> Option<&str> {
     if !bs.is_ascii() {
         return None;
     }
-    Some(str::from_utf8(bs).expect("expected a valid ascii string"))
+    Some(std::str::from_utf8(bs).expect("expected a valid ascii string"))
 }
 
 #[derive(Debug, Clone)]

@@ -157,7 +157,7 @@ impl<T> ResourceMap<T> {
     }
 
     fn get<'a>(&'a self, name: &ResourceName) -> Option<ResourceMapEntryRef<'a, T>> {
-        self.map.get(name).map(|r| r)
+        self.map.get(name)
     }
 
     async fn get_await<'a>(&'a self, name: &ResourceName) -> Option<ResourceMapEntryRef<'a, T>> {
@@ -613,7 +613,7 @@ impl Cache {
     /// Return the current list of subscriptions for this resource type.
     #[cfg(test)]
     pub(crate) fn subscriptions(&self, rtype: ResourceType) -> Vec<ResourceName> {
-        self.subs.explicit(rtype).map(|s| s.clone()).collect()
+        self.subs.explicit(rtype).cloned().collect()
     }
 
     pub(crate) fn dns_names(&self) -> Vec<DnsAddr> {
@@ -1527,7 +1527,7 @@ mod test {
         );
 
         // check that the first set of resources makes sense
-        let _ = dbg!(cache.collect());
+        let _ = cache.collect();
         assert_eq!(
             cache.versions(ResourceType::Listener),
             versions![("listener.example.svc.cluster.local", "v123")],

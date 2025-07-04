@@ -47,8 +47,8 @@ impl From<&Route> for xds_route::RouteConfiguration {
     }
 }
 
-impl junction_core::IntoXds for Route {
-    fn into_any(&self) -> Vec<(String, protobuf::Any)> {
+impl junction_core::ToXds for Route {
+    fn to_any(&self) -> Vec<(String, protobuf::Any)> {
         let route = self.to_xds();
         let route_name = route.name.clone();
 

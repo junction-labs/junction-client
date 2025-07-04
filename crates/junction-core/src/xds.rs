@@ -89,14 +89,14 @@ pub(crate) trait XdsCache {
 }
 
 /// Any type that can be converted into xDS.
-pub trait IntoXds {
+pub trait ToXds {
     /// Convert this type into a k,v pair of a unique name and an xDS message,
     /// serialized as a protobuf `Any`.
-    fn into_any(&self) -> Vec<(String, protobuf::Any)>;
+    fn to_any(&self) -> Vec<(String, protobuf::Any)>;
 
     /// Covert this type into a vec of [Resource](xds_discovery::Resource).
-    fn into_resources(&self, version: String) -> Vec<xds_discovery::Resource> {
-        self.into_any()
+    fn to_resources(&self, version: String) -> Vec<xds_discovery::Resource> {
+        self.to_any()
             .into_iter()
             .map(|(name, any)| xds_discovery::Resource {
                 name,
@@ -108,20 +108,19 @@ pub trait IntoXds {
     }
 }
 
-impl IntoXds for &xds_discovery::Resource {
-    fn into_any(&self) -> Vec<(String, protobuf::Any)> {
+impl ToXds for &xds_discovery::Resource {
+    fn to_any(&self) -> Vec<(String, protobuf::Any)> {
         vec![(self.name.clone(), self.resource.clone().unwrap())]
     }
 }
 
 impl StaticCache {
-    pub(crate) fn with_xds<T: IntoXds>(
+    pub(crate) fn with_xds<T: ToXds>(
         xds: impl IntoIterator<Item = T>,
     ) -> Result<Self, Vec<ResourceError>> {
         let xds = xds
             .into_iter()
-            .map(|x| x.into_any())
-            .flatten()
+            .flat_map(|x| x.to_any())
             .map(|(s, any)| (ResourceName::from(s), any));
 
         let mut cache = StaticCache::default();

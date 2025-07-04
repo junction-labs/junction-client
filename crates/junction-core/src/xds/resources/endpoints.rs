@@ -94,7 +94,7 @@ impl Resource for LoadAssignment {
                 }
 
                 // parse the address and save it by locality/priority
-                let socket_addr = xds_lb_endpoint_socket_addr(&lb_endpoint)
+                let socket_addr = xds_lb_endpoint_socket_addr(lb_endpoint)
                     .with_field_index("lb_endpoints", lb_idx)
                     .with_field_index("endpoints", endpoints_idx)?;
                 locality_endpoints.push(socket_addr);
@@ -114,10 +114,11 @@ impl Resource for LoadAssignment {
             EndpointGroup::new(priority, endpoints)
         });
         let endpoints: Vec<_> = endpoints.collect();
-        assert!(
-            endpoints.is_sorted_by_key(|e| e.priority),
-            "EndpointGroups are ordered by priority: this is a bug in Junction",
-        );
+        // TODO: this assert isn't valid until MSRV is 1.82
+        // assert!(
+        //     endpoints.is_sorted_by_key(|e| e.priority),
+        //     "EndpointGroups are ordered by priority: this is a bug in Junction",
+        // );
         Ok(Self { endpoints })
     }
 

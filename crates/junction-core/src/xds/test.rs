@@ -435,7 +435,6 @@ pub fn route_to_cluster(
                     },
                 ),
             ),
-            ..Default::default()
         };
         route_match.query_parameters = vec![query_matcher];
     }
@@ -519,7 +518,7 @@ pub fn logical_dns_cluster(
     let cluster_discovery_type = Some(ClusterDiscoveryType::Type(DiscoveryType::LogicalDns.into()));
     let host_identifier = Some(xds_endpoint::lb_endpoint::HostIdentifier::Endpoint(
         xds_endpoint::Endpoint {
-            address: Some(to_xds_address(&hostname, port)),
+            address: Some(to_xds_address(hostname, port)),
             ..Default::default()
         },
     ));
