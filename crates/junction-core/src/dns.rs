@@ -893,7 +893,7 @@ options ndots:1 ndots:a-potato ndots:3";
         );
 
         let load_assigment = resolver
-            .get_endpoints(&"www.junctionlabs.io", 7777)
+            .get_endpoints("www.junctionlabs.io", 7777)
             .unwrap();
         let endpoints = load_assigment.endpoints.first().unwrap();
         let endpoints: Vec<_> = endpoints.iter().cloned().collect();
@@ -921,7 +921,7 @@ options ndots:1 ndots:a-potato ndots:3";
 
         // inserting the old answer shouldn't do anything
         resolver.insert_answer(
-            &"www.example.com",
+            "www.example.com",
             now,
             Ok(vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 80)]),
         );

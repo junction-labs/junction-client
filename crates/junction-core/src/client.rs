@@ -343,38 +343,6 @@ impl Client {
         })
     }
 
-    /// Resolve an HTTP method, URL, and headers to a target backend, returning
-    /// the Route that matched, the index of the rule that matched, and the
-    /// backend that was chosen - to make backend choice determinstic with
-    /// multiple backends, set the `JUNCTION_SEED` environment variable.
-    ///
-    /// This is a lower-level method that only performs the Route matching part
-    /// of resolution. It's intended for debugging or querying a client for
-    /// specific information. For everyday use, prefer [Client::resolve_http].
-    // pub async fn resolve_route(
-    //     &self,
-    //     request: HttpRequest<'_>,
-    //     deadline: Option<Instant>,
-    // ) -> crate::Result<xds::ResourceName> {
-    //     let trace = Trace::new();
-    //     resolve_route(&self.config, trace, request, deadline, &self.search_config).await
-    // }
-
-    /// Select an endpoint address for this backend from the set of currently
-    /// available endpoints.
-    ///
-    /// This is a lower level method that only performs part of route
-    /// resolution, and is intended for debugging and testing. For everyday use,
-    /// prefer [Client::resolve_http].
-    // pub async fn select_endpoint(
-    //     &self,
-    //     backend: &BackendId,
-    //     ctx: LbContext<'_>,
-    //     deadline: Option<Instant>,
-    // ) -> crate::Result<SelectedEndpoint> {
-    //     select_endpoint(&self.config, backend, ctx, deadline).await
-    // }
-
     /// Start a gRPC CSDS server on the given port. To run the server, you must
     /// `await` this future.
     ///
@@ -410,9 +378,9 @@ enum RouteConfigRef {
 impl AsRef<xds::RouteConfiguration> for RouteConfigRef {
     fn as_ref(&self) -> &xds::RouteConfiguration {
         match self {
-            RouteConfigRef::Route(route) => &route,
+            RouteConfigRef::Route(route) => route,
             RouteConfigRef::Inlined(listener) => match &listener.route_config {
-                xds::listeners::RouteConfig::Inline(route) => &route,
+                xds::listeners::RouteConfig::Inline(route) => route,
                 _ => panic!("expected an inline RouteConfiguration"),
             },
         }
@@ -487,7 +455,7 @@ pub(crate) async fn resolve_route(
     let route_config = match &listener.route_config {
         xds::listeners::RouteConfig::Rds(name) => {
             match with_deadline!(
-                cache.get_route_config(&name),
+                cache.get_route_config(name),
                 deadline,
                 "fetching route",
                 trace
@@ -575,7 +543,7 @@ async fn select_endpoint(
 
     // lookup cluster
     let cluster = with_deadline!(
-        cache.get_cluster(&cluster_name),
+        cache.get_cluster(cluster_name),
         deadline,
         "fetching cluster",
         trace,
@@ -593,7 +561,7 @@ async fn select_endpoint(
     let load_assignment = match &cluster.endpoints {
         xds::clusters::Endpoints::Eds(name) => {
             let load_assignment = with_deadline!(
-                cache.get_load_assignment(&name),
+                cache.get_load_assignment(name),
                 deadline,
                 "fetching endpoints",
                 trace
@@ -644,7 +612,7 @@ async fn select_endpoint(
     let addr = cluster.load_balancer.load_balance(
         &mut trace,
         request.request_hash,
-        &endpoints,
+        endpoints,
         request.previous_addrs,
     );
     let Some(addr) = addr else {
@@ -678,7 +646,7 @@ fn find_match<'a>(
     let mut matching_vhost = None;
     let hostname = request.url.hostname();
     for vhost in &route.vhosts {
-        if vhost.domains.iter().any(|d| d.matches_hostname(&hostname)) {
+        if vhost.domains.iter().any(|d| d.matches_hostname(hostname)) {
             matching_vhost = Some(vhost);
         }
     }
@@ -703,7 +671,10 @@ fn is_method_match(
     method_match: &Option<xds::route_configs::MethodMatcher>,
     method: &http::Method,
 ) -> bool {
-    method_match.as_ref().is_none_or(|m| m.is_match(method))
+    match method_match.as_ref() {
+        None => true,
+        Some(m) => m.is_match(method),
+    }
 }
 
 #[inline]
@@ -1038,7 +1009,7 @@ mod test {
         ])
         .unwrap();
 
-        dbg!(cache.get_route_config(&ResourceName::from("passthrough-route")));
+        cache.get_route_config(&ResourceName::from("passthrough-route"));
 
         let wont_match = [
             "http://example.com?qp1=tomato",

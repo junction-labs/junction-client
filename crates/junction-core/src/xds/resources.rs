@@ -110,7 +110,7 @@ fn path_str(path: &[PathEntry]) -> String {
         if i > 0 && matches!(path_entry, PathEntry::Field(_)) {
             buf.push('.');
         }
-        let _ = write!(&mut buf, "{}", path_entry);
+        let _ = write!(&mut buf, "{path_entry}");
     }
 
     buf

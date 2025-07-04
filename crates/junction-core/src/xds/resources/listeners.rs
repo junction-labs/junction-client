@@ -22,7 +22,7 @@ impl Resource for ApiListener {
     fn from_xds(xds: &Self::Xds) -> Result<Self, ResourceError> {
         use xds_http::http_connection_manager::RouteSpecifier;
 
-        let conn_manager = http_connection_manager(&xds).with_field("api_listener")?;
+        let conn_manager = http_connection_manager(xds).with_field("api_listener")?;
 
         let route_config = match &conn_manager.route_specifier {
             Some(RouteSpecifier::Rds(rds)) => {
