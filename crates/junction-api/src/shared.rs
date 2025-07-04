@@ -100,7 +100,7 @@ impl<'de> Deserialize<'de> for Regex {
             {
                 match Regex::from_str(value) {
                     Ok(s) => Ok(s),
-                    Err(e) => Err(E::custom(format!("could not parse {}: {}", value, e))),
+                    Err(e) => Err(E::custom(format!("could not parse {value}: {e}"))),
                 }
             }
         }

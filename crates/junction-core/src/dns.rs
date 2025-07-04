@@ -892,9 +892,7 @@ options ndots:1 ndots:a-potato ndots:3";
             "should return true when a new port is inserted"
         );
 
-        let load_assigment = resolver
-            .get_endpoints("www.junctionlabs.io", 7777)
-            .unwrap();
+        let load_assigment = resolver.get_endpoints("www.junctionlabs.io", 7777).unwrap();
         let endpoints = load_assigment.endpoints.first().unwrap();
         let endpoints: Vec<_> = endpoints.iter().cloned().collect();
         assert_eq!(

@@ -272,7 +272,7 @@ impl std::fmt::Display for PyType {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", py_ty)?;
+                    write!(f, "{py_ty}")?;
                 }
 
                 write!(f, "]")
