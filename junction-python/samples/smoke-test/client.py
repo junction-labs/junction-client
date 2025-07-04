@@ -49,9 +49,7 @@ class SessionFactory:
             self._kubectl_apply(*manifests)
             self.delete_resources = manifests
         if backends:
-            manifests = [
-                junction.dump_kube_backend(backend) for backend in backends
-            ]
+            manifests = [junction.dump_kube_backend(backend) for backend in backends]
             self._kubectl_patch(*manifests)
             for manifest in manifests:
                 spec = yaml.safe_load(manifest)
