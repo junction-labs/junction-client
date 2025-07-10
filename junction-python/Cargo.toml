@@ -21,7 +21,7 @@ junction-core = { workspace = true }
 junction-api = { workspace = true, features = ["kube_v1_29", "xds"] }
 once_cell = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_yml = { workspace = true }
+serde_yaml = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
 xds-api = { workspace = true, features = ["pbjson"] }
