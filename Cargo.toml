@@ -15,9 +15,7 @@ license = "Apache-2.0"
 rust-version = "1.81"
 
 [workspace.dependencies]
-arc-swap = "1.7"
 bytes = "1.7"
-crossbeam-skiplist = "0.1"
 dashmap = "6.1"
 enum-map = "2.7"
 form_urlencoded = "1.1.1"
@@ -41,7 +39,6 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 xds-api = { version = "0.2", default-features = false }
-
 xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
 
 junction-api = { version = "0.3.2", path = "crates/junction-api" }

@@ -17,9 +17,7 @@ categories = [
 rust-version.workspace = true
 
 [dependencies]
-arc-swap = { workspace = true }
 bytes = { workspace = true }
-crossbeam-skiplist = { workspace = true }
 dashmap = { workspace = true }
 enum-map = { workspace = true }
 form_urlencoded = { workspace = true }
@@ -32,8 +30,6 @@ prost = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc"] }
-serde_json = { workspace = true }
-serde_yml = { workspace = true }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["time", "macros"] }
