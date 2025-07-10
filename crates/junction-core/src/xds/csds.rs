@@ -106,8 +106,8 @@ impl ClientStatusDiscoveryService for Server {
 fn to_generic_config(config: XdsConfig) -> GenericXdsConfig {
     let client_status = match (&config.xds, &config.last_error) {
         (_, Some(_)) => ClientResourceStatus::Nacked,
-        (Some(_), None) => ClientResourceStatus::Acked,
-        _ => ClientResourceStatus::Unknown,
+        (Some(_), _) => ClientResourceStatus::Acked,
+        (None, _) => ClientResourceStatus::DoesNotExist,
     };
     let version_info = config.version.map(|v| v.to_string()).unwrap_or_default();
 
