@@ -377,7 +377,7 @@ fn dump_kube_route(route: Bound<'_, PyAny>, namespace: String) -> PyResult<Strin
     let kube_route = route
         .to_gateway_httproute(&namespace)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(serde_yml::to_string(&kube_route)
+    Ok(serde_yaml::to_string(&kube_route)
         .expect("Serialization failed. This is a bug in Junction, not your code."))
 }
 
@@ -395,7 +395,7 @@ fn dump_kube_backend(backend: Bound<'_, PyAny>) -> PyResult<String> {
     let backend: Backend = pythonize::depythonize_bound(backend)?;
     let patch = backend.to_service_patch();
 
-    Ok(serde_yml::to_string(&patch)
+    Ok(serde_yaml::to_string(&patch)
         .expect("Serialization failed. This is a bug in Junction, not your code."))
 }
 

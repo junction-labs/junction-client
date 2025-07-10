@@ -1114,7 +1114,7 @@ dependencies = [
  "pyo3-build-config 0.22.6",
  "pythonize",
  "serde",
- "serde_yml",
+ "serde_yaml",
  "tokio",
  "tracing-subscriber",
  "xds-api",
