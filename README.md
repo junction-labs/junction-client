@@ -2,6 +2,10 @@
 
 An xDS dynamically-configurable API load-balancer library.
 
+> NOTE: As of August 2025, we're no longer actively working on `junction-client`. If
+> you're interested in using the client or actively maintaining it, please reach out to
+> us at info at junctionlabs.io.
+
 ## What is it?
 
 Junction is a library that allows you to dynamically configure application 
